@@ -41,13 +41,14 @@ from .errors import NoDeviceError
 
 _CMD = 0x00   # control byte: command stream follows
 _DATA = 0x40  # control byte: display data follows
-_CHUNK = 2045  # max I2C_WRITE data (2046) minus the control byte; the
-               # firmware sizes Wire's TX buffer to match (fw >= 0.0.2)
 
 _INSTALL_HINT = (
     'OLED drawing needs Pillow — install it with:\n'
     '    pip install "python-esp-bridge[oled]"  (or: pip install pillow)'
 )
+
+# PIL packs mode-"1" rows MSB-first; panel pages want the top pixel in bit 0.
+_BITREV = bytes(int(f"{i:08b}"[::-1], 2) for i in range(256))
 
 
 class OLED:
@@ -65,6 +66,9 @@ class OLED:
 
         self._i2c = esp.i2c
         self._bus = bus
+        # largest data write minus the control byte (128 on old firmware,
+        # whose Wire TX buffer silently truncates longer transmissions)
+        self._chunk = getattr(esp.i2c, "max_write", 2046) - 1
         self.width, self.height = width, height
         self.colstart = colstart
 
@@ -99,13 +103,15 @@ class OLED:
 
     # ---- low level ------------------------------------------------------------
 
-    def command(self, *cmds: int) -> None:
-        self._i2c.write(self.addr, bytes([_CMD, *cmds]), self._bus)
+    def command(self, *cmds: int, wait: bool = True) -> None:
+        self._i2c.write(self.addr, bytes([_CMD, *cmds]), self._bus, wait=wait)
 
-    def _write_data(self, data: bytes) -> None:
-        for off in range(0, len(data), _CHUNK):
-            self._i2c.write(self.addr, bytes([_DATA]) + data[off : off + _CHUNK],
-                            self._bus)
+    def _write_data(self, data: bytes, *, wait: bool = True) -> None:
+        chunk = self._chunk
+        for off in range(0, len(data), chunk):
+            self._i2c.write(self.addr, bytes([_DATA]) + data[off : off + chunk],
+                            self._bus,
+                            wait=wait and off + chunk >= len(data))
 
     # ---- drawing ---------------------------------------------------------------
 
@@ -113,20 +119,22 @@ class OLED:
         """Push a PIL image (mode '1' or anything convertible) to the panel."""
         if image is None:
             image = self._Image.new("1", (self.width, self.height))
-        pix = image.convert("L").tobytes()  # 1 byte/pixel, row-major
+        if image.mode != "1":  # any nonzero pixel lights up (no dithering)
+            image = image.convert("L").point(lambda v: 255 if v else 0, mode="1")
+        # Transposing makes each image row a display column, so tobytes()
+        # yields the 8-pixel vertical slices pages are made of (MSB-first;
+        # the panel wants the top pixel in bit 0, hence the bit reversal).
+        raw = image.transpose(self._Image.Transpose.TRANSPOSE).tobytes()
+        bpr = self.height // 8  # transposed row = bpr bytes, one per page
         low = 0x00 | (self.colstart & 0x0F)
         high = 0x10 | (self.colstart >> 4)
-        for page in range(self.height // 8):
-            self.command(0xB0 + page, low, high)  # page + column start
-            base = page * self.width * 8
-            buf = bytearray(self.width)
-            for x in range(self.width):
-                byte = 0
-                for bit in range(8):
-                    if pix[base + bit * self.width + x]:
-                        byte |= 1 << bit
-                buf[x] = byte
-            self._write_data(bytes(buf))
+        pages = self.height // 8
+        for page in range(pages):
+            # Pipelined: everything fire-and-forget except the final data
+            # write, which acts as the frame sync (firmware runs in order).
+            self.command(0xB0 + page, low, high, wait=False)
+            self._write_data(raw[page::bpr].translate(_BITREV),
+                             wait=page == pages - 1)
 
     @contextlib.contextmanager
     def draw(self):

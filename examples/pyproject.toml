@@ -1,6 +1,6 @@
 [project]
 name = "espbridge-examples"
-version = "0.0.1"
+version = "0.0.2"
 description = "Runnable examples for python-esp-bridge"
 readme = "README.md"
 requires-python = ">=3.10"

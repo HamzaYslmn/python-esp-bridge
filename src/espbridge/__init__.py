@@ -24,7 +24,7 @@ from .errors import (
 )
 from .transport import find_ports
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 __all__ = [
     "Bridge",

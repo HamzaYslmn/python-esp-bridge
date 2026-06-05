@@ -63,7 +63,7 @@ class FakeFirmware:
     def _info(self) -> bytes:
         nbytes = self.name.encode()
         return (
-            bytes([self.proto_version, 0, 0, 1, C.ChipModel.ESP32, 3])
+            bytes([self.proto_version, 0, 0, 2, C.ChipModel.ESP32, 3])
             + bytes.fromhex(self.mac)
             + struct.pack(">I", int(CAPS))
             + bytes([40, 4])

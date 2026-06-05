@@ -10,6 +10,16 @@ class I2c:
     def __init__(self, bridge):
         self._b = bridge
 
+    @property
+    def max_write(self) -> int:
+        """Largest data block write() accepts, firmware-dependent: older
+        firmware leaves Wire's TX buffer at its 128-byte default and
+        silently truncates anything longer."""
+        info = self._b.info
+        if info is not None and info.fw_version < (0, 0, 2):
+            return 128
+        return C.MAX_PAYLOAD - 2  # frame carries bus + addr first
+
     def init(self, *, sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> None:
         self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
 
@@ -18,10 +28,19 @@ class I2c:
         r = self._b.request(C.I2C_SCAN, bytes([bus]), timeout=5.0)
         return list(r[1 : 1 + r[0]])
 
-    def write(self, addr: int, data: bytes, bus: int = 0) -> None:
-        if len(data) > C.MAX_PAYLOAD - 2:  # frame carries bus + addr first
-            raise ValueError(f"max {C.MAX_PAYLOAD - 2} bytes per I2C write")
-        self._b.request(C.I2C_WRITE, bytes([bus, addr]) + bytes(data))
+    def write(self, addr: int, data: bytes, bus: int = 0, *, wait: bool = True) -> None:
+        """Write bytes to a device. ``wait=False`` sends fire-and-forget —
+        no ACK round-trip, errors are not reported; pair a burst of unwaited
+        writes with a final waited one to sync (the firmware executes
+        requests in arrival order)."""
+        if len(data) > self.max_write:
+            raise ValueError(f"max {self.max_write} bytes per I2C write "
+                             "(update the firmware for 2046)")
+        payload = bytes([bus, addr]) + bytes(data)
+        if wait:
+            self._b.request(C.I2C_WRITE, payload)
+        else:
+            self._b.send(C.I2C_WRITE, payload)
 
     def read(self, addr: int, n: int, bus: int = 0) -> bytes:
         if not 1 <= n <= 255:
