@@ -1,0 +1,48 @@
+name: Build & Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  pull_request:
+
+jobs:
+  # MARK: - Build sdist + universal wheel
+  # espbridge is pure-Python, so one `py3-none-any` wheel covers every platform.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist + wheel
+        working-directory: src
+        run: uv build -o ../dist/dist-build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/dist-build/*
+
+      - name: Clean local build folder
+        run: rm -rf dist/dist-build
+
+  # MARK: - Publish to PyPI on tag push (trusted publishing via OIDC)
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    # Triggered only by v*.*.* tags (see `on.push.tags` above).
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/dist-build
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/dist-build

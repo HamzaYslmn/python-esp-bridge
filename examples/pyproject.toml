@@ -1,0 +1,17 @@
+[project]
+name = "espbridge-examples"
+version = "0.0.1"
+description = "Runnable examples for python-esp-bridge"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-esp-bridge[oled]",            # [oled] extra pulls Pillow for oled_ssd1306.py
+    "gpiozero>=2",                        # gpiozero/
+    "luma.oled>=3.12",                    # luma/
+    "adafruit-circuitpython-bme280>=2",   # adafruit/ (driver imports work without the sensor)
+]
+
+# Not on PyPI yet (and for development in general): use the package from this
+# repo, editable so changes in ../src/espbridge apply without reinstalling.
+[tool.uv.sources]
+python-esp-bridge = { path = "../src", editable = true }

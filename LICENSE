@@ -1,0 +1,86 @@
+Forza Horizon — DualSense Adaptive Triggers
+Attribution & Sponsor License (v1.0)
+Copyright (C) 2025 Hamza Yeşilmen ("HamzaYslmn")
+
+================================================================================
+                        ATTRIBUTION & SPONSOR LICENSE
+================================================================================
+
+This is a custom, source-available license. It is NOT an OSI-approved or
+FSF-approved "open source" / "free software" license. Read these terms before
+using, copying, modifying, or distributing this software ("the Software").
+
+1. GRANT OF RIGHTS
+
+   Subject to the conditions below, the copyright holder grants you a
+   worldwide, royalty-free, non-exclusive license to:
+
+     (a) use and run the Software for any purpose, personal or commercial;
+     (b) study and modify the Software and create derivative works; and
+     (c) reproduce and distribute the Software and your derivative works, in
+         source or compiled form.
+
+2. CONDITIONS
+
+   The rights in Section 1 are granted only if you meet ALL of the following
+   conditions in every copy or derivative work you distribute or make publicly
+   available (including over a network):
+
+   2.1 ATTRIBUTION.
+       You must preserve, and must not remove, hide, or alter, the following
+       attribution:
+
+         "Originally created by Hamza Yeşilmen (HamzaYslmn)."
+         Source:  https://github.com/HamzaYslmn/python-esp-bridge
+
+       You may add your own attribution for your changes, but not in a way that
+       removes, obscures, or misrepresents the attribution above.
+
+   2.2 SPONSOR LINK.
+       You must include the following sponsor link, in a place where users of
+       your distribution can reasonably find it:
+
+         Sponsor: https://github.com/sponsors/HamzaYslmn
+
+       If your distribution has any interactive user interface (for example an
+       "about", "credits", or "settings" screen), the sponsor link and the
+       attribution in 2.1 must be visible there in a form the user can read and
+       follow. If there is no such interface, they must remain in the
+       accompanying documentation (such as a README) and in the source files in
+       which they already appear.
+
+   2.3 LICENSE NOTICE.
+       You must include a copy of this license with every distribution, and you
+       must keep intact all notices stating that this license applies.
+
+   2.4 NO MISREPRESENTATION OF ORIGIN.
+       You must not misrepresent the origin of the Software, and you must mark
+       modified versions in a reasonable way as different from the original so
+       they are not mistaken for it.
+
+3. NO USE OF NAME FOR PUBLICITY
+
+   This license does not grant any right to use the author's name, the
+   "HamzaYslmn" mark, or the project name for advertising, endorsement, or
+   publicity beyond the factual attribution required in Section 2.1, without
+   prior written permission.
+
+4. TERMINATION
+
+   If you fail to comply with these conditions, the rights granted in Section 1
+   terminate automatically. They are reinstated if you cure the violation
+   within 30 days of becoming aware of it.
+
+5. DISCLAIMER OF WARRANTY AND LIABILITY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+   OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+================================================================================
+For other licensing arrangements, contact the copyright holder.
+================================================================================
