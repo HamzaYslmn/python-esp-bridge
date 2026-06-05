@@ -14,6 +14,8 @@ Python on the host. No reflashing per project.
 └────────────────┘        replies + async events   └─────────────────────┘
 ```
 
+![Oled](docs/img/oled.png)
+
 ## Quick start
 
 1. **Flash the firmware once** — open [`esp/esp.ino`](esp/) in Arduino IDE
