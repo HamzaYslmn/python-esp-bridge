@@ -37,6 +37,8 @@ class NeoPixel:
             raise ValueError(f"at most {(C.MAX_PAYLOAD - 16) // bpp} pixels "
                              f"per strip ({order})")
         self._buf = bytearray(n * bpp)
+        self._scale: bytes | None = None  # brightness LUT, built on first show()
+        self._scale_for = -1.0
         self._rmt.init_tx(pin, _TICK_HZ)
 
     def __len__(self) -> int:
@@ -68,7 +70,13 @@ class NeoPixel:
     def show(self) -> None:
         """Push the pixel buffer to the strip."""
         b = max(0.0, min(1.0, self.brightness))
-        data = bytes(round(v * b) for v in self._buf) if b < 1.0 else bytes(self._buf)
+        if b >= 1.0:
+            data = bytes(self._buf)
+        else:
+            if b != self._scale_for:  # LUT rebuilt only when brightness changes
+                self._scale = bytes(round(i * b) for i in range(256))
+                self._scale_for = b
+            data = self._buf.translate(self._scale)
         self._rmt.tx_bytes(self._pin, _BIT0, _BIT1, data)
 
     def deinit(self) -> None:

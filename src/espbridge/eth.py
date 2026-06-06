@@ -15,6 +15,7 @@ import struct
 import threading
 
 from . import constants as C
+from .protocol import ip_str as _ip
 
 # Stable wire phy ids (mirrors firmware mod_eth.cpp)
 PHY = {"generic": 0, "lan8720": 1, "tlk110": 2, "ip101": 2, "rtl8201": 3,
@@ -48,7 +49,7 @@ class Eth:
 
     def _on_state(self, payload: bytes) -> None:
         if payload[0] == 2:  # got IP
-            self._ip = ".".join(str(b) for b in payload[1:5])
+            self._ip = _ip(payload[1:5])
             self._got_ip.set()
         elif payload[0] == 3:
             self._got_ip.clear()
@@ -83,12 +84,9 @@ class Eth:
 
     def status(self) -> dict:
         r = self._b.request(C.ETH_STATUS)
-        ip = ".".join(str(b) for b in r[1:5])
-        gw = ".".join(str(b) for b in r[5:9])
-        mask = ".".join(str(b) for b in r[9:13])
-        mac = ":".join(f"{b:02x}" for b in r[13:19])
-        return {"link": bool(r[0]), "ip": ip, "gateway": gw,
-                "netmask": mask, "mac": mac}
+        return {"link": bool(r[0]), "ip": _ip(r[1:5]), "gateway": _ip(r[5:9]),
+                "netmask": _ip(r[9:13]),
+                "mac": ":".join(f"{b:02x}" for b in r[13:19])}
 
     def end(self) -> None:
         self._b.request(C.ETH_STOP)
