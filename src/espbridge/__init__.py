@@ -40,7 +40,7 @@ def find_ble_devices(timeout: float = 5.0):
 
     return _scan(timeout)
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "Bridge",

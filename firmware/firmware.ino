@@ -33,8 +33,11 @@
 #define BRIDGE_BLE_LINK 1
 
 // Classic-ESP32 coexistence: bring the Wi-Fi stack up BEFORE Bluedroid so the
-// coex arbiter sees the radios in the right order (Wi-Fi -> ESP-NOW -> BLE).
-// Costs ~50 KB heap at boot; set 0 if this board never uses Wi-Fi/ESP-NOW.
+// coex arbiter sees the radios in the right order (Wi-Fi -> ESP-NOW -> BLE),
+// then park the radio until the host first uses Wi-Fi/ESP-NOW. A parked
+// radio gives Bluetooth uncontested airtime and ~25 KB extra heap, so an
+// idle board's BLE link is as solid as a no-Wi-Fi build. Set 0 if this
+// board never uses Wi-Fi/ESP-NOW (saves the remaining driver heap too).
 // Ignored on chips other than the classic ESP32 (they have no ordering rule).
 #define BRIDGE_WIFI_COEX 1
 

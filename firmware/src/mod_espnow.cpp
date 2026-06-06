@@ -155,6 +155,7 @@ static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_ESPNOW, op);
   if (!inited && op != 0x01) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
+  wifi_ensure_started();  // coex: the radio is parked until first radio use
   switch (op) {
     case 0x01:  // INIT
       handle_init(seq, cmd, p, len);

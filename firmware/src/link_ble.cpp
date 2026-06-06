@@ -13,7 +13,6 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
-#include <esp_gap_ble_api.h>
 #include <esp_mac.h>
 #include <esp_bt.h>
 #include <esp32-hal-bt.h>
@@ -55,48 +54,31 @@ static BLEServer* server = nullptr;
 static BLECharacteristic* tx_chr = nullptr;
 static StreamBufferHandle_t rx_buf = nullptr;
 
-static esp_bd_addr_t peer_bda;
-static volatile bool have_peer = false;
-
-// Ask for a fast connection: 7.5-15 ms interval instead of the host's
-// default 30-50 ms. Centrals (Windows especially) silently discard this
-// while still busy with their own connection setup, so we ask repeatedly:
-// on connect, after the MTU exchange, and once the client authenticates.
-static void request_fast_conn() {
-  if (!have_peer) return;
-  esp_ble_conn_update_params_t cp = {};
-  memcpy(cp.bda, peer_bda, sizeof(cp.bda));
-  cp.min_int = 6;    // 6 * 1.25 ms = 7.5 ms
-  cp.max_int = 12;   // 15 ms
-  cp.latency = 0;
-  cp.timeout = 400;  // 4 s supervision
-  esp_ble_gap_update_conn_params(&cp);
-}
-
+// Hands-off link policy (lesson from Esp-WiFi-BLE-Now, which runs all three
+// radios stably): the peripheral issues NO link-layer control procedures —
+// no esp_ble_gap_update_conn_params, no esp_ble_gap_set_pkt_data_len. Firing
+// those right at connect time races the central's own setup procedures
+// (Windows especially) and a collision stalls the LL: the link stays "up"
+// but ATT goes silent and the host times out mid-handshake. The central
+// owns the connection parameters; our preferred interval is advertised
+// passively in the AD payload (setMinPreferred below) where the central
+// reads it BEFORE connecting — fast when honored, harmless when not.
 class LinkSrvCb : public BLEServerCallbacks {
-  void onConnect(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+  void onConnect(BLEServer*) override {
     connected = true;
     authed = false;       // every connection starts unauthenticated
     att_mtu = 23;
     congested = false;
-    memcpy(peer_bda, param->connect.remote_bda, sizeof(peer_bda));
-    have_peer = true;
-    request_fast_conn();
-    // Data length extension (BLE 4.2): 251-byte link packets instead of 27,
-    // so a full ATT_MTU notification no longer fragments ~9x.
-    esp_ble_gap_set_pkt_data_len(peer_bda, 251);
   }
   void onDisconnect(BLEServer* s) override {
     connected = false;
     authed = false;
     congested = false;
-    have_peer = false;
     if (rx_buf) xStreamBufferReset(rx_buf);
     s->startAdvertising();  // stay discoverable
   }
   void onMtuChanged(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
     att_mtu = param->mtu.mtu;
-    request_fast_conn();  // central's setup is mostly done by now
   }
 };
 static LinkSrvCb link_srv_cb;
@@ -148,6 +130,10 @@ void link_ble_init(const char* password) {
   const char* custom = sys_device_name();
   if (custom[0]) snprintf(devname + n, sizeof(devname) - n, "_%s", custom);
   BLEDevice::init(devname);
+  // Max TX power on every power type: stronger signal = fewer link-layer
+  // retransmits = a steadier link (and more range), for ~3 mA extra.
+  BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
+  BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
   BLEDevice::setMTU(517);
   BLEDevice::setCustomGattsHandler(link_gatts_evt);  // congestion watch
 
@@ -179,10 +165,7 @@ void link_ble_init(const char* password) {
 bool link_ble_enabled() { return enabled; }
 bool link_ble_connected() { return connected; }
 bool link_ble_authed() { return connected && authed; }
-void link_ble_set_authed(bool v) {
-  authed = v;
-  if (v) request_fast_conn();  // setup is definitely over once auth lands
-}
+void link_ble_set_authed(bool v) { authed = v; }
 const char* link_ble_password() { return link_password; }
 void* link_ble_server() { return server; }
 

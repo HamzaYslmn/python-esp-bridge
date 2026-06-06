@@ -280,6 +280,7 @@ static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
       // Boot-banner equivalent so the host handshake works like USB.
       uint8_t info[64];
       enqueue_frame(FLAG_EVENT, 0, SYS_READY, info, sys_build_info(info), LINK_BLE);
+      proto_log_heap("ble: authed");  // heap visibility on every session
     } else {
       uint8_t st = ST_DENIED;
       enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, LINK_BLE);

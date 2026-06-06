@@ -30,9 +30,12 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void gpio_init();
 void wifi_init();
 
-// Classic-ESP32 coexistence: bring the Wi-Fi driver up before Bluedroid
-// (called from setup() ahead of link_ble_init when BRIDGE_WIFI_COEX is set).
+// Classic-ESP32 coexistence: bring the Wi-Fi driver up before Bluedroid,
+// then park the radio (called from setup() ahead of link_ble_init when
+// BRIDGE_WIFI_COEX is set). wifi_ensure_started() resumes the parked radio
+// on first Wi-Fi/ESP-NOW use; no-op everywhere else.
 void wifi_coex_preinit();
+void wifi_ensure_started();
 
 // Pollers: gpio/uart run on rx_task, wifi/net on net_task; must not block.
 void gpio_poll();
