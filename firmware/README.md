@@ -37,17 +37,29 @@ support (LittleFS works) and without deep/light sleep. Building with
 `#define BRIDGE_ENABLE_BLE 0` (USB-only) frees the BT IRAM and re-enables
 SD, SDMMC and sleep. S2/S3/C3/C6 have everything in every build.
 
-**OTA updates:** to reflash over the link later (USB *or* Bluetooth — see
-`examples/system/ota_update.py`), pick Partition Scheme **"Minimal SPIFFS
-(1.9MB APP with OTA)"** instead of Huge APP for the first USB flash. The
-no-OTA Huge APP table makes `esp.ota` reply unsupported.
+## Partition scheme (pick one)
+
+The Wi-Fi + BLE build needs a >1.2 MB app slot, so the **default table won't
+fit** — choose one of these at the first USB flash:
+
+| Scheme | App | OTA? | Pick when |
+|---|---|---|---|
+| **Huge APP (3MB No OTA/1MB SPIFFS)** | 3 MB | no | default — biggest app; you always reflash over USB |
+| **Minimal SPIFFS (1.9MB APP with OTA)** | 1.9 MB | yes | you want cable-free firmware updates |
+
+OTA (`espbridge.ota`, USB *or* Bluetooth — see
+`examples/system/ota_update.py`) updates the firmware binary itself; it's the
+cable-free complement to the BLE link for deployed boards. It needs the OTA
+partition above — on Huge APP there's no OTA slot, so `esp.ota` replies
+`unsupported` (expected, not a bug). Pick Huge APP if you always have USB
+access; nothing else depends on the choice.
 
 ## Flashing (Arduino IDE)
 
 1. Select your board, e.g. **ESP32 Dev Module** (classic ESP-32S/ESP-32D,
    30/38-pin DevKits) or **ESP32S3 Dev Module**.
-2. **Tools → Partition Scheme → "Huge APP (3MB No OTA/1MB SPIFFS)"** — the
-   Wi-Fi + BLE build does not fit the default 1.2 MB app partition.
+2. **Tools → Partition Scheme →** Huge APP, or Minimal SPIFFS for OTA (see
+   the table above) — *not* the default, which the Wi-Fi + BLE build overflows.
 3. (S3 only) Tools → USB CDC On Boot → **Enabled**.
 4. Open `firmware.ino`, Upload.
 
@@ -59,7 +71,7 @@ partition scheme also fits.
 
 ```sh
 arduino-cli core install esp32:esp32
-# classic ESP32
+# classic ESP32 (PartitionScheme=huge_app, or min_spiffs for OTA)
 arduino-cli compile --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" firmware
 arduino-cli upload  --fqbn "esp32:esp32:esp32:PartitionScheme=huge_app" -p COM5 firmware
 # ESP32-S3
