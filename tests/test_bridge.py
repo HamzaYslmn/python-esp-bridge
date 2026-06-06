@@ -14,7 +14,7 @@ def test_handshake_parses_ready_banner(bridge):
     info = bridge.info
     assert info.chip is ChipModel.ESP32
     assert info.protocol == C.PROTOCOL_VERSION
-    assert info.fw_version == (0, 0, 2)
+    assert info.fw_version == (0, 3, 0)
     assert info.mac == "24:a1:60:12:34:56"
     assert Cap.DAC in info.caps and Cap.WIFI in info.caps
     assert info.gpio_count == 40

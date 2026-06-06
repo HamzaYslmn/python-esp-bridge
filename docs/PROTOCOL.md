@@ -137,7 +137,93 @@ Consequences visible to the host:
 
 See the comment beside every id in `firmware/src/espbridge/commands.h` for exact payload layout;
 module ids: SYS 0x00, GPIO 0x10, ADC 0x20, DAC 0x21, TOUCH 0x22, PWM 0x30,
-I2C 0x40, SPI 0x41, UART 0x42, WIFI 0x50, NET 0x51, ESPNOW 0x52, BLE 0x60.
+RMT 0x31, MCPWM 0x33, I2C 0x40, SPI 0x41, UART 0x42, ONEWIRE 0x43, TWAI 0x44,
+I2S 0x45, WIFI 0x50, NET 0x51, ESPNOW 0x52, ETH 0x53, BLE 0x60, FS 0x70,
+NVS 0x71, OTA 0x72, CAM 0x73.
+
+Every v0.3.0 module is gated on its own capability bit (`CAP_RMT` …
+`CAP_SLEEP`), so hosts probe `SYS_INFO.caps` instead of guessing from the
+firmware version.
+
+### RMT — generic pulse trains (module 0x31)
+
+The design rule of v0.3.0: the firmware moves *symbols*, the host implements
+*device protocols*. A symbol is `u16 BE = level<<15 | duration` in ticks of
+`1/tick_hz` (set at `RMT_INIT`, 1 kHz..80 MHz). One primitive set covers
+WS2812 strips, IR send/receive, DHT, HC-SR04 and stepper pulse generation —
+all decoding/encoding lives in Python (`espbridge.neopixel/ir/dht/hcsr04/stepper`).
+
+| cmd | payload | reply |
+|-----|---------|-------|
+| `RMT_INIT` 0x01 | `pin u8 \| dir u8 (0 tx, 1 rx) \| tick_hz u32` | ok |
+| `RMT_DEINIT` 0x02 | `pin u8` | ok |
+| `RMT_TX` 0x03 | `pin u8 \| sym u16[..]` | ok (after the train is sent) |
+| `RMT_TX_BYTES` 0x04 | `pin u8 \| bit0 u32 \| bit1 u32 \| data..` | ok — each byte expands MSB-first into per-bit symbol pairs (WS2812) |
+| `RMT_TX_LOOP` 0x05 | `pin u8 \| sym u16[..]` | ok; repeats until TX_STOP |
+| `RMT_TX_STOP` 0x06 | `pin u8` | ok |
+| `RMT_RECV` 0x07 | `pin u8 \| idle u16 \| timeout_ms u16 \| max_syms u16 \| trig_pin u8 \| trig_level u8 \| trig_us u32` | captured `sym u16[..]` (empty = timeout) |
+| `RMT_CARRIER` 0x08 | `pin u8 \| freq u32 \| duty_pct u8 \| enable u8` | ok |
+
+`RMT_RECV` arms the receiver **before** firing the optional trigger pulse, so
+single-wire request/response sensors work: DHT uses `trig_pin == pin`
+(open-drain start signal), HC-SR04 a separate trigger pin, IR receive no
+trigger. Captures are capped at `RMT_MAX_RX_SYMS` (1020).
+
+### 1-Wire (module 0x43)
+
+Bit-timing primitives only — ROM search, CRC8 and device drivers live in
+Python (`espbridge.onewire`, `espbridge.ds18b20`): `OW_RESET` (presence),
+`OW_WRITE` (with optional strong pull-up for parasite power), `OW_READ`,
+`OW_TRIPLET` (one Maxim-search step: read bit + complement, write direction).
+
+### TWAI / CAN (module 0x44)
+
+`TWAI_INIT` (pins, mode, baud preset 25k–1M, optional acceptance filter —
+the IDF driver only takes the filter at install time), `TWAI_SEND`
+(id + ≤8 B, queued), `TWAI_STATUS` (error counters / bus-off), `TWAI_RECOVER`,
+`TWAI_DEINIT`. Received frames stream as `TWAI_RX_EVT 0x80`. Needs an
+external transceiver chip.
+
+### I2S (module 0x45)
+
+`I2S_INIT` (direction, pins, rate, bits, mono/stereo), then pull/push PCM with
+`I2S_READ`/`I2S_WRITE` in ≤2 KB chunks. The link caps usable rates: ~92 KB/s
+at 921600 baud ⇒ 16-bit mono up to ~32 kHz; 44.1 kHz stereo does not fit.
+
+### FS (module 0x70) and NVS (module 0x71)
+
+FS: LittleFS (id 0, auto-formats), SD over SPI (id 1), SDMMC (id 2, where the
+SoC has the host). `FS_OPEN/READ/WRITE/SEEK/CLOSE` on a small fd table,
+`FS_LIST` streams entries as `FS_LIST_EVT` with the reply (= entry count) as
+the done marker, plus STAT/REMOVE/RENAME/MKDIR/DF. NVS: raw-bytes key/value
+in a dedicated `user` namespace (`NVS_SET/GET/DEL/KEYS/CLEAR`); typed
+encoding is the host's job.
+
+### OTA (module 0x72)
+
+`OTA_BEGIN(size)` → `OTA_WRITE` (1 KB chunks, reply = cumulative count =
+progress) → `OTA_END(commit)` which reboots into the new image. Works over
+**USB and BLE**. Requires a dual-app partition table ("Minimal SPIFFS" on
+4 MB flash); on the no-OTA "Huge APP" table `OTA_BEGIN` replies
+`ST_UNSUPPORTED`.
+
+### Sleep (SYS 0x08/0x09)
+
+`SYS_SLEEP` (deep or light, timer µs and/or GPIO wake). Deep sleep replies
+OK, flushes, then powers down — the board reboots on wake. Light sleep
+replies *after* waking with the cause. `SYS_WAKE_CAUSE` reports the last
+boot's wake reason. Gated on `CAP_SLEEP` (see IRAM note below).
+
+### ETH (module 0x53) and CAM (module 0x73) — compile-time opt-ins
+
+Disabled by default (`BRIDGE_ENABLE_ETH` / `BRIDGE_ENABLE_CAM` in
+firmware.ino). Board specifics live on the host: `espbridge.eth.PRESETS`
+(WT32-ETH01, Olimex POE, W5500-SPI…) and `espbridge.camera.PRESETS`
+(AI-Thinker ESP32-CAM, XIAO-S3-Sense…) send pin maps over the wire. Once
+Ethernet has an IP, all NET sockets ride it automatically (unified core-3.x
+Network stack). Camera frames are captured on-board and read out in ≤2 KB
+chunks (`CAM_CAPTURE` → `CAM_READ` → `CAM_RELEASE`); `CAM_SET` maps to
+`sensor_t` tuning calls with host-defined property ids.
 
 ### ESP-NOW (module 0x52)
 
@@ -199,3 +285,11 @@ Hosts must treat the tail as optional for compatibility with older firmware.
 - **Stale BLE bonds** (Bluedroid NVS): switching a board between BLE-using
   firmwares can leave NVS namespaces that assert at boot — do a one-time
   "Erase All Flash" when flashing over unknown firmware.
+- **Classic-ESP32 IRAM budget**: with Wi-Fi + Bluedroid loaded there is
+  ~1.7 KB of instruction RAM to spare. The SD drivers (~4.4 KB of IRAM ISRs)
+  and the IDF sleep API (~1.7 KB) don't fit, so on classic ESP32 with the BLE
+  link compiled in: `CAP_SLEEP` is absent and FS offers LittleFS only.
+  Building with `BRIDGE_ENABLE_BLE 0` frees the BT IRAM and restores SD,
+  SDMMC and sleep. Other chips are unaffected.
+- **A long RMT capture or FS/OTA burst runs on the same task as Wi-Fi/NET**:
+  it can delay those replies (never GPIO/I2C/SPI, which stay on the rx task).

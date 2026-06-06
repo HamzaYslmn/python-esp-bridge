@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 import struct
 import threading
 import time
@@ -482,6 +481,42 @@ class Bridge:
         return {"free": free, "min_free": min_free, "largest_block": largest,
                 "dropped_events": dropped}
 
+    def deep_sleep(self, seconds: float = 0, *, wake_pin: int | None = None,
+                   wake_level: int = 1) -> None:
+        """Put the ESP32 into deep sleep; it reboots on wake-up.
+
+        The link drops while asleep. Wake on a timer (`seconds`), a GPIO
+        level (`wake_pin`/`wake_level`), or both. After a timer wake the
+        board boots fresh — reconnect with a new Bridge() or `reset()` flow.
+
+        Not available on classic ESP32 when the BLE link is compiled in
+        (IRAM limit) — build with BRIDGE_ENABLE_BLE 0 to enable it there.
+        """
+        self.require(C.Cap.SLEEP, "sleep")
+        self.request(C.SYS_SLEEP, self._sleep_args(0, seconds, wake_pin, wake_level))
+
+    def light_sleep(self, seconds: float = 0, *, wake_pin: int | None = None,
+                    wake_level: int = 1) -> int:
+        """Pause the ESP32 in light sleep; returns the wake cause (RAM and
+        the link survive; the reply arrives after wake-up)."""
+        self.require(C.Cap.SLEEP, "sleep")
+        r = self.request(C.SYS_SLEEP, self._sleep_args(1, seconds, wake_pin, wake_level),
+                         timeout=seconds + self.timeout)
+        return r[0]
+
+    def wake_cause(self) -> int:
+        """esp_sleep_wakeup_cause_t of the last boot (0 = normal reset,
+        2 ext0, 3 ext1, 4 timer, 7 gpio)."""
+        return self.request(C.SYS_WAKE_CAUSE)[0]
+
+    @staticmethod
+    def _sleep_args(mode: int, seconds: float, wake_pin: int | None,
+                    wake_level: int) -> bytes:
+        if seconds <= 0 and wake_pin is None:
+            raise ValueError("give a timer (seconds) and/or a wake_pin")
+        return struct.pack(">BQbB", mode, round(seconds * 1_000_000),
+                           -1 if wake_pin is None else wake_pin, wake_level)
+
     def reset(self) -> None:
         """Soft-reset the ESP32 and wait for it to come back."""
         self._ready.clear()
@@ -500,65 +535,44 @@ class Bridge:
 
     # ---- sub-APIs (lazy, created on first access) ----------------------------------------------
 
-    @functools.cached_property
-    def gpio(self):
-        from .gpio import Gpio
-        return Gpio(self)
+    _SUBAPIS = {
+        "gpio": ("gpio", "Gpio"),
+        "adc": ("analog", "Adc"),
+        "dac": ("analog", "Dac"),
+        "touch": ("analog", "Touch"),
+        "pwm": ("pwm", "Pwm"),
+        "i2c": ("i2c", "I2c"),
+        "spi": ("spi", "Spi"),
+        "uart": ("uart", "Uart"),
+        "wifi": ("wifi", "Wifi"),
+        "net": ("net", "Net"),
+        "ble": ("ble", "Ble"),
+        "espnow": ("espnow", "EspNow"),
+        "rmt": ("rmt", "Rmt"),
+        "onewire": ("onewire", "OneWire"),
+        "fs": ("fs", "Fs"),
+        "nvs": ("nvs", "Nvs"),
+        "ota": ("ota", "Ota"),
+        "can": ("can", "Can"),
+        "i2s": ("i2s", "I2s"),
+        "eth": ("eth", "Eth"),
+        "camera": ("camera", "Camera"),
+        "mcpwm": ("mcpwm", "Mcpwm"),
+    }
 
-    @functools.cached_property
-    def adc(self):
-        from .analog import Adc
-        return Adc(self)
+    def __getattr__(self, name):
+        try:
+            mod_name, cls_name = self._SUBAPIS[name]
+        except KeyError:
+            raise AttributeError(name) from None
+        import importlib
 
-    @functools.cached_property
-    def dac(self):
-        from .analog import Dac
-        return Dac(self)
+        obj = getattr(importlib.import_module(f".{mod_name}", __package__), cls_name)(self)
+        setattr(self, name, obj)  # cache: next access skips __getattr__
+        return obj
 
-    @functools.cached_property
-    def touch(self):
-        from .analog import Touch
-        return Touch(self)
-
-    @functools.cached_property
-    def pwm(self):
-        from .pwm import Pwm
-        return Pwm(self)
-
-    @functools.cached_property
-    def i2c(self):
-        from .i2c import I2c
-        return I2c(self)
-
-    @functools.cached_property
-    def spi(self):
-        from .spi import Spi
-        return Spi(self)
-
-    @functools.cached_property
-    def uart(self):
-        from .uart import Uart
-        return Uart(self)
-
-    @functools.cached_property
-    def wifi(self):
-        from .wifi import Wifi
-        return Wifi(self)
-
-    @functools.cached_property
-    def net(self):
-        from .net import Net
-        return Net(self)
-
-    @functools.cached_property
-    def ble(self):
-        from .ble import Ble
-        return Ble(self)
-
-    @functools.cached_property
-    def espnow(self):
-        from .espnow import EspNow
-        return EspNow(self)
+    def __dir__(self):
+        return [*super().__dir__(), *self._SUBAPIS]
 
 
 class BridgeSet(list):

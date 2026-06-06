@@ -66,14 +66,15 @@ class OLED:
 
         self._i2c = esp.i2c
         self._bus = bus
-        # largest data write minus the control byte (128 on old firmware,
-        # whose Wire TX buffer silently truncates longer transmissions)
-        self._chunk = getattr(esp.i2c, "max_write", 2046) - 1
         self.width, self.height = width, height
         self.colstart = colstart
 
         if init_bus:
             self._i2c.init(sda=sda, scl=scl, freq=freq, bus=bus)
+        # largest data write minus the control byte — read after init(),
+        # which learns the Wire buffer the firmware actually allocated
+        # (128 on old firmware, possibly < 2 KB on a heap-squeezed board)
+        self._chunk = getattr(esp.i2c, "max_write", 2046) - 1
         if addr is None:
             found = self._i2c.scan(bus)
             addr = next((a for a in (0x3C, 0x3D) if a in found), None)

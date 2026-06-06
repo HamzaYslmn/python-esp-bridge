@@ -5,7 +5,7 @@
 
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 2
+#define FW_VERSION_MINOR 3
 #define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
@@ -38,6 +38,7 @@ enum Status : uint8_t {
   ST_SOCKET      = 0x0B,
   ST_CRC         = 0x0C,
   ST_DENIED      = 0x0D,  // wireless link not authenticated (see SYS_AUTH)
+  ST_NOT_FOUND   = 0x0E,  // no such key/path/peripheral instance
 };
 
 // ---- capability bits (SYS_INFO.caps u32) ------------------------------------
@@ -52,6 +53,17 @@ enum Status : uint8_t {
 #define CAP_BLE_FW     (1UL << 8)   // firmware compiled with BLE support
 #define CAP_BLE_LINK   (1UL << 9)   // bridge reachable over the BLE transport
 #define CAP_ESPNOW     (1UL << 10)  // ESP-NOW connectionless messaging
+#define CAP_RMT        (1UL << 11)  // generic pulse-train play/capture (RMT)
+#define CAP_ONEWIRE    (1UL << 12)  // 1-Wire bit-timing primitives
+#define CAP_TWAI       (1UL << 13)  // CAN bus (TWAI controller)
+#define CAP_I2S        (1UL << 14)  // I2S audio in/out
+#define CAP_FS         (1UL << 15)  // filesystem access (LittleFS/SD)
+#define CAP_NVS        (1UL << 16)  // persistent key/value store
+#define CAP_OTA        (1UL << 17)  // firmware update over the link
+#define CAP_ETH        (1UL << 18)  // Ethernet (compile-time opt-in)
+#define CAP_CAM        (1UL << 19)  // camera (compile-time opt-in, needs PSRAM)
+#define CAP_MCPWM      (1UL << 20)  // complementary PWM pair with deadtime
+#define CAP_SLEEP      (1UL << 21)  // deep/light sleep (IRAM-gated on classic+BLE)
 
 // ---- chip models -------------------------------------------------------------
 enum ChipModel : uint8_t {
@@ -67,13 +79,23 @@ enum ChipModel : uint8_t {
 #define MOD_DAC   0x21
 #define MOD_TOUCH 0x22
 #define MOD_PWM   0x30
+#define MOD_RMT   0x31
+#define MOD_MCPWM 0x33
 #define MOD_I2C   0x40
 #define MOD_SPI   0x41
 #define MOD_UART  0x42
+#define MOD_ONEWIRE 0x43
+#define MOD_TWAI  0x44
+#define MOD_I2S   0x45
 #define MOD_WIFI  0x50
 #define MOD_NET   0x51
 #define MOD_ESPNOW 0x52
+#define MOD_ETH   0x53
 #define MOD_BLE   0x60
+#define MOD_FS    0x70
+#define MOD_NVS   0x71
+#define MOD_OTA   0x72
+#define MOD_CAM   0x73
 
 #define CMD(mod, op) ((uint16_t)(((mod) << 8) | (op)))
 
@@ -85,6 +107,10 @@ enum ChipModel : uint8_t {
 #define SYS_FREE_HEAP   CMD(MOD_SYS, 0x05)  // -> free u32|min_free u32|largest u32|dropped_events u32
 #define SYS_SET_NAME    CMD(MOD_SYS, 0x06)  // payload = device name (0..32 bytes), persisted in NVS
 #define SYS_AUTH        CMD(MOD_SYS, 0x07)  // payload = password; required over BLE before any other cmd
+#define SYS_SLEEP       CMD(MOD_SYS, 0x08)  // mode u8 (0 deep,1 light)|us u64|wake_pin i8 (-1 none)|wake_level u8
+                                            // deep: replies OK, flushes, sleeps (link drops; board reboots on wake)
+                                            // light: replies AFTER waking -> cause u8
+#define SYS_WAKE_CAUSE  CMD(MOD_SYS, 0x09)  // -> cause u8 (esp_sleep_wakeup_cause_t: 0 power-on/reset, 2 ext0, 3 ext1, 4 timer, 7 gpio)
 #define SYS_READY       CMD(MOD_SYS, 0x80)  // event at boot; payload = same as SYS_INFO
 #define SYS_LOG         CMD(MOD_SYS, 0x81)  // event: level u8|msg
 
@@ -120,8 +146,33 @@ enum ChipModel : uint8_t {
 #define PWM_DETACH      CMD(MOD_PWM, 0x03)  // pin u8
 #define PWM_TONE        CMD(MOD_PWM, 0x04)  // pin u8|freq u32 (0 = off)
 
+// RMT — generic pulse-train play/capture. The host implements device
+// protocols (WS2812, IR, DHT, HC-SR04, steppers, ...) on top of these.
+// A symbol is u16 BE: level<<15 | duration (ticks, 1..0x7FFF); tick period
+// is set by RMT_INIT tick_hz (e.g. 1 MHz = 1 us ticks, 10 MHz = 100 ns).
+#define RMT_INIT        CMD(MOD_RMT, 0x01)  // pin u8|dir u8 (0 tx,1 rx)|tick_hz u32
+#define RMT_DEINIT      CMD(MOD_RMT, 0x02)  // pin u8
+#define RMT_TX          CMD(MOD_RMT, 0x03)  // pin u8|sym u16[..] (blocks until sent)
+#define RMT_TX_BYTES    CMD(MOD_RMT, 0x04)  // pin u8|bit0 u32|bit1 u32|data..
+                                            // bitN = sym pair (first u16 << 16 | second u16); each data
+                                            // byte expands MSB-first to 8 symbol pairs (WS2812 et al.)
+#define RMT_TX_LOOP     CMD(MOD_RMT, 0x05)  // pin u8|sym u16[..] (repeats until TX_STOP)
+#define RMT_TX_STOP     CMD(MOD_RMT, 0x06)  // pin u8
+#define RMT_RECV        CMD(MOD_RMT, 0x07)  // pin u8|idle_thresh u16 (ticks)|timeout_ms u16|max_syms u16|
+                                            // trig_pin u8 (0xFF none; may equal pin)|trig_level u8|trig_us u32
+                                            // -> sym u16[..]; arms RX, fires optional trigger pulse, waits
+#define RMT_CARRIER     CMD(MOD_RMT, 0x08)  // pin u8|freq u32|duty_pct u8|enable u8 (IR 38 kHz modulation)
+
+#define RMT_MAX_RX_SYMS 1020  // capture cap per RMT_RECV reply (2 bytes each)
+
+// MCPWM — complementary PWM pair with hardware deadtime (H-bridge drivers).
+// Not on ESP32-S2/C3 (no MCPWM peripheral).
+#define MCPWM_INIT      CMD(MOD_MCPWM, 0x01) // pin_a u8|pin_b i8 (-1 = single)|freq u32|deadtime_ns u16
+#define MCPWM_DUTY      CMD(MOD_MCPWM, 0x02) // permille u16 (0..1000)
+#define MCPWM_STOP      CMD(MOD_MCPWM, 0x03)
+
 // I2C
-#define I2C_INIT        CMD(MOD_I2C, 0x01)  // bus u8|sda u8|scl u8|freq u32
+#define I2C_INIT        CMD(MOD_I2C, 0x01)  // bus u8|sda u8|scl u8|freq u32 -> wire_buf u16 (>=0.3.0)
 #define I2C_SCAN        CMD(MOD_I2C, 0x02)  // bus u8 -> n u8|addr[n]
 #define I2C_WRITE       CMD(MOD_I2C, 0x03)  // bus u8|addr u8|data..
 #define I2C_READ        CMD(MOD_I2C, 0x04)  // bus u8|addr u8|len u8 -> data
@@ -138,6 +189,33 @@ enum ChipModel : uint8_t {
 #define UART_WRITE      CMD(MOD_UART, 0x02) // port u8|data..
 #define UART_DEINIT     CMD(MOD_UART, 0x03) // port u8
 #define UART_RX_EVT     CMD(MOD_UART, 0x80) // port u8|data..
+
+// ONEWIRE — 1-Wire bit-timing primitives only. ROM search, CRC8 and device
+// drivers (DS18B20, ...) live on the host.
+#define OW_RESET        CMD(MOD_ONEWIRE, 0x01) // pin u8 -> present u8
+#define OW_WRITE        CMD(MOD_ONEWIRE, 0x02) // pin u8|power u8|data.. (power=1: drive bus high after, parasite supply)
+#define OW_READ         CMD(MOD_ONEWIRE, 0x03) // pin u8|n u8 -> data[n]
+#define OW_TRIPLET      CMD(MOD_ONEWIRE, 0x04) // pin u8|dir u8 -> id_bit u8|cmp_bit u8|taken u8 (search step)
+
+// TWAI (CAN bus; needs an external transceiver). Filter is part of INIT
+// because the IDF driver only accepts it at install time.
+#define TWAI_INIT       CMD(MOD_TWAI, 0x01) // tx u8|rx u8|mode u8 (0 normal,1 listen,2 no_ack)|baud u8|
+                                            // [code u32|mask u32|single u8] (acceptance filter, optional)
+                                            // baud: 0:25k 1:50k 2:100k 3:125k 4:250k 5:500k 6:800k 7:1M
+#define TWAI_SEND       CMD(MOD_TWAI, 0x02) // flags u8 (bit0 extd, bit1 rtr)|id u32|data 0..8
+#define TWAI_STATUS     CMD(MOD_TWAI, 0x03) // -> state u8 (0 stopped,1 running,2 recovering,3 bus_off)|
+                                            //    tx_err u8|rx_err u8|rx_missed u32
+#define TWAI_RECOVER    CMD(MOD_TWAI, 0x04) // start bus-off recovery
+#define TWAI_DEINIT     CMD(MOD_TWAI, 0x05)
+#define TWAI_RX_EVT     CMD(MOD_TWAI, 0x80) // flags u8|id u32|data 0..8
+
+// I2S (std mode). Link bandwidth caps usable rates: ~92 KB/s at 921600 baud
+// covers 16-bit/16 kHz mono (32 KB/s); 44.1 kHz stereo does NOT fit.
+#define I2S_INIT        CMD(MOD_I2S, 0x01)  // dir u8 (bit0 tx, bit1 rx)|bclk i8|ws i8|dout i8|din i8|
+                                            // rate u32|bits u8 (8/16/24/32)|stereo u8
+#define I2S_WRITE       CMD(MOD_I2S, 0x02)  // pcm.. -> written u16 (blocking into DMA)
+#define I2S_READ        CMD(MOD_I2S, 0x03)  // n u16 -> pcm.. (blocking from DMA)
+#define I2S_DEINIT      CMD(MOD_I2S, 0x04)
 
 // WIFI
 #define WIFI_SCAN       CMD(MOD_WIFI, 0x01) // (async; results via events)
@@ -180,6 +258,18 @@ enum ChipModel : uint8_t {
 
 #define ESPNOW_MAX_DATA 250  // ESP_NOW_MAX_DATA_LEN
 
+// ETH (compile-time opt-in: BRIDGE_ENABLE_ETH). Once link+IP are up the
+// existing NET sockets route over Ethernet automatically (unified Network).
+// phy u8 is a STABLE wire id (the core's eth_phy_type_t values shift with
+// chip config): 0 generic, 1 LAN8720, 2 TLK110/IP101, 3 RTL8201, 4 DP83848,
+// 5 KSZ8041, 6 KSZ8081 (RMII) | 16 DM9051, 17 W5500, 18 KSZ8851 (SPI).
+// Board presets live in Python (espbridge.eth.PRESETS).
+#define ETH_BEGIN_RMII  CMD(MOD_ETH, 0x01)  // phy u8|addr i8|mdc i8|mdio i8|power i8|clk u8 (classic ESP32 only)
+#define ETH_BEGIN_SPI   CMD(MOD_ETH, 0x02)  // phy u8|addr i8|cs i8|irq i8|rst i8|sck i8|miso i8|mosi i8|freq_mhz u8
+#define ETH_STOP        CMD(MOD_ETH, 0x03)
+#define ETH_STATUS      CMD(MOD_ETH, 0x04)  // -> link u8|ip[4]|gw[4]|mask[4]|mac[6]
+#define ETH_STATE_EVT   CMD(MOD_ETH, 0x80)  // event u8 (1 connected,2 got_ip,3 disconnected)|ip[4]
+
 // BLE (UUIDs always 16 bytes / 128-bit on the wire; Python expands 16-bit UUIDs)
 #define BLE_SCAN_START  CMD(MOD_BLE, 0x01)  // duration_s u8 (0=forever)|active u8
 #define BLE_SCAN_STOP   CMD(MOD_BLE, 0x02)
@@ -204,3 +294,49 @@ enum ChipModel : uint8_t {
 #define GATT_PROP_WRITE  0x02
 #define GATT_PROP_NOTIFY 0x04
 #define GATT_PROP_WRITE_NR 0x08
+
+// FS — LittleFS (internal flash) + SD card. All path ops take the filesystem
+// id first: 0 = littlefs, 1 = sd_spi, 2 = sd_mmc. Paths are absolute ("/x").
+#define FS_MOUNT        CMD(MOD_FS, 0x01)  // fs u8|[sd_spi: cs u8|sck i8|miso i8|mosi i8|freq_mhz u8]
+                                           // -> total_kb u32|used_kb u32
+#define FS_UMOUNT       CMD(MOD_FS, 0x02)  // fs u8
+#define FS_OPEN         CMD(MOD_FS, 0x03)  // fs u8|mode u8 (0 r,1 w,2 a)|path str -> fd u8|size u32
+#define FS_READ         CMD(MOD_FS, 0x04)  // fd u8|n u16 -> data (short = EOF)
+#define FS_WRITE        CMD(MOD_FS, 0x05)  // fd u8|data.. -> written u16
+#define FS_SEEK         CMD(MOD_FS, 0x06)  // fd u8|pos u32
+#define FS_CLOSE        CMD(MOD_FS, 0x07)  // fd u8
+#define FS_LIST         CMD(MOD_FS, 0x08)  // fs u8|path str; entries stream as FS_LIST_EVT, reply count u16 = done
+#define FS_STAT         CMD(MOD_FS, 0x09)  // fs u8|path str -> size u32|isdir u8|mtime u32
+#define FS_REMOVE       CMD(MOD_FS, 0x0A)  // fs u8|path str (file or empty dir)
+#define FS_RENAME       CMD(MOD_FS, 0x0B)  // fs u8|from_len u8|from|to str
+#define FS_MKDIR        CMD(MOD_FS, 0x0C)  // fs u8|path str
+#define FS_DF           CMD(MOD_FS, 0x0D)  // fs u8 -> total_kb u32|used_kb u32
+#define FS_LIST_EVT     CMD(MOD_FS, 0x80)  // isdir u8|size u32|name..
+
+// NVS — persistent key/value bytes in the "user" namespace (separate from the
+// bridge's own settings). Typed encode/decode is the host's job. Key <= 15 chars.
+#define NVS_SET         CMD(MOD_NVS, 0x01) // klen u8|key|data..
+#define NVS_GET         CMD(MOD_NVS, 0x02) // key str -> data (ST_NOT_FOUND if absent)
+#define NVS_DEL         CMD(MOD_NVS, 0x03) // key str
+#define NVS_KEYS        CMD(MOD_NVS, 0x04) // -> n u8|{klen u8|key}*n
+#define NVS_CLEAR       CMD(MOD_NVS, 0x05)
+
+// OTA — reflash the firmware over any transport (USB serial or BLE).
+// Requires a partition table with two app slots (e.g. "Minimal SPIFFS";
+// the default "Huge APP" has no OTA slot and OTA_BEGIN replies ST_UNSUPPORTED).
+#define OTA_BEGIN       CMD(MOD_OTA, 0x01) // size u32 (0xFFFFFFFF = unknown)
+#define OTA_WRITE       CMD(MOD_OTA, 0x02) // data.. -> total_written u32
+#define OTA_END         CMD(MOD_OTA, 0x03) // commit u8; commit=1 -> reply, flush, reboot into new fw
+#define OTA_ABORT       CMD(MOD_OTA, 0x04)
+
+#define OTA_CHUNK 1024  // recommended bytes per OTA_WRITE
+
+// CAM (compile-time opt-in: BRIDGE_ENABLE_CAM; esp32/s2/s3 + PSRAM).
+// Pin maps and property ids live in Python (espbridge.camera board presets).
+#define CAM_INIT        CMD(MOD_CAM, 0x01) // pwdn i8|reset i8|xclk i8|siod i8|sioc i8|d7..d0 i8[8]|
+                                           // vsync i8|href i8|pclk i8|xclk_mhz u8|framesize u8|jpeg_q u8|fb_count u8
+#define CAM_CAPTURE     CMD(MOD_CAM, 0x02) // -> len u32|w u16|h u16|format u8 (frame held for CAM_READ)
+#define CAM_READ        CMD(MOD_CAM, 0x03) // offset u32|n u16 -> data
+#define CAM_RELEASE     CMD(MOD_CAM, 0x04) // return the held frame buffer
+#define CAM_SET         CMD(MOD_CAM, 0x05) // prop u8|val i32 (sensor_t setter id; ids defined host-side)
+#define CAM_DEINIT      CMD(MOD_CAM, 0x06)

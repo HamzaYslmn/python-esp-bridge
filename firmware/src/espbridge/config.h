@@ -67,6 +67,71 @@
   #define BRIDGE_SPI_HOST1   FSPI
 #endif
 
+// ---- v0.3.0 modules ----------------------------------------------------------
+// Generic primitives present on every supported chip; SOC_* macros (soc_caps.h
+// via Arduino.h) gate the chip-dependent peripherals.
+#define BRIDGE_HAS_RMT     1   // pulse-train play/capture
+#define BRIDGE_HAS_ONEWIRE 1   // bit-banged 1-Wire timing primitives
+#define BRIDGE_HAS_FS      1   // LittleFS always; SD depends on IRAM (below)
+// Classic ESP32 with Wi-Fi + Bluedroid leaves ~zero spare IRAM; the SD-SPI
+// and SDMMC drivers add IRAM-resident ISRs that overflow iram0_0_seg there.
+// Set BRIDGE_ENABLE_BLE 0 (frees BT IRAM) to get SD support on classic.
+#if defined(CONFIG_IDF_TARGET_ESP32) && BRIDGE_ENABLE_BLE
+  #define BRIDGE_HAS_SD    0
+#else
+  #define BRIDGE_HAS_SD    1
+#endif
+#if BRIDGE_HAS_SD && defined(SOC_SDMMC_HOST_SUPPORTED)
+  #define BRIDGE_HAS_SDMMC 1
+#else
+  #define BRIDGE_HAS_SDMMC 0
+#endif
+// The IDF sleep API (sleep_modes.c) is IRAM-resident (~1.7 KB) — that's the
+// entire remaining IRAM budget on classic ESP32 once Wi-Fi + Bluedroid are
+// in. Same trade as SD: set BRIDGE_ENABLE_BLE 0 to get sleep on classic.
+#if defined(CONFIG_IDF_TARGET_ESP32) && BRIDGE_ENABLE_BLE
+  #define BRIDGE_HAS_SLEEP 0
+#else
+  #define BRIDGE_HAS_SLEEP 1
+#endif
+#define BRIDGE_HAS_NVS     1   // key/value store
+#define BRIDGE_HAS_OTA     1   // firmware update over the link
+#ifdef SOC_TWAI_SUPPORTED
+  #define BRIDGE_HAS_TWAI  1
+#else
+  #define BRIDGE_HAS_TWAI  0
+#endif
+#ifdef SOC_I2S_SUPPORTED
+  #define BRIDGE_HAS_I2S   1
+#else
+  #define BRIDGE_HAS_I2S   0
+#endif
+#ifdef SOC_MCPWM_SUPPORTED  // esp32/s3/c6 — NOT s2/c3
+  #define BRIDGE_HAS_MCPWM 1
+#else
+  #define BRIDGE_HAS_MCPWM 0
+#endif
+
+// Heavy opt-ins (default OFF; enable in firmware.ino). ETH needs a PHY chip
+// (RMII on classic ESP32, or W5500/DM9051 over SPI on any chip); CAM needs an
+// OV-series sensor + PSRAM and exists on esp32/s2/s3 only.
+#ifndef BRIDGE_ENABLE_ETH
+#define BRIDGE_ENABLE_ETH 0
+#endif
+#ifndef BRIDGE_ENABLE_CAM
+#define BRIDGE_ENABLE_CAM 0
+#endif
+#if BRIDGE_ENABLE_ETH && defined(CONFIG_ETH_ENABLED)
+  #define BRIDGE_ETH 1
+#else
+  #define BRIDGE_ETH 0
+#endif
+#if BRIDGE_ENABLE_CAM && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3))
+  #define BRIDGE_CAM 1
+#else
+  #define BRIDGE_CAM 0
+#endif
+
 // BLE additionally needs the Bluedroid host stack: arduino-esp32 3.3.x moved
 // S3/C3/C6 to NimBLE, which link_ble.cpp / mod_ble.cpp don't speak (yet) —
 // those chips build USB-only (ESP-NOW and everything else still works).

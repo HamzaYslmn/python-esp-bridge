@@ -35,6 +35,7 @@ class Status(enum.IntEnum):
     SOCKET = 0x0B
     CRC = 0x0C
     DENIED = 0x0D  # wireless link not authenticated (see SYS_AUTH)
+    NOT_FOUND = 0x0E  # no such key/path/peripheral instance
 
 
 class Cap(enum.IntFlag):
@@ -49,6 +50,17 @@ class Cap(enum.IntFlag):
     BLE_FW = 1 << 8
     BLE_LINK = 1 << 9  # bridge reachable over the BLE transport
     ESPNOW = 1 << 10  # ESP-NOW connectionless messaging
+    RMT = 1 << 11  # generic pulse-train play/capture
+    ONEWIRE = 1 << 12  # 1-Wire bit-timing primitives
+    TWAI = 1 << 13  # CAN bus (TWAI controller)
+    I2S = 1 << 14  # I2S audio in/out
+    FS = 1 << 15  # filesystem access (LittleFS/SD)
+    NVS = 1 << 16  # persistent key/value store
+    OTA = 1 << 17  # firmware update over the link
+    ETH = 1 << 18  # Ethernet (compile-time opt-in)
+    CAM = 1 << 19  # camera (compile-time opt-in, needs PSRAM)
+    MCPWM = 1 << 20  # complementary PWM pair with deadtime
+    SLEEP = 1 << 21  # deep/light sleep (IRAM-gated on classic+BLE)
 
 
 class ChipModel(enum.IntEnum):
@@ -71,13 +83,23 @@ MOD_ADC = 0x20
 MOD_DAC = 0x21
 MOD_TOUCH = 0x22
 MOD_PWM = 0x30
+MOD_RMT = 0x31
+MOD_MCPWM = 0x33
 MOD_I2C = 0x40
 MOD_SPI = 0x41
 MOD_UART = 0x42
+MOD_ONEWIRE = 0x43
+MOD_TWAI = 0x44
+MOD_I2S = 0x45
 MOD_WIFI = 0x50
 MOD_NET = 0x51
 MOD_ESPNOW = 0x52
+MOD_ETH = 0x53
 MOD_BLE = 0x60
+MOD_FS = 0x70
+MOD_NVS = 0x71
+MOD_OTA = 0x72
+MOD_CAM = 0x73
 
 # SYS
 SYS_PING = _cmd(MOD_SYS, 0x01)
@@ -87,6 +109,8 @@ SYS_RESET = _cmd(MOD_SYS, 0x04)
 SYS_FREE_HEAP = _cmd(MOD_SYS, 0x05)
 SYS_SET_NAME = _cmd(MOD_SYS, 0x06)
 SYS_AUTH = _cmd(MOD_SYS, 0x07)
+SYS_SLEEP = _cmd(MOD_SYS, 0x08)
+SYS_WAKE_CAUSE = _cmd(MOD_SYS, 0x09)
 SYS_READY = _cmd(MOD_SYS, 0x80)
 SYS_LOG = _cmd(MOD_SYS, 0x81)
 
@@ -118,6 +142,23 @@ PWM_WRITE = _cmd(MOD_PWM, 0x02)
 PWM_DETACH = _cmd(MOD_PWM, 0x03)
 PWM_TONE = _cmd(MOD_PWM, 0x04)
 
+# RMT (symbol = u16 BE: level<<15 | duration ticks)
+RMT_INIT = _cmd(MOD_RMT, 0x01)
+RMT_DEINIT = _cmd(MOD_RMT, 0x02)
+RMT_TX = _cmd(MOD_RMT, 0x03)
+RMT_TX_BYTES = _cmd(MOD_RMT, 0x04)
+RMT_TX_LOOP = _cmd(MOD_RMT, 0x05)
+RMT_TX_STOP = _cmd(MOD_RMT, 0x06)
+RMT_RECV = _cmd(MOD_RMT, 0x07)
+RMT_CARRIER = _cmd(MOD_RMT, 0x08)
+
+RMT_MAX_RX_SYMS = 1020
+
+# MCPWM
+MCPWM_INIT = _cmd(MOD_MCPWM, 0x01)
+MCPWM_DUTY = _cmd(MOD_MCPWM, 0x02)
+MCPWM_STOP = _cmd(MOD_MCPWM, 0x03)
+
 # I2C
 I2C_INIT = _cmd(MOD_I2C, 0x01)
 I2C_SCAN = _cmd(MOD_I2C, 0x02)
@@ -136,6 +177,26 @@ UART_INIT = _cmd(MOD_UART, 0x01)
 UART_WRITE = _cmd(MOD_UART, 0x02)
 UART_DEINIT = _cmd(MOD_UART, 0x03)
 UART_RX_EVT = _cmd(MOD_UART, 0x80)
+
+# ONEWIRE
+OW_RESET = _cmd(MOD_ONEWIRE, 0x01)
+OW_WRITE = _cmd(MOD_ONEWIRE, 0x02)
+OW_READ = _cmd(MOD_ONEWIRE, 0x03)
+OW_TRIPLET = _cmd(MOD_ONEWIRE, 0x04)
+
+# TWAI (CAN)
+TWAI_INIT = _cmd(MOD_TWAI, 0x01)
+TWAI_SEND = _cmd(MOD_TWAI, 0x02)
+TWAI_STATUS = _cmd(MOD_TWAI, 0x03)
+TWAI_RECOVER = _cmd(MOD_TWAI, 0x04)
+TWAI_DEINIT = _cmd(MOD_TWAI, 0x05)
+TWAI_RX_EVT = _cmd(MOD_TWAI, 0x80)
+
+# I2S
+I2S_INIT = _cmd(MOD_I2S, 0x01)
+I2S_WRITE = _cmd(MOD_I2S, 0x02)
+I2S_READ = _cmd(MOD_I2S, 0x03)
+I2S_DEINIT = _cmd(MOD_I2S, 0x04)
 
 # WIFI
 WIFI_SCAN = _cmd(MOD_WIFI, 0x01)
@@ -174,6 +235,13 @@ ESPNOW_SEND_EVT = _cmd(MOD_ESPNOW, 0x81)
 
 ESPNOW_MAX_DATA = 250  # ESP_NOW_MAX_DATA_LEN
 
+# ETH
+ETH_BEGIN_RMII = _cmd(MOD_ETH, 0x01)
+ETH_BEGIN_SPI = _cmd(MOD_ETH, 0x02)
+ETH_STOP = _cmd(MOD_ETH, 0x03)
+ETH_STATUS = _cmd(MOD_ETH, 0x04)
+ETH_STATE_EVT = _cmd(MOD_ETH, 0x80)
+
 # BLE
 BLE_SCAN_START = _cmd(MOD_BLE, 0x01)
 BLE_SCAN_STOP = _cmd(MOD_BLE, 0x02)
@@ -197,6 +265,45 @@ GATT_PROP_READ = 0x01
 GATT_PROP_WRITE = 0x02
 GATT_PROP_NOTIFY = 0x04
 GATT_PROP_WRITE_NR = 0x08
+
+# FS (fs id: 0 littlefs, 1 sd_spi, 2 sd_mmc)
+FS_MOUNT = _cmd(MOD_FS, 0x01)
+FS_UMOUNT = _cmd(MOD_FS, 0x02)
+FS_OPEN = _cmd(MOD_FS, 0x03)
+FS_READ = _cmd(MOD_FS, 0x04)
+FS_WRITE = _cmd(MOD_FS, 0x05)
+FS_SEEK = _cmd(MOD_FS, 0x06)
+FS_CLOSE = _cmd(MOD_FS, 0x07)
+FS_LIST = _cmd(MOD_FS, 0x08)
+FS_STAT = _cmd(MOD_FS, 0x09)
+FS_REMOVE = _cmd(MOD_FS, 0x0A)
+FS_RENAME = _cmd(MOD_FS, 0x0B)
+FS_MKDIR = _cmd(MOD_FS, 0x0C)
+FS_DF = _cmd(MOD_FS, 0x0D)
+FS_LIST_EVT = _cmd(MOD_FS, 0x80)
+
+# NVS
+NVS_SET = _cmd(MOD_NVS, 0x01)
+NVS_GET = _cmd(MOD_NVS, 0x02)
+NVS_DEL = _cmd(MOD_NVS, 0x03)
+NVS_KEYS = _cmd(MOD_NVS, 0x04)
+NVS_CLEAR = _cmd(MOD_NVS, 0x05)
+
+# OTA
+OTA_BEGIN = _cmd(MOD_OTA, 0x01)
+OTA_WRITE = _cmd(MOD_OTA, 0x02)
+OTA_END = _cmd(MOD_OTA, 0x03)
+OTA_ABORT = _cmd(MOD_OTA, 0x04)
+
+OTA_CHUNK = 1024
+
+# CAM
+CAM_INIT = _cmd(MOD_CAM, 0x01)
+CAM_CAPTURE = _cmd(MOD_CAM, 0x02)
+CAM_READ = _cmd(MOD_CAM, 0x03)
+CAM_RELEASE = _cmd(MOD_CAM, 0x04)
+CAM_SET = _cmd(MOD_CAM, 0x05)
+CAM_DEINIT = _cmd(MOD_CAM, 0x06)
 
 # USB-UART bridge chips found on ESP32 dev boards: (vid, pid) -> chip
 KNOWN_USB_IDS = {

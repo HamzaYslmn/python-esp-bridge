@@ -23,15 +23,28 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   if (op != 0x01 && !i2c_inited[bus]) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
 
   switch (op) {
-    case 0x01: {  // INIT: bus, sda, scl, freq u32
+    case 0x01: {  // INIT: bus, sda, scl, freq u32 -> wire_buf u16
       if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (i2c_inited[bus]) w->end();
       // Wire's default TX buffer is 128 bytes and write() silently drops
-      // anything beyond it; size it to fit any I2C_WRITE payload.
-      if (w->setBufferSize(MAX_PAYLOAD) == 0) { proto_reply_err(seq, cmd, ST_IO); return; }
-      if (!w->begin(p[1], p[2], rd32(p + 3))) { proto_reply_err(seq, cmd, ST_IO); return; }
+      // anything beyond it; size it to fit any I2C_WRITE payload. begin()
+      // allocates 2x this from the heap — which a classic ESP32 with the
+      // BLE link connected runs within a few KB of — so fall back to
+      // smaller buffers instead of failing, and report the size that stuck
+      // (hosts chunk their writes to it).
+      static const uint16_t sizes[] = {MAX_PAYLOAD, 512, 128};
+      uint16_t got = 0;
+      for (uint8_t i = 0; i < 3 && !got; i++)
+        if (w->setBufferSize(sizes[i]) && w->begin(p[1], p[2], rd32(p + 3)))
+          got = sizes[i];
+      if (!got) {
+        proto_log_heap("i2c: init failed");  // ST_IO alone is opaque
+        proto_reply_err(seq, cmd, ST_IO);
+        return;
+      }
       i2c_inited[bus] = true;
-      proto_reply_ok(seq, cmd);
+      uint8_t out[2] = {(uint8_t)(got >> 8), (uint8_t)got};
+      proto_reply(seq, cmd, out, 2);
       break;
     }
 

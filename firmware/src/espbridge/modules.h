@@ -15,6 +15,17 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void rmt_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void nvs_handle_cmd(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void twai_poll();  // net_task: driver RX queue -> TWAI_RX_EVT
+void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 
 void gpio_init();
 void wifi_init();

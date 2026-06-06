@@ -2,9 +2,16 @@
 
 Connect an ESP32 to a Raspberry Pi (or any PC) over USB **or Bluetooth** and
 drive **every** ESP32 peripheral live from Python — GPIO, PWM, ADC, DAC,
-capacitive touch, I2C, SPI, extra UARTs, Wi-Fi (including TCP/UDP sockets
-through the ESP32 radio), BLE and ESP-NOW. Flash the bridge firmware **once**;
-after that, everything is Python on the host. No reflashing per project.
+capacitive touch, I2C, SPI, extra UARTs, RMT pulse trains (NeoPixels, IR,
+DHT, ultrasonic, steppers), 1-Wire, CAN bus, I2S audio, files (LittleFS/SD),
+NVS storage, deep sleep, Wi-Fi (including TCP/UDP sockets through the ESP32
+radio), Ethernet, camera, BLE and ESP-NOW — plus firmware updates **over the
+link itself**. Flash the bridge firmware **once**; after that, everything is
+Python on the host. No reflashing per project.
+
+The design rule: the firmware exposes minimal hardware primitives; device
+protocols (WS2812 timing, NEC IR, DHT decoding, 1-Wire search, stepper ramps)
+are implemented in Python where they are easy to read, test and extend.
 
 ```
 ┌────────────────┐  USB serial (≤921600 Bd) or BLE  ┌─────────────────────┐
@@ -78,6 +85,33 @@ after that, everything is Python on the host. No reflashing per project.
 | NET    | TCP client/server + UDP **through the ESP32 radio**, socket-like API, credit-window flow control |
 | BLE    | scan, advertise, GATT server (notify/write callbacks), GATT client |
 | ESP-NOW | connectionless ESP32↔ESP32 messaging: peers + broadcast, delivery ACKs, RX with RSSI, PMK/LMK encryption — coexists with Wi-Fi and BLE |
+| RMT    | generic pulse-train play/capture — the one primitive behind `neopixel`, `ir`, `dht`, `hcsr04`, `stepper` (below) |
+| 1-Wire | bus primitives on any pin; ROM search + CRC8 in Python (`esp.onewire`, DS18B20 driver included) |
+| CAN    | TWAI controller: 25k–1M bit/s, filters, send/recv + callbacks (`esp.can`; transceiver chip required) |
+| I2S    | PCM in/out for MEMS mics & DACs/amps (`esp.i2s`; link bandwidth caps rates ~16-bit/32 kHz mono) |
+| Files  | LittleFS on internal flash + SD cards: open/read/write/list/… (`esp.fs`) |
+| NVS    | persistent key/value storage on the board (`esp.nvs`) |
+| Sleep  | deep + light sleep with timer/GPIO wake (`esp.deep_sleep()`; see chip notes) |
+| OTA    | **reflash the firmware over USB or Bluetooth** (`esp.ota.flash("fw.bin")`; dual-app partition scheme) |
+| Ethernet | RMII (WT32-ETH01, Olimex POE…) or SPI (W5500) — NET sockets ride it automatically (firmware opt-in) |
+| Camera | JPEG snapshots from ESP32-CAM / XIAO-S3-Sense / ESP-EYE (firmware opt-in, PSRAM) |
+| MCPWM  | complementary PWM pair with hardware deadtime for H-bridges (`esp.mcpwm`; not on S2/C3) |
+
+**Device drivers in pure Python** (over the RMT/1-Wire primitives — no
+firmware changes to add your own):
+
+```python
+from espbridge.neopixel import NeoPixel   # WS2812/SK6812 strips
+from espbridge.dht import DHT             # DHT11/DHT22 temp+humidity
+from espbridge.ds18b20 import DS18B20     # 1-Wire thermometers (multi-drop)
+from espbridge.hcsr04 import HCSR04       # ultrasonic ranging
+from espbridge.ir import IrSender, IrReceiver  # NEC remotes + raw IR
+from espbridge.stepper import Stepper     # A4988/DRV8825 with ramps
+
+NeoPixel(esp, pin=5, n=30).fill((0, 0, 64))
+print(DHT(esp, 4).read())                 # (23.1, 65.5)
+Stepper(esp, step_pin=12, dir_pin=14).move(400, speed=800, accel=1600)
+```
 
 The firmware is fully event-driven on FreeRTOS: serial TX, command handling
 and the network stack run as separate tasks, so a blocking Wi-Fi/BLE
@@ -156,7 +190,7 @@ with espbridge.connect_all() as boards:    # or just open all of them
 |------|------|
 | [`firmware/`](firmware/) | Arduino firmware (flash once; Bluetooth password lives at the top of `firmware.ino`) |
 | [`src/`](src/) | Python package `python-esp-bridge` (import `espbridge`; transports: USB serial + BLE) |
-| [`examples/`](examples/) | grouped: `basics/`, `wireless/`, `network/`, `displays/`, `compat/` (gpiozero, adafruit, luma, smbus, rpi_gpio) |
+| [`examples/`](examples/) | grouped: `basics/`, `devices/` (NeoPixel, DHT, DS18B20, HC-SR04, IR, stepper, CAN, I2S), `system/` (files, NVS, deep sleep, OTA), `wireless/`, `network/`, `displays/`, `compat/` (gpiozero, adafruit, luma, smbus, rpi_gpio) |
 | [`tests/`](tests/) | hardware-free protocol/bridge tests (`pytest tests/`) |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | binary wire protocol spec (framing, transports, auth) |
 
@@ -172,3 +206,23 @@ anything your chip lacks.
 > S3/C3/C6 — the bridge's Bluetooth code (BLE link + `esp.ble`) speaks
 > Bluedroid, so on those chips the firmware currently builds USB-only.
 > Classic ESP32 keeps Bluedroid: full BLE link + Wi-Fi + ESP-NOW coexistence.
+
+> **Classic-ESP32 IRAM trade-off:** with Wi-Fi + Bluetooth both loaded the
+> chip's instruction RAM is full, so the default classic build skips SD-card
+> support (LittleFS still works) and deep/light sleep. Build with
+> `BRIDGE_ENABLE_BLE 0` (USB-only) to get SD + sleep back; S2/S3/C3/C6 have
+> everything regardless. The Python API raises a clear `UnsupportedError`
+> either way (`Cap.SLEEP`, `Cap.SDMMC` probing).
+
+### Per-chip support matrix (v0.3.0 modules)
+
+| | ESP32 | S2 | S3 | C3 | C6 |
+|---|---|---|---|---|---|
+| RMT / 1-Wire / CAN / I2S / NVS / OTA | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LittleFS | ✓ | ✓ | ✓ | ✓ | ✓ |
+| SD (SPI) / sleep | BLE off only | ✓ | ✓ | ✓ | ✓ |
+| SDMMC slot | BLE off only | — | ✓ | — | — |
+| MCPWM (deadtime pair) | ✓ | — | ✓ | — | ✓ |
+| Camera (opt-in) | ✓ (PSRAM) | ✓ (PSRAM) | ✓ (PSRAM) | — | — |
+| Ethernet RMII (opt-in) | ✓ | — | — | — | — |
+| Ethernet SPI W5500 (opt-in) | ✓ | ✓ | ✓ | ✓ | ✓ |

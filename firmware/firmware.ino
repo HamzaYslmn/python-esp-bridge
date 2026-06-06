@@ -6,7 +6,19 @@
 // blocking TCP/BLE connect never stalls GPIO/I2C/SPI traffic. See protocol.h.
 //
 // Requires arduino-esp32 core 3.x. With BLE enabled (default) select a
-// partition scheme with a large app slot, e.g. "Huge APP (3MB No OTA)".
+// partition scheme with a large app slot — "Huge APP (3MB No OTA)", or
+// "Minimal SPIFFS (1.9MB APP with OTA)" if you want over-the-air updates.
+
+// ---- compile-time opt-ins (must precede the config.h include) ---------------
+// Heavy peripherals, off by default. Board pin maps live on the Python side
+// (espbridge.eth / espbridge.camera presets) — no firmware edits per board.
+#ifndef BRIDGE_ENABLE_ETH
+#define BRIDGE_ENABLE_ETH 0  // Ethernet PHY (RMII e.g. WT32-ETH01, or SPI W5500)
+#endif
+#ifndef BRIDGE_ENABLE_CAM
+#define BRIDGE_ENABLE_CAM 0  // OV-series camera (esp32/s2/s3 + PSRAM only)
+#endif
+
 #include "src/espbridge/config.h"
 #include "src/espbridge/protocol.h"
 #include "src/espbridge/modules.h"

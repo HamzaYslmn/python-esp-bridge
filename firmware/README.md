@@ -15,6 +15,8 @@ USB serial **or Bluetooth**.
 ## Configuration (top of `firmware.ino`)
 
 ```cpp
+#define BRIDGE_ENABLE_ETH 0          // opt-in: Ethernet (RMII or SPI W5500)
+#define BRIDGE_ENABLE_CAM 0          // opt-in: camera (esp32/s2/s3 + PSRAM)
 #define BRIDGE_PASSWORD "espbridge"  // Bluetooth password ("" = open access)
 #define BRIDGE_BLE_LINK 1            // 0 = USB only
 #define BRIDGE_WIFI_COEX 1           // classic ESP32: Wi-Fi up before BLE (coex)
@@ -24,6 +26,20 @@ Change the password here and reflash. USB never asks for a password.
 `BRIDGE_WIFI_COEX` pre-starts the Wi-Fi driver before Bluedroid so Wi-Fi /
 ESP-NOW / BLE can all run together (required init order on classic ESP32);
 set it to 0 to reclaim ~50 KB heap on boards that never use the radio.
+Ethernet and camera stay compile-time opt-ins because they cost real flash;
+board pin maps live on the Python side (`espbridge.eth` / `espbridge.camera`
+presets), so one firmware build serves every board.
+
+**Classic-ESP32 IRAM trade-off:** Wi-Fi + Bluedroid fill the chip's
+instruction RAM. The default classic build therefore ships without SD-card
+support (LittleFS works) and without deep/light sleep. Building with
+`#define BRIDGE_ENABLE_BLE 0` (USB-only) frees the BT IRAM and re-enables
+SD, SDMMC and sleep. S2/S3/C3/C6 have everything in every build.
+
+**OTA updates:** to reflash over the link later (USB *or* Bluetooth — see
+`examples/system/ota_update.py`), pick Partition Scheme **"Minimal SPIFFS
+(1.9MB APP with OTA)"** instead of Huge APP for the first USB flash. The
+no-OTA Huge APP table makes `esp.ota` reply unsupported.
 
 ## Flashing (Arduino IDE)
 

@@ -9,19 +9,26 @@ from . import constants as C
 class I2c:
     def __init__(self, bridge):
         self._b = bridge
+        self._max_write: int | None = None
 
     @property
     def max_write(self) -> int:
         """Largest data block write() accepts, firmware-dependent: older
         firmware leaves Wire's TX buffer at its 128-byte default and
-        silently truncates anything longer."""
+        silently truncates anything longer. Firmware >= 0.3.0 reports the
+        Wire buffer it could actually allocate in the init() reply (a
+        heap-squeezed board may get less than the 2 KB default)."""
+        if self._max_write is not None:
+            return self._max_write
         info = self._b.info
         if info is not None and info.fw_version < (0, 0, 2):
             return 128
         return C.MAX_PAYLOAD - 2  # frame carries bus + addr first
 
     def init(self, *, sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> None:
-        self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
+        r = self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
+        if len(r) >= 2:  # wire_buf u16 (firmware >= 0.3.0)
+            self._max_write = struct.unpack(">H", r[:2])[0] - 2
 
     def scan(self, bus: int = 0) -> list[int]:
         """Addresses (7-bit) that ACK on the bus."""

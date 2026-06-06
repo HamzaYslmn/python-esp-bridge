@@ -175,6 +175,14 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
     case MOD_NET:    net_handle(op, seq, p, len); break;
     case MOD_ESPNOW: espnow_handle(op, seq, p, len); break;
     case MOD_BLE:    ble_handle(op, seq, p, len); break;
+    case MOD_RMT:    rmt_handle(op, seq, p, len); break;
+    case MOD_ONEWIRE: onewire_handle(op, seq, p, len); break;
+    case MOD_FS:     fs_handle(op, seq, p, len); break;
+    case MOD_OTA:    ota_handle(op, seq, p, len); break;
+    case MOD_TWAI:   twai_handle(op, seq, p, len); break;
+    case MOD_I2S:    i2s_handle(op, seq, p, len); break;
+    case MOD_ETH:    eth_handle(op, seq, p, len); break;
+    case MOD_CAM:    cam_handle(op, seq, p, len); break;
   }
 }
 
@@ -188,6 +196,7 @@ static void net_task(void*) {
     }
     wifi_poll();
     net_poll();
+    twai_poll();
   }
 }
 
@@ -227,11 +236,21 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
     case MOD_I2C:   i2c_handle(op, seq, p, len); break;
     case MOD_SPI:   spi_handle(op, seq, p, len); break;
     case MOD_UART:  uart_handle(op, seq, p, len); break;
-    // Slow / stateful handlers: hand off to net_task.
+    case MOD_NVS:   nvs_handle_cmd(op, seq, p, len); break;
+    case MOD_MCPWM: mcpwm_handle(op, seq, p, len); break;
+    // Slow / stateful handlers: hand off to net_task (RMT TX/RECV block).
     case MOD_WIFI:
     case MOD_NET:
     case MOD_ESPNOW:
-    case MOD_BLE:   net_enqueue(cmd, seq, p, len); break;
+    case MOD_BLE:
+    case MOD_RMT:
+    case MOD_ONEWIRE:
+    case MOD_FS:
+    case MOD_OTA:
+    case MOD_TWAI:
+    case MOD_I2S:
+    case MOD_ETH:
+    case MOD_CAM:   net_enqueue(cmd, seq, p, len); break;
     default:        proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
   }
 }

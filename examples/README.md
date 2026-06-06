@@ -27,6 +27,28 @@ Without uv: `pip install -e "../src[oled,ble]"` once, then `python basics/blink.
 | `spi_transfer.py` | full-duplex SPI (flash JEDEC ID) |
 | `rtos_concurrency.py` | FreeRTOS task split: fast lane stays ~ms while radio blocks |
 
+## devices/ — sensors, LEDs, motors, buses (pure-Python drivers)
+
+| example | shows |
+|---|---|
+| `neopixel_rainbow.py` | WS2812/NeoPixel strip animation over the RMT primitive |
+| `dht_read.py` | DHT22/DHT11 temperature + humidity |
+| `ds18b20_temp.py` | DS18B20 1-Wire thermometers — several probes on one pin |
+| `hcsr04_ping.py` | HC-SR04 ultrasonic distance |
+| `ir_remote.py` | receive NEC remote codes and replay them out an IR LED |
+| `stepper_move.py` | A4988/DRV8825 stepper with trapezoidal ramps + free-run |
+| `can_dump.py` | CAN bus monitor + periodic frame (TWAI, needs a transceiver) |
+| `i2s_record.py` | record an I2S MEMS mic to a WAV file on the host |
+
+## system/ — on-board storage, sleep, firmware updates
+
+| example | shows |
+|---|---|
+| `nvs_counter.py` | persistent key/value storage in the ESP32's flash |
+| `fs_logger.py` | LittleFS files: append a log on the board, read it back |
+| `deep_sleep.py` | deep sleep + timer wake (see chip notes in the main README) |
+| `ota_update.py` | **reflash the firmware over USB or Bluetooth** — no boot button |
+
 ## wireless/ — Bluetooth link, ESP-NOW, multiple boards, link speed
 
 | example | shows |

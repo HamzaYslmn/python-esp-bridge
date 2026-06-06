@@ -4,6 +4,8 @@
 #include "espbridge/link.h"
 #include <esp_mac.h>
 #include <esp_heap_caps.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #include <Preferences.h>
 
 // User-assigned device name (NVS-persisted) so hosts with several bridges can
@@ -61,6 +63,39 @@ uint16_t sys_build_info(uint8_t* out) {
 #endif
 #if BRIDGE_HAS_ESPNOW
   caps |= CAP_ESPNOW;
+#endif
+#if BRIDGE_HAS_RMT
+  caps |= CAP_RMT;
+#endif
+#if BRIDGE_HAS_ONEWIRE
+  caps |= CAP_ONEWIRE;
+#endif
+#if BRIDGE_HAS_TWAI
+  caps |= CAP_TWAI;
+#endif
+#if BRIDGE_HAS_I2S
+  caps |= CAP_I2S;
+#endif
+#if BRIDGE_HAS_FS
+  caps |= CAP_FS;
+#endif
+#if BRIDGE_HAS_NVS
+  caps |= CAP_NVS;
+#endif
+#if BRIDGE_HAS_OTA
+  caps |= CAP_OTA;
+#endif
+#if BRIDGE_ETH
+  caps |= CAP_ETH;
+#endif
+#if BRIDGE_HAS_MCPWM
+  caps |= CAP_MCPWM;
+#endif
+#if BRIDGE_HAS_SLEEP
+  caps |= CAP_SLEEP;
+#endif
+#if BRIDGE_CAM
+  if (psramFound()) caps |= CAP_CAM;  // frame buffers live in PSRAM
 #endif
   if (psramFound()) caps |= CAP_PSRAM;
   if (link_ble_enabled()) caps |= CAP_BLE_LINK;
@@ -124,6 +159,57 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       proto_reply_ok(seq, cmd);
       break;
     }
+
+#if BRIDGE_HAS_SLEEP
+    case 0x08: {  // SLEEP: mode u8 (0 deep,1 light)|us u64|wake_pin i8|wake_level u8
+      if (len < 11) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      uint8_t mode = p[0];
+      uint64_t us = ((uint64_t)rd32(p + 1) << 32) | rd32(p + 5);
+      int8_t wpin = (int8_t)p[9];
+      uint8_t wlevel = p[10] ? 1 : 0;
+      if (mode > 1 || (us == 0 && wpin < 0)) {  // would never wake
+        proto_reply_err(seq, cmd, ST_BAD_ARGS);
+        return;
+      }
+      if (us) esp_sleep_enable_timer_wakeup(us);
+      if (wpin >= 0) {
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
+        esp_sleep_enable_ext0_wakeup((gpio_num_t)wpin, wlevel);  // RTC pins only
+#else  // C3/C6: GPIO wake paths differ for deep vs light sleep
+        if (mode == 0) {
+          esp_deep_sleep_enable_gpio_wakeup(1ULL << wpin,
+              wlevel ? ESP_GPIO_WAKEUP_GPIO_HIGH : ESP_GPIO_WAKEUP_GPIO_LOW);
+        } else {
+          gpio_wakeup_enable((gpio_num_t)wpin,
+              wlevel ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL);
+          esp_sleep_enable_gpio_wakeup();
+        }
+#endif
+      }
+      if (mode == 0) {  // deep: reply, flush, sleep — board reboots on wake
+        proto_reply_ok(seq, cmd);
+        proto_tx_flush();
+        delay(50);
+        esp_deep_sleep_start();
+      } else {  // light: the chip pauses here; reply lands after wake-up
+        esp_light_sleep_start();
+        uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
+        proto_reply(seq, cmd, &cause, 1);
+      }
+      break;
+    }
+
+    case 0x09: {  // WAKE_CAUSE -> cause u8 (0 = normal power-on/reset)
+      uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
+      proto_reply(seq, cmd, &cause, 1);
+      break;
+    }
+#else
+    case 0x08:
+    case 0x09:
+      proto_reply_err(seq, cmd, ST_UNSUPPORTED);
+      break;
+#endif
 
     case 0x05: {  // FREE_HEAP
       uint8_t buf[16];

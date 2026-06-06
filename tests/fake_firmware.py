@@ -12,7 +12,9 @@ from espbridge import constants as C
 from espbridge.protocol import FrameSplitter, decode_frame, encode_frame
 from espbridge.transport import MockTransport
 
-CAPS = C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH | C.Cap.ESPNOW
+CAPS = (C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH | C.Cap.ESPNOW
+        | C.Cap.RMT | C.Cap.ONEWIRE | C.Cap.TWAI | C.Cap.I2S | C.Cap.FS | C.Cap.NVS
+        | C.Cap.OTA | C.Cap.ETH | C.Cap.CAM | C.Cap.MCPWM | C.Cap.SLEEP)
 
 
 class FakeFirmware:
@@ -61,6 +63,50 @@ class FakeFirmware:
         self.espnow_sent: list[tuple[bytes, bytes]] = []   # (mac, data)
         self.espnow_deliver = True  # delivered flag returned by ESPNOW_SEND
 
+        self.rmt_pins: dict[int, tuple[int, int]] = {}  # pin -> (dir, tick_hz)
+        self.rmt_tx: list[tuple[int, list[tuple[int, int]]]] = []  # (pin, symbols)
+        self.rmt_tx_bytes: list[tuple[int, int, int, bytes]] = []  # (pin, bit0, bit1, data)
+        self.rmt_loops: dict[int, list[tuple[int, int]]] = {}  # pin -> looping symbols
+        self.rmt_carrier: dict[int, tuple[int, int, int]] = {}  # pin -> (freq, duty, en)
+        self.rmt_capture: list[tuple[int, int]] = []  # served by RMT_RECV
+        self.rmt_recv_args: list[tuple] = []  # (pin, idle, timeout, max, trig)
+
+        self.ow_devices: list[bytes] = []  # 8-byte ROMs on the fake bus
+        self.ow_writes: list[bytes] = []   # bytes written (per OW_WRITE call)
+        self.ow_read_data = b""            # served by OW_READ
+        self._ow_search: list[bytes] = []  # candidates during a ROM search
+        self._ow_bit = 0
+
+        self.nvs: dict[str, bytes] = {}
+
+        self.fs_mounted: set[int] = set()
+        self.fs_files: dict[tuple[int, str], bytearray] = {}  # (fs, path) -> data
+        self._fds: dict[int, tuple[int, str, int]] = {}  # fd -> (fs, path, pos)
+
+        self.sleeps: list[tuple[int, int, int, int]] = []  # (mode, us, pin, level)
+        self.wake_cause = 0
+
+        self.ota_size: int | None = None
+        self.ota_data = bytearray()
+        self.ota_committed: bool | None = None
+        self.ota_has_partition = True
+
+        self.twai_config: tuple | None = None  # (tx, rx, mode, baud, filter)
+        self.twai_sent: list[tuple[int, int, bytes]] = []  # (flags, id, data)
+
+        self.i2s_config: tuple | None = None  # (dir, bclk, ws, dout, din, rate, bits, stereo)
+        self.i2s_written = bytearray()
+        self.i2s_capture = b""  # served by I2S_READ
+
+        self.mcpwm_config: tuple | None = None  # (pin_a, pin_b, freq, deadtime_ns)
+        self.mcpwm_duty: int | None = None  # permille
+
+        self.eth_config: tuple | None = None  # ("rmii"|"spi", *params)
+        self.cam_config: bytes | None = None
+        self.cam_frame = b""  # JPEG served by CAM_CAPTURE/CAM_READ
+        self.cam_props: dict[int, int] = {}
+        self.cam_released = False
+
         self.baud_requests: list[int] = []
         self.blackhole_cmds: set[int] = set()  # commands we never answer
 
@@ -81,7 +127,7 @@ class FakeFirmware:
     def _info(self) -> bytes:
         nbytes = self.name.encode()
         return (
-            bytes([self.proto_version, 0, 0, 2, C.ChipModel.ESP32, 3])
+            bytes([self.proto_version, 0, 3, 0, C.ChipModel.ESP32, 3])
             + bytes.fromhex(self.mac)
             + struct.pack(">I", int(CAPS))
             + bytes([40, 4])
@@ -184,7 +230,7 @@ class FakeFirmware:
         # ---- I2C ----
         elif cmd == C.I2C_INIT:
             self.i2c_inited = True
-            self._reply(seq, cmd)
+            self._reply(seq, cmd, struct.pack(">H", C.MAX_PAYLOAD))
         elif cmd == C.I2C_SCAN:
             addrs = sorted(self.i2c_devices)
             self._reply(seq, cmd, bytes([len(addrs)]) + bytes(addrs))
@@ -313,6 +359,301 @@ class FakeFirmware:
                 else:  # fire-and-forget: result arrives as an event
                     self.emit(C.ESPNOW_SEND_EVT,
                               p[:6] + bytes([0 if self.espnow_deliver else 1]))
+
+        # ---- RMT ----
+        elif cmd == C.RMT_INIT:
+            pin, direction, hz = struct.unpack(">BBI", p)
+            self.rmt_pins[pin] = (direction, hz)
+            self._reply(seq, cmd)
+        elif cmd == C.RMT_DEINIT:
+            self.rmt_pins.pop(p[0], None)
+            self.rmt_loops.pop(p[0], None)
+            self._reply(seq, cmd)
+        elif cmd in (C.RMT_TX, C.RMT_TX_LOOP):
+            if p[0] not in self.rmt_pins:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+                return
+            syms = [((s >> 15) & 1, s & 0x7FFF)
+                    for (s,) in struct.iter_unpack(">H", p[1:])]
+            if cmd == C.RMT_TX:
+                self.rmt_tx.append((p[0], syms))
+            else:
+                self.rmt_loops[p[0]] = syms
+            self._reply(seq, cmd)
+        elif cmd == C.RMT_TX_BYTES:
+            if p[0] not in self.rmt_pins:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+                return
+            bit0, bit1 = struct.unpack_from(">II", p, 1)
+            self.rmt_tx_bytes.append((p[0], bit0, bit1, p[9:]))
+            self._reply(seq, cmd)
+        elif cmd == C.RMT_TX_STOP:
+            self.rmt_loops.pop(p[0], None)
+            self._reply(seq, cmd)
+        elif cmd == C.RMT_RECV:
+            pin, idle, timeout, max_syms, tpin, tlevel, tus = struct.unpack(">BHHHBBI", p)
+            if pin not in self.rmt_pins:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+                return
+            self.rmt_recv_args.append((pin, idle, timeout, max_syms,
+                                       None if tpin == 0xFF else (tpin, tlevel, tus)))
+            out = b"".join(struct.pack(">H", (lv << 15) | dur)
+                           for lv, dur in self.rmt_capture[:max_syms])
+            self._reply(seq, cmd, out)
+        elif cmd == C.RMT_CARRIER:
+            pin, freq, duty, en = struct.unpack(">BIBB", p)
+            self.rmt_carrier[pin] = (freq, duty, en)
+            self._reply(seq, cmd)
+
+        # ---- ONEWIRE (emulates a multi-device bus incl. ROM search) ----
+        elif cmd == C.OW_RESET:
+            self._reply(seq, cmd, bytes([1 if self.ow_devices else 0]))
+        elif cmd == C.OW_WRITE:
+            data = p[2:]
+            self.ow_writes.append(data)
+            if data[:1] == b"\xf0":  # SEARCH_ROM: arm the triplet walk
+                self._ow_search = list(self.ow_devices)
+                self._ow_bit = 0
+            self._reply(seq, cmd)
+        elif cmd == C.OW_READ:
+            out, self.ow_read_data = self.ow_read_data[: p[1]], self.ow_read_data[p[1]:]
+            self._reply(seq, cmd, out.ljust(p[1], b"\xff"))
+        elif cmd == C.OW_TRIPLET:
+            bit = self._ow_bit
+            bits = {dev[bit // 8] >> (bit % 8) & 1 for dev in self._ow_search}
+            if not bits:  # nobody on the bus / branch
+                self._reply(seq, cmd, bytes([1, 1, 1]))
+                return
+            id_bit = 0 if 0 in bits else 1     # wired-AND
+            cmp_bit = 0 if 1 in bits else 1
+            taken = id_bit if id_bit != cmp_bit else p[1]
+            self._ow_search = [d for d in self._ow_search
+                               if d[bit // 8] >> (bit % 8) & 1 == taken]
+            self._ow_bit += 1
+            self._reply(seq, cmd, bytes([id_bit, cmp_bit, taken]))
+
+        # ---- SYS sleep ----
+        elif cmd == C.SYS_SLEEP:
+            mode, us, pin, level = struct.unpack(">BQbB", p)
+            self.sleeps.append((mode, us, pin, level))
+            if mode == 0:
+                self._reply(seq, cmd)  # deep: ok now, board "reboots"
+            else:
+                self.wake_cause = 4 if us else 7
+                self._reply(seq, cmd, bytes([self.wake_cause]))
+        elif cmd == C.SYS_WAKE_CAUSE:
+            self._reply(seq, cmd, bytes([self.wake_cause]))
+
+        # ---- NVS ----
+        elif cmd == C.NVS_SET:
+            klen = p[0]
+            self.nvs[p[1 : 1 + klen].decode()] = p[1 + klen :]
+            self._reply(seq, cmd)
+        elif cmd == C.NVS_GET:
+            key = p.decode()
+            if key in self.nvs:
+                self._reply(seq, cmd, self.nvs[key])
+            else:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+        elif cmd == C.NVS_DEL:
+            if self.nvs.pop(p.decode(), None) is None:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+            else:
+                self._reply(seq, cmd)
+        elif cmd == C.NVS_KEYS:
+            out = bytes([len(self.nvs)])
+            for k in self.nvs:
+                out += bytes([len(k)]) + k.encode()
+            self._reply(seq, cmd, out)
+        elif cmd == C.NVS_CLEAR:
+            self.nvs.clear()
+            self._reply(seq, cmd)
+
+        # ---- FS (in-memory volumes) ----
+        elif cmd == C.FS_MOUNT:
+            self.fs_mounted.add(p[0])
+            self._reply(seq, cmd, struct.pack(">II", 1024, 16))
+        elif cmd == C.FS_UMOUNT:
+            self.fs_mounted.discard(p[0])
+            self._reply(seq, cmd)
+        elif cmd == C.FS_OPEN:
+            fsid, mode, path = p[0], p[1], p[2:].decode()
+            if mode == 0 and (fsid, path) not in self.fs_files:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+                return
+            if mode == 1:
+                self.fs_files[(fsid, path)] = bytearray()
+            buf = self.fs_files.setdefault((fsid, path), bytearray())
+            fd = max(self._fds, default=0) + 1
+            self._fds[fd] = (fsid, path, len(buf) if mode == 2 else 0)
+            self._reply(seq, cmd, struct.pack(">BI", fd, len(buf)))
+        elif cmd == C.FS_READ:
+            fd, n = struct.unpack(">BH", p)
+            fsid, path, pos = self._fds[fd]
+            data = bytes(self.fs_files[(fsid, path)][pos : pos + n])
+            self._fds[fd] = (fsid, path, pos + len(data))
+            self._reply(seq, cmd, data)
+        elif cmd == C.FS_WRITE:
+            fd = p[0]
+            fsid, path, pos = self._fds[fd]
+            buf = self.fs_files[(fsid, path)]
+            buf[pos : pos + len(p) - 1] = p[1:]
+            self._fds[fd] = (fsid, path, pos + len(p) - 1)
+            self._reply(seq, cmd, struct.pack(">H", len(p) - 1))
+        elif cmd == C.FS_SEEK:
+            fd, pos = struct.unpack(">BI", p)
+            fsid, path, _ = self._fds[fd]
+            self._fds[fd] = (fsid, path, pos)
+            self._reply(seq, cmd)
+        elif cmd == C.FS_CLOSE:
+            self._fds.pop(p[0], None)
+            self._reply(seq, cmd)
+        elif cmd == C.FS_LIST:
+            fsid, prefix = p[0], p[1:].decode().rstrip("/") + "/"
+            count = 0
+            for (fid, path), data in self.fs_files.items():
+                if fid == fsid and path.startswith(prefix) and "/" not in path[len(prefix):]:
+                    name = path[len(prefix):]
+                    self.emit(C.FS_LIST_EVT,
+                              bytes([0]) + struct.pack(">I", len(data)) + name.encode())
+                    count += 1
+            self._reply(seq, cmd, struct.pack(">H", count))
+        elif cmd == C.FS_STAT:
+            key = (p[0], p[1:].decode())
+            if key not in self.fs_files:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+            else:
+                self._reply(seq, cmd,
+                            struct.pack(">IBI", len(self.fs_files[key]), 0, 1700000000))
+        elif cmd == C.FS_REMOVE:
+            if self.fs_files.pop((p[0], p[1:].decode()), None) is None:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+            else:
+                self._reply(seq, cmd)
+        elif cmd == C.FS_RENAME:
+            flen = p[1]
+            src = (p[0], p[2 : 2 + flen].decode())
+            dst = (p[0], p[2 + flen :].decode())
+            if src not in self.fs_files:
+                self._reply_err(seq, cmd, C.Status.NOT_FOUND)
+            else:
+                self.fs_files[dst] = self.fs_files.pop(src)
+                self._reply(seq, cmd)
+        elif cmd == C.FS_MKDIR:
+            self._reply(seq, cmd)
+        elif cmd == C.FS_DF:
+            self._reply(seq, cmd, struct.pack(">II", 1024, 16))
+
+        # ---- TWAI ----
+        elif cmd == C.TWAI_INIT:
+            filt = struct.unpack(">IIB", p[4:13]) if len(p) >= 13 else None
+            self.twai_config = (p[0], p[1], p[2], p[3], filt)
+            self._reply(seq, cmd)
+        elif cmd == C.TWAI_SEND:
+            if self.twai_config is None:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            else:
+                self.twai_sent.append((p[0], struct.unpack(">I", p[1:5])[0], p[5:]))
+                self._reply(seq, cmd)
+        elif cmd == C.TWAI_STATUS:
+            self._reply(seq, cmd, bytes([1, 2, 3]) + struct.pack(">I", 4))
+        elif cmd == C.TWAI_RECOVER:
+            self._reply(seq, cmd)
+        elif cmd == C.TWAI_DEINIT:
+            self.twai_config = None
+            self._reply(seq, cmd)
+
+        # ---- I2S ----
+        elif cmd == C.I2S_INIT:
+            self.i2s_config = struct.unpack(">BbbbbIBB", p)
+            self._reply(seq, cmd)
+        elif cmd == C.I2S_WRITE:
+            if self.i2s_config is None:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            else:
+                self.i2s_written += p
+                self._reply(seq, cmd, struct.pack(">H", len(p)))
+        elif cmd == C.I2S_READ:
+            n = struct.unpack(">H", p)[0]
+            out, self.i2s_capture = self.i2s_capture[:n], self.i2s_capture[n:]
+            self._reply(seq, cmd, out)
+        elif cmd == C.I2S_DEINIT:
+            self.i2s_config = None
+            self._reply(seq, cmd)
+
+        # ---- MCPWM ----
+        elif cmd == C.MCPWM_INIT:
+            self.mcpwm_config = struct.unpack(">BbIH", p)
+            self._reply(seq, cmd)
+        elif cmd == C.MCPWM_DUTY:
+            if self.mcpwm_config is None:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            else:
+                self.mcpwm_duty = struct.unpack(">H", p)[0]
+                self._reply(seq, cmd)
+        elif cmd == C.MCPWM_STOP:
+            self.mcpwm_config = None
+            self._reply(seq, cmd)
+
+        # ---- ETH ----
+        elif cmd == C.ETH_BEGIN_RMII:
+            self.eth_config = ("rmii", *struct.unpack(">BbbbbB", p))
+            self._reply(seq, cmd)
+            self.emit(C.ETH_STATE_EVT, bytes([2, 10, 0, 0, 9]))  # got IP
+        elif cmd == C.ETH_BEGIN_SPI:
+            self.eth_config = ("spi", *struct.unpack(">BbbbbbbbB", p))
+            self._reply(seq, cmd)
+            self.emit(C.ETH_STATE_EVT, bytes([2, 10, 0, 0, 9]))
+        elif cmd == C.ETH_STATUS:
+            self._reply(seq, cmd, bytes([1, 10, 0, 0, 9, 10, 0, 0, 1])
+                        + bytes([255, 255, 255, 0]) + bytes(6))
+        elif cmd == C.ETH_STOP:
+            self.eth_config = None
+            self._reply(seq, cmd)
+
+        # ---- CAM ----
+        elif cmd == C.CAM_INIT:
+            self.cam_config = p
+            self._reply(seq, cmd)
+        elif cmd == C.CAM_CAPTURE:
+            self.cam_released = False
+            self._reply(seq, cmd, struct.pack(">IHHB", len(self.cam_frame),
+                                              640, 480, 4))
+        elif cmd == C.CAM_READ:
+            off, n = struct.unpack(">IH", p)
+            self._reply(seq, cmd, self.cam_frame[off : off + n])
+        elif cmd == C.CAM_RELEASE:
+            self.cam_released = True
+            self._reply(seq, cmd)
+        elif cmd == C.CAM_SET:
+            prop, val = struct.unpack(">Bi", p)
+            self.cam_props[prop] = val
+            self._reply(seq, cmd)
+        elif cmd == C.CAM_DEINIT:
+            self.cam_config = None
+            self._reply(seq, cmd)
+
+        # ---- OTA ----
+        elif cmd == C.OTA_BEGIN:
+            if not self.ota_has_partition:
+                self._reply_err(seq, cmd, C.Status.UNSUPPORTED)
+            else:
+                self.ota_size = struct.unpack(">I", p)[0]
+                self.ota_data.clear()
+                self.ota_committed = None
+                self._reply(seq, cmd)
+        elif cmd == C.OTA_WRITE:
+            if self.ota_size is None:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            else:
+                self.ota_data += p
+                self._reply(seq, cmd, struct.pack(">I", len(self.ota_data)))
+        elif cmd == C.OTA_END:
+            self.ota_committed = bool(p[0])
+            self._reply(seq, cmd)
+        elif cmd == C.OTA_ABORT:
+            self.ota_size = None
+            self._reply(seq, cmd)
 
         else:
             self._reply_err(seq, cmd, C.Status.UNKNOWN_CMD)
