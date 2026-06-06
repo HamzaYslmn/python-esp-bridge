@@ -1,9 +1,5 @@
-// FS: file access on LittleFS (internal flash) and SD cards. The host sees
-// open/read/write/seek/close + directory ops; everything streams in
-// <=2 KB chunks so frames stay bounded. Runs on net_task (blocking I/O).
-//
-// fs ids: 0 = littlefs, 1 = sd_spi (own SPI bus on BRIDGE_SPI_HOST1 —
-// don't combine with mod_spi host 1), 2 = sd_mmc (chips with an SDMMC host).
+// FS: LittleFS + SD file/dir ops, streamed in <=2 KB chunks. net_task (blocking I/O).
+// fs ids: 0=littlefs, 1=sd_spi (own bus BRIDGE_SPI_HOST1, don't share mod_spi host 1), 2=sd_mmc.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -53,7 +49,7 @@ static void df_of(uint8_t id, uint32_t* total_kb, uint32_t* used_kb) {
   *used_kb = u / 1024;
 }
 
-// Copies the rest of the payload into a NUL-terminated absolute path.
+// Payload -> NUL-terminated absolute path.
 static bool take_path(const uint8_t* p, uint16_t len, char* out) {
   if (len == 0 || len >= FS_PATH_MAX || p[0] != '/') return false;
   memcpy(out, p, len);

@@ -199,7 +199,7 @@ void link_ble_write(const uint8_t* data, uint16_t len) {
     tx_chr->notify();
     data += n;
     len -= n;
-    if (++burst >= 4 && len > 0) {  // brief yield on long frames
+    if (++burst >= 8 && len > 0) {  // brief yield on long frames (let RX/net run)
       burst = 0;
       vTaskDelay(1);
     }

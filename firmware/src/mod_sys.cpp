@@ -8,8 +8,7 @@
 #include <driver/gpio.h>
 #include <Preferences.h>
 
-// User-assigned device name (NVS-persisted) so hosts with several bridges can
-// address boards by name instead of fragile port paths.
+// NVS-persisted device name so hosts can address boards by name, not port path.
 static char bridge_name[BRIDGE_NAME_MAX + 1];
 static bool name_loaded = false;
 
@@ -95,7 +94,7 @@ uint16_t sys_build_info(uint8_t* out) {
   caps |= CAP_SLEEP;
 #endif
 #if BRIDGE_CAM
-  if (psramFound()) caps |= CAP_CAM;  // frame buffers live in PSRAM
+  if (psramFound()) caps |= CAP_CAM;  // frame buffers need PSRAM
 #endif
   if (psramFound()) caps |= CAP_PSRAM;
   if (link_ble_enabled()) caps |= CAP_BLE_LINK;
@@ -129,12 +128,12 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       uint32_t baud = rd32(p);
 #if BRIDGE_NATIVE_USB
       (void)baud;
-      proto_reply_ok(seq, cmd);  // USB CDC: baud is meaningless, accept as no-op
+      proto_reply_ok(seq, cmd);  // USB CDC: baud is a no-op
 #else
       if (baud < 9600 || baud > 3000000) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
-      proto_reply_ok(seq, cmd);  // reply at the OLD baud...
-      proto_tx_flush();          // ...wait until it is truly on the wire
-      delay(20);                 // let the host's UART drain
+      proto_reply_ok(seq, cmd);  // reply at OLD baud...
+      proto_tx_flush();          // ...ensure it's on the wire
+      delay(20);                 // let host UART drain
       Serial.updateBaudRate(baud);
 #endif
       break;
@@ -175,7 +174,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (wpin >= 0) {
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
         esp_sleep_enable_ext0_wakeup((gpio_num_t)wpin, wlevel);  // RTC pins only
-#else  // C3/C6: GPIO wake paths differ for deep vs light sleep
+#else  // C3/C6: GPIO wake differs for deep vs light sleep
         if (mode == 0) {
           esp_deep_sleep_enable_gpio_wakeup(1ULL << wpin,
               wlevel ? ESP_GPIO_WAKEUP_GPIO_HIGH : ESP_GPIO_WAKEUP_GPIO_LOW);
@@ -186,12 +185,12 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         }
 #endif
       }
-      if (mode == 0) {  // deep: reply, flush, sleep — board reboots on wake
+      if (mode == 0) {  // deep: reply, flush, sleep — reboots on wake
         proto_reply_ok(seq, cmd);
         proto_tx_flush();
         delay(50);
         esp_deep_sleep_start();
-      } else {  // light: the chip pauses here; reply lands after wake-up
+      } else {  // light: chip pauses here; reply lands after wake
         esp_light_sleep_start();
         uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
         proto_reply(seq, cmd, &cause, 1);

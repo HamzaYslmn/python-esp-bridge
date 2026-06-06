@@ -15,7 +15,7 @@ import struct
 import threading
 
 from . import constants as C
-from .protocol import ip_str as _ip
+from .protocol import ip_str as _ip, mac_to_str
 
 # Stable wire phy ids (mirrors firmware mod_eth.cpp)
 PHY = {"generic": 0, "lan8720": 1, "tlk110": 2, "ip101": 2, "rtl8201": 3,
@@ -86,7 +86,7 @@ class Eth:
         r = self._b.request(C.ETH_STATUS)
         return {"link": bool(r[0]), "ip": _ip(r[1:5]), "gateway": _ip(r[5:9]),
                 "netmask": _ip(r[9:13]),
-                "mac": ":".join(f"{b:02x}" for b in r[13:19])}
+                "mac": mac_to_str(r[13:19])}
 
     def end(self) -> None:
         self._b.request(C.ETH_STOP)

@@ -137,6 +137,23 @@ def ip_str(b: bytes) -> str:
     return ".".join(str(x) for x in b)
 
 
+def mac_to_str(mac: bytes) -> str:
+    """6 raw bytes -> 'aa:bb:cc:dd:ee:ff'."""
+    return ":".join(f"{x:02x}" for x in mac)
+
+
+def mac_to_bytes(mac: str | bytes) -> bytes:
+    """'aa:bb:cc:dd:ee:ff' / 'aa-bb-...' / 'aabbccddeeff' -> 6 raw bytes."""
+    if isinstance(mac, (bytes, bytearray)):
+        if len(mac) != 6:
+            raise ValueError(f"MAC must be 6 bytes, got {len(mac)}")
+        return bytes(mac)
+    digits = mac.replace(":", "").replace("-", "")
+    if len(digits) != 12:
+        raise ValueError(f"invalid MAC address {mac!r}")
+    return bytes.fromhex(digits)
+
+
 class FrameSplitter:
     """Accumulates raw serial bytes and yields COBS chunks between 0x00 delimiters."""
 

@@ -1,10 +1,6 @@
-// 1-Wire: bit-timing primitives only (reset/presence, byte read/write, search
-// triplet). ROM search, CRC8 and device drivers (DS18B20, ...) live host-side.
-// Timing-critical slots run with interrupts masked (<=70 us per bit); handlers
-// run on net_task so the rx pump never stalls.
-//
-// Wiring: data line needs the usual 4.7k pull-up to 3V3. power=1 on OW_WRITE
-// drives the line high push-pull afterwards (parasite-powered conversions).
+// 1-Wire bit-timing primitives (ROM search/CRC/drivers live host-side).
+// Slots run with IRQs masked (<=70us/bit); handlers on net_task.
+// Wiring: 4.7k pull-up to 3V3. power=1 on OW_WRITE drives line high push-pull (parasite power).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -99,8 +95,6 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void onewire_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_ONEWIRE, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(onewire_handle, MOD_ONEWIRE)
 
 #endif

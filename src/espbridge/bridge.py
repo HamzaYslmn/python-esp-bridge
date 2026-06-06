@@ -19,7 +19,7 @@ from .errors import (
     RemoteError,
     UnsupportedError,
 )
-from .protocol import Frame, FrameSplitter, decode_frame, encode_frame
+from .protocol import Frame, FrameSplitter, decode_frame, encode_frame, mac_to_str
 from .transports import SerialTransport, find_ports
 
 
@@ -40,7 +40,7 @@ class Info:
         if len(payload) < 18:
             raise ProtocolError(f"short SYS_INFO payload: {len(payload)} bytes")
         proto, maj, mnr, pat, model, rev = struct.unpack_from(">6B", payload)
-        mac = ":".join(f"{b:02x}" for b in payload[6:12])
+        mac = mac_to_str(payload[6:12])
         (caps,) = struct.unpack_from(">I", payload, 12)
         gpio_count, flash_mb = payload[16], payload[17]
         name = ""

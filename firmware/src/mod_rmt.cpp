@@ -1,11 +1,7 @@
-// RMT: generic pulse-train play/capture (arduino-esp32 3.x HAL). The firmware
-// only moves symbols; device protocols (WS2812, IR, DHT, HC-SR04, steppers)
-// are implemented host-side in Python on top of these primitives.
-// Handlers run on net_task: TX blocks until sent, RECV up to its timeout.
-//
-// Wire symbol = u16 BE: level<<15 | duration (ticks, 1..0x7FFF). Two symbols
-// pack into one hardware rmt_data_t word; an odd trailing symbol leaves the
-// second half zero = end marker.
+// RMT pulse-train play/capture (arduino-esp32 3.x HAL); device protocols host-side.
+// Handlers on net_task: TX blocks until sent, RECV up to timeout.
+// Wire symbol = u16 BE: level<<15 | duration (ticks 1..0x7FFF). Two symbols pack
+// into one rmt_data_t word; odd trailing symbol's empty half = end marker.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -28,8 +24,7 @@ static RmtChan* chan_of(uint8_t pin) {
 }
 
 static bool chan_setup(RmtChan* c) {
-  // RX gets 2 mem blocks: captures up to ~2x SOC_RMT_MEM_WORDS_PER_CHANNEL
-  // words (192+ edges) without DMA — enough for DHT/NEC and most IR remotes.
+  // RX gets 2 mem blocks (~192+ edges, no DMA): fits DHT/NEC/most IR remotes.
   return rmtInit(c->pin, c->dir ? RMT_RX_MODE : RMT_TX_MODE,
                  c->dir ? RMT_MEM_NUM_BLOCKS_2 : RMT_MEM_NUM_BLOCKS_1, c->tick_hz)
          && (c->dir || rmtSetEOT(c->pin, 0));  // TX idles low (WS2812/IR)
@@ -97,10 +92,9 @@ static void handle_tx(RmtChan* c, uint8_t seq, uint16_t cmd,
   }
 }
 
-// Expand data bytes (MSB-first) into per-bit symbol words and transmit.
-// Whole-buffer path keeps the pulse train gapless (WS2812 strips); if the
-// heap can't hold it, fall back to chunks through a small static stage —
-// chunk boundaries may add a few-us gap (harmless for IR, risky for LEDs).
+// Expand data bytes (MSB-first) to per-bit symbols and transmit. Whole-buffer
+// path stays gapless (WS2812); heap-fail fallback chunks via static stage,
+// adding few-us gaps at boundaries (ok for IR, risky for LEDs).
 #define RMT_STAGE_WORDS 256
 static void handle_tx_bytes(RmtChan* c, uint8_t seq, uint16_t cmd,
                             const uint8_t* p, uint16_t len) {
@@ -136,9 +130,8 @@ static void handle_tx_bytes(RmtChan* c, uint8_t seq, uint16_t cmd,
   proto_reply_ok(seq, cmd);
 }
 
-// Arm RX, optionally fire a trigger pulse (same pin open-drain = DHT start
-// signal; separate pin = HC-SR04 trigger), wait for capture or timeout.
-// Replies the captured symbols (empty payload = nothing seen).
+// Arm RX, optionally fire trigger pulse (same-pin open-drain = DHT, separate =
+// HC-SR04), wait for capture/timeout. Replies symbols (empty = nothing seen).
 static void handle_recv(RmtChan* c, uint8_t seq, uint16_t cmd,
                         const uint8_t* p, uint16_t len) {
   if (len < 13) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
@@ -153,7 +146,7 @@ static void handle_recv(RmtChan* c, uint8_t seq, uint16_t cmd,
   rmtSetRxMaxThreshold(c->pin, idle);
   size_t num = words;
   if (!rmtReadAsync(c->pin, buf, &num)) {
-    // channel left armed by a timed-out RECV: reset and retry once
+    // channel left armed by prior timed-out RECV: reset, retry once
     rmtDeinit(c->pin);
     num = words;
     if (!chan_setup(c) || !rmtSetRxMaxThreshold(c->pin, idle)
@@ -165,8 +158,7 @@ static void handle_recv(RmtChan* c, uint8_t seq, uint16_t cmd,
   }
 
   if (trig_pin != 0xFF) {
-    // Same-pin trigger uses open drain so the RX input stays connected and
-    // the line releases high (DHT). Separate pins drive push-pull (HC-SR04).
+    // Same-pin: open-drain keeps RX connected, line releases high (DHT). Separate: push-pull (HC-SR04).
     pinMode(trig_pin, trig_pin == (uint8_t)c->pin ? OUTPUT_OPEN_DRAIN : OUTPUT);
     digitalWrite(trig_pin, trig_level);
     if (trig_us >= 1000) delay(trig_us / 1000);
@@ -184,7 +176,7 @@ static void handle_recv(RmtChan* c, uint8_t seq, uint16_t cmd,
     proto_reply(seq, cmd, nullptr, 0);
     return;
   }
-  // Pack halves u16 BE in place (each word reads 4 bytes, writes 4 bytes).
+  // Pack halves to u16 BE in place (4 bytes read/written per word).
   uint8_t* out = (uint8_t*)buf;
   uint16_t halves = 0;
   for (size_t i = 0; i < num; i++) {
@@ -248,8 +240,6 @@ void rmt_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else  // !BRIDGE_HAS_RMT
 
-void rmt_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_RMT, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(rmt_handle, MOD_RMT)
 
 #endif

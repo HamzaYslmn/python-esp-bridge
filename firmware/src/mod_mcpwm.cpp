@@ -1,7 +1,6 @@
-// MCPWM: one complementary PWM pair with hardware deadtime — H-bridge /
-// half-bridge motor drivers where the two switches must never conduct
-// together. LEDC (mod_pwm) covers everything else. Not on ESP32-S2/C3
-// (no MCPWM peripheral). IDF "prelude" driver, single instance.
+// MCPWM: one complementary PWM pair with HW deadtime for H-bridge/half-bridge
+// drivers (switches must never co-conduct). LEDC (mod_pwm) covers the rest.
+// Absent on ESP32-S2/C3. IDF "prelude" driver, single instance.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -116,8 +115,6 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void mcpwm_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_MCPWM, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(mcpwm_handle, MOD_MCPWM)
 
 #endif

@@ -1,8 +1,5 @@
-// Ethernet (compile-time opt-in: BRIDGE_ENABLE_ETH in firmware.ino).
-// Thin bridge over ETH.h: bring the PHY up with parameters the host sends
-// (board presets live in Python — espbridge.eth.PRESETS). Once link + IP are
-// up, the existing NET sockets route over Ethernet automatically because
-// ETHClass is a NetworkInterface in the unified core-3.x Network stack.
+// Ethernet (opt-in BRIDGE_ENABLE_ETH). Bridge over ETH.h; host sends PHY params (presets in espbridge.eth.PRESETS).
+// Once up, NET sockets route over it automatically (ETHClass is a NetworkInterface in core-3.x Network stack).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -12,8 +9,7 @@
 
 static bool eth_started = false;
 
-// Wire phy id -> eth_phy_type_t (the core enum's values shift with chip
-// config, so the protocol uses stable ids; see commands.h).
+// Wire phy id -> eth_phy_type_t (core enum shifts with chip config, so protocol uses stable ids; see commands.h).
 static bool phy_of(uint8_t id, eth_phy_type_t* out) {
   switch (id) {
 #if defined(CONFIG_ETH_USE_ESP32_EMAC)
@@ -127,8 +123,6 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void eth_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_ETH, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(eth_handle, MOD_ETH)
 
 #endif

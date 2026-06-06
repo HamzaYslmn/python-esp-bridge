@@ -26,10 +26,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x01: {  // INIT: bus, sda, scl, freq u32 -> wire_buf u16
       if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (i2c_inited[bus]) w->end();
-      // Wire's default 128-byte TX buffer silently truncates longer writes, so
-      // grow it; begin() allocates 2x from the heap, so fall back to a smaller
-      // buffer when heap is tight (full Wi-Fi+BLE coexistence) and report the
-      // size that stuck — the host chunks its writes to it.
+      // Grow TX buffer (default 128B truncates); begin() needs 2x heap, fall back smaller, report size that stuck.
       uint16_t got = 0;
       for (uint16_t sz : {MAX_PAYLOAD, 512, 128}) {
         if (sz > 128 && ESP.getFreeHeap() < 2u * sz + 8192) continue;
@@ -37,7 +34,8 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       }
       if (!got) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       i2c_inited[bus] = true;
-      uint8_t out[2] = {(uint8_t)(got >> 8), (uint8_t)got};
+      uint8_t out[2];
+      wr16(out, got);
       proto_reply(seq, cmd, out, 2);
       break;
     }
@@ -59,8 +57,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03: {  // WRITE: bus, addr, data..
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       w->beginTransmission(p[1]);
-      // write() returns bytes buffered — short means TX buffer overflow,
-      // which would silently corrupt the transfer (drops the tail bytes)
+      // write() short return = TX buffer overflow (drops tail bytes).
       uint8_t st = ST_OK;
       if (len > 2 && w->write(p + 2, len - 2) != (size_t)(len - 2)) {
         w->endTransmission();
@@ -69,9 +66,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         st = ST_IO;
       }
       if (st != ST_OK) {
-        // Fire-and-forget (seq 0) gets no error reply, so a failed write
-        // in a pipelined burst (OLED frame push) would vanish without a
-        // trace — visible only as display corruption. Warn, rate-limited.
+        // seq 0 gets no error reply; warn (rate-limited) so burst-write failures aren't silent.
         if (seq == 0) {
           static uint32_t last_warn = 0;
           uint32_t now = millis();

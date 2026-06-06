@@ -1,15 +1,11 @@
-// ESP-NOW: connectionless 2.4 GHz messaging, coexisting with Wi-Fi STA/AP and
-// BLE. Handlers run on net_task; esp-now callbacks run on the Wi-Fi task and
-// only enqueue frames via proto_send_event (tx_task owns the serial port).
+// ESP-NOW: connectionless 2.4 GHz messaging, coexisting with Wi-Fi STA/AP and BLE.
+// Callbacks only enqueue via proto_send_event (tx_task owns serial).
 //
-// Coexistence rules (from the ESP-IDF coex guide — do not "optimize"):
-//  - Never call esp_wifi_set_ps(WIFI_PS_NONE) while BT is active. The default
-//    WIFI_PS_MIN_MODEM gives the coex arbiter a stable schedule; we never
-//    touch power save anywhere in this firmware.
-//  - No manual esp_coex_* calls; the IDF software arbiter handles slotting.
-//  - Channel: when Wi-Fi STA is connected (or an AP is up) ESP-NOW inherits
-//    that channel — changing it would drop the association. Only lock the
-//    requested channel when the radio is otherwise idle.
+// Coexistence rules (ESP-IDF coex guide — do not "optimize"):
+//  - Never esp_wifi_set_ps(WIFI_PS_NONE) with BT active; default WIFI_PS_MIN_MODEM keeps the arbiter stable.
+//  - No manual esp_coex_*; the IDF SW arbiter slots the radio.
+//  - Channel: a connected STA / live AP owns the channel and ESP-NOW inherits it;
+//    only lock the requested channel when the radio is idle.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -22,13 +18,11 @@
 
 static bool inited = false;
 
-// Send-completion plumbing. net_task serializes all sends, and esp-now TX
-// callbacks arrive in send order, so a simple counter disambiguates:
-// callbacks first drain outstanding fire-and-forget sends (emit SEND_EVT),
-// then the one blocking sync send (give the semaphore).
+// Send-completion plumbing. Sends are serialized; TX callbacks arrive in order, so
+// the counter drains fire-and-forget sends (emit SEND_EVT) before the blocking sync send (give sem).
 static SemaphoreHandle_t tx_done_sem;
 static volatile uint8_t ff_outstanding = 0;          // fire-and-forget sends in flight
-static volatile uint8_t sync_status = 1;             // last sync send result (0 = ACKed)
+static volatile uint8_t sync_status = 1;             // last sync result (0 = ACKed)
 
 bool espnow_is_active() { return inited; }
 
@@ -81,15 +75,14 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
   if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
   uint8_t channel = p[0], flags = p[1];
 
-  // ESP-NOW rides on the Wi-Fi driver; bring it up in STA mode if it's off.
+  // ESP-NOW rides the Wi-Fi driver; bring up STA if off.
   if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
 
   uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
   if (flags & 0x01) proto |= WIFI_PROTOCOL_LR;
   esp_wifi_set_protocol(WIFI_IF_STA, proto);
 
-  // Channel rule: an associated STA or a live AP owns the channel; switching
-  // would drop it. Only lock the requested channel on an otherwise idle radio.
+  // Associated STA / live AP owns the channel; only lock requested channel when idle.
   bool channel_owned = WiFi.status() == WL_CONNECTED || (WiFi.getMode() & WIFI_MODE_AP);
   if (!channel_owned) {
     esp_wifi_set_channel(channel ? channel : 1, WIFI_SECOND_CHAN_NONE);
@@ -131,9 +124,8 @@ static void handle_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_
 }
 
 // SEND: mac[6] | data (<= 250 bytes).
-// seq != 0: block on the TX callback (a few ms) and reply delivered u8 —
-//           1 means the peer's MAC layer ACKed (broadcasts are never ACKed).
-// seq == 0: fire-and-forget; the result arrives as ESPNOW_SEND_EVT.
+// seq != 0: block on TX callback, reply delivered u8 (1 = peer MAC ACKed; broadcasts never ACK).
+// seq == 0: fire-and-forget; result arrives as ESPNOW_SEND_EVT.
 static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   if (len < 6 || len > 6 + ESPNOW_MAX_DATA) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
@@ -198,9 +190,6 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 bool espnow_is_active() { return false; }
 
-void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
-  (void)p; (void)len;
-  proto_reply_err(seq, CMD(MOD_ESPNOW, op), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(espnow_handle, MOD_ESPNOW)
 
 #endif  // BRIDGE_HAS_ESPNOW

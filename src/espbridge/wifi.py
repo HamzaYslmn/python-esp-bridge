@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from . import constants as C
 from .errors import BridgeTimeoutError
 from .protocol import ip_str as _ip
-from .protocol import lp
+from .protocol import lp, mac_to_str
 
 WL_CONNECTED = 3  # wl_status_t
 
@@ -57,7 +57,7 @@ class Wifi:
             return
         ssid = p[12 : 12 + p[11]].decode("utf-8", "replace")
         rssi = int.from_bytes(p[2:3], "big", signed=True)
-        bssid = ":".join(f"{x:02x}" for x in p[5:11])
+        bssid = mac_to_str(p[5:11])
         self._scan_results.append(
             Network(ssid, rssi, bssid, p[4], AUTH_MODES.get(p[3], str(p[3])))
         )
@@ -112,7 +112,7 @@ class Wifi:
             netmask=_ip(p[9:13]),
             rssi=int.from_bytes(p[13:14], "big", signed=True),
             channel=p[14],
-            mac=":".join(f"{x:02x}" for x in p[15:21]),
+            mac=mac_to_str(p[15:21]),
         )
 
     def ap_start(self, ssid: str, password: str = "", *, channel: int = 1,

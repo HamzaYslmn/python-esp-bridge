@@ -1,8 +1,5 @@
-// Camera (compile-time opt-in: BRIDGE_ENABLE_CAM; esp32/s2/s3 + PSRAM).
-// Thin bridge over esp32-camera: the host sends the full pin map (board
-// presets live in espbridge.camera), captures are held on the board and
-// read out in <=2 KB chunks. JPEG frames at the link's pace — snapshots,
-// not video. Runs on net_task.
+// Camera (opt-in BRIDGE_ENABLE_CAM; esp32/s2/s3 + PSRAM). Bridge over esp32-camera.
+// Host sends full pin map (presets in espbridge.camera); capture held, read in <=2 KB chunks. JPEG snapshots, not video. net_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -33,7 +30,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       cfg.pin_href = q[14];
       cfg.pin_pclk = q[15];
       cfg.xclk_freq_hz = (uint32_t)p[16] * 1000000UL;
-      cfg.ledc_timer = LEDC_TIMER_3;      // keep clear of mod_pwm channels
+      cfg.ledc_timer = LEDC_TIMER_3;      // clear of mod_pwm channels
       cfg.ledc_channel = LEDC_CHANNEL_7;
       cfg.pixel_format = PIXFORMAT_JPEG;
       cfg.frame_size = (framesize_t)p[17];
@@ -80,7 +77,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (!s) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       int v = (int32_t)rd32(p + 1);
       int r;
-      switch (p[0]) {  // ids mirrored in espbridge.camera
+      switch (p[0]) {  // ids mirror espbridge.camera
         case 0:  r = s->set_framesize(s, (framesize_t)v); break;
         case 1:  r = s->set_quality(s, v); break;
         case 2:  r = s->set_brightness(s, v); break;
@@ -111,8 +108,6 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void cam_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_CAM, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(cam_handle, MOD_CAM)
 
 #endif

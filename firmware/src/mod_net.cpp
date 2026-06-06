@@ -1,5 +1,4 @@
-// NET: TCP/UDP sockets proxied over the serial link, with per-socket credit
-// windows so the (slow) serial link backpressures TCP instead of dropping.
+// NET: TCP/UDP sockets proxied over serial; per-socket credit windows backpressure TCP instead of dropping.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include <WiFi.h>
@@ -12,7 +11,7 @@ struct Sock {
   WiFiClient tcp;
   WiFiServer* server = nullptr;
   WiFiUDP udp;
-  uint16_t window_used = 0;  // bytes sent to host, not yet acked
+  uint16_t window_used = 0;  // bytes sent to host, unacked
 };
 
 static Sock socks[NET_MAX_SOCKETS];
@@ -98,7 +97,7 @@ void net_poll() {
         wr16(buf + 5, s->udp.remotePort());
         int rd = s->udp.read(buf + 7, n > NET_CHUNK ? NET_CHUNK : n);
         if (rd > 0) proto_send_event(NET_UDP_EVT, buf, 7 + rd);
-        s->udp.flush();  // discard any tail beyond NET_CHUNK (drop-newest policy)
+        s->udp.flush();  // drop tail beyond NET_CHUNK
       }
     }
   }

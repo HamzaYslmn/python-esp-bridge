@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from . import constants as C
 from .errors import BridgeTimeoutError
-from .protocol import lp
+from .protocol import lp, mac_to_str
 
 
 def to_uuid128(value: int | str | _uuid.UUID) -> bytes:
@@ -120,7 +120,7 @@ class Ble:
         if len(p) < 8:
             return
         adv = Advertisement(
-            addr=":".join(f"{x:02x}" for x in p[0:6]),
+            addr=mac_to_str(p[0:6]),
             addr_type=p[6],
             rssi=int.from_bytes(p[7:8], "big", signed=True),
             data=p[8:],

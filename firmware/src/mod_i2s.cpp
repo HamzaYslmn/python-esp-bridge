@@ -1,7 +1,6 @@
-// I2S audio in/out (std mode, arduino-esp32 ESP_I2S). The host pushes/pulls
-// PCM in <=2 KB chunks; the DMA buffers absorb link jitter. Link bandwidth
-// caps usable rates (~92 KB/s at 921600 baud = 16-bit/16 kHz mono + margin);
-// the host-side espbridge.i2s docs spell out what fits. Runs on net_task.
+// I2S audio in/out (std mode, ESP_I2S). Host pushes/pulls PCM <=2KB chunks;
+// DMA buffers absorb link jitter. Link bandwidth caps rates (~92KB/s @921600
+// = 16-bit/16kHz mono). Runs on net_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -66,8 +65,6 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void i2s_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_I2S, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(i2s_handle, MOD_I2S)
 
 #endif

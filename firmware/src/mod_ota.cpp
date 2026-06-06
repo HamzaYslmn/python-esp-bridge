@@ -1,8 +1,5 @@
-// OTA: reflash the firmware over the protocol link — USB serial or BLE, no
-// boot button, no cable swap. Plain Update.h byte stream into the inactive
-// app slot; needs a partition table with two app slots ("Minimal SPIFFS" on
-// 4 MB boards — the default "Huge APP" has none and OTA_BEGIN replies
-// ST_UNSUPPORTED). Runs on net_task (flash writes block).
+// OTA: reflash over the link (serial/BLE). Update.h byte stream into inactive app slot.
+// Needs a two-app-slot table ("Minimal SPIFFS"); "Huge APP" has none -> OTA_BEGIN replies ST_UNSUPPORTED. net_task (flash blocks).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -73,8 +70,6 @@ void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void ota_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_OTA, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(ota_handle, MOD_OTA)
 
 #endif

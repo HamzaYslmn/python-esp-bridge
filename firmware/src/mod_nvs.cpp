@@ -1,5 +1,4 @@
-// NVS: persistent key/value bytes in the "user" namespace (kept apart from
-// the bridge's own "bridge" namespace). Typed encoding is the host's job.
+// NVS: persistent key/value bytes in "user" namespace (apart from bridge's own); host owns typed encoding.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -11,7 +10,7 @@
 #define NVS_NS "user"
 #define NVS_KEY_MAX 15  // NVS limit
 
-// Copies a length-prefixed or whole-payload key into a NUL-terminated buffer.
+// Key bytes -> NUL-terminated buffer.
 static bool take_key(const uint8_t* p, uint16_t len, char* out) {
   if (len == 0 || len > NVS_KEY_MAX) return false;
   memcpy(out, p, len);
@@ -82,8 +81,6 @@ void nvs_handle_cmd(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else
 
-void nvs_handle_cmd(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_NVS, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(nvs_handle_cmd, MOD_NVS)
 
 #endif

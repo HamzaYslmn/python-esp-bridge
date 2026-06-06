@@ -27,6 +27,13 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 
+// Stub body for a module compiled out on this chip: every op -> ST_UNSUPPORTED.
+// Use in the module's #else branch, e.g. UNSUPPORTED_STUB(i2s_handle, MOD_I2S).
+#define UNSUPPORTED_STUB(handler, mod) \
+  void handler(uint8_t op, uint8_t seq, const uint8_t*, uint16_t) { \
+    proto_reply_err(seq, CMD(mod, op), ST_UNSUPPORTED); \
+  }
+
 void gpio_init();
 void wifi_init();
 

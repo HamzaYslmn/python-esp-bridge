@@ -1,6 +1,5 @@
-// TWAI (CAN bus) through the IDF driver. Needs an external transceiver
-// (SN65HVD230/TJA1050) between the pins and the bus. Frames received are
-// pushed to the host as TWAI_RX_EVT from twai_poll() on net_task.
+// TWAI (CAN) via IDF driver. Needs an external transceiver (SN65HVD230/TJA1050).
+// RX frames pushed as TWAI_RX_EVT from twai_poll() on net_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -20,7 +19,7 @@ static const twai_timing_config_t TIMINGS[] = {
 void twai_poll() {
   if (!twai_up) return;
   twai_message_t msg;
-  // Drain a few frames per pass; the rest wait in the driver's RX queue.
+  // Drain a few per pass; rest wait in driver RX queue.
   for (int i = 0; i < 8 && twai_receive(&msg, 0) == ESP_OK; i++) {
     uint8_t evt[5 + TWAI_FRAME_MAX_DLC];
     evt[0] = (msg.extd ? 1 : 0) | (msg.rtr ? 2 : 0);
@@ -109,8 +108,6 @@ void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 #else
 
 void twai_poll() {}
-void twai_handle(uint8_t, uint8_t seq, const uint8_t*, uint16_t) {
-  proto_reply_err(seq, CMD(MOD_TWAI, 0), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(twai_handle, MOD_TWAI)
 
 #endif

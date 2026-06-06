@@ -269,9 +269,6 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #else  // !BRIDGE_BLE
 
-void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
-  (void)p; (void)len;
-  proto_reply_err(seq, CMD(MOD_BLE, op), ST_UNSUPPORTED);
-}
+UNSUPPORTED_STUB(ble_handle, MOD_BLE)
 
 #endif
