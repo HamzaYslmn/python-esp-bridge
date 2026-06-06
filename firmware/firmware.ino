@@ -32,15 +32,6 @@
 // Set to 0 to turn the Bluetooth link off entirely (USB only).
 #define BRIDGE_BLE_LINK 1
 
-// Classic-ESP32 coexistence: bring the Wi-Fi stack up BEFORE Bluedroid so the
-// coex arbiter sees the radios in the right order (Wi-Fi -> ESP-NOW -> BLE),
-// then park the radio until the host first uses Wi-Fi/ESP-NOW. A parked
-// radio gives Bluetooth uncontested airtime and ~25 KB extra heap, so an
-// idle board's BLE link is as solid as a no-Wi-Fi build. Set 0 if this
-// board never uses Wi-Fi/ESP-NOW (saves the remaining driver heap too).
-// Ignored on chips other than the classic ESP32 (they have no ordering rule).
-#define BRIDGE_WIFI_COEX 1
-
 void setup() {
   // Route IDF Wi-Fi/BT logs into SYS_LOG events; raw log bytes on UART0 would
   // corrupt protocol frames. Must precede any radio bring-up.
@@ -60,12 +51,11 @@ void setup() {
   wifi_init();
   proto_start();   // spawn bridge_tx / bridge_rx / bridge_net tasks
 
-#if BRIDGE_WIFI_COEX && BRIDGE_BLE && defined(CONFIG_IDF_TARGET_ESP32)
-  // Wi-Fi driver up before BLEDevice::init() inside link_ble_init(). Power
-  // save stays at the default WIFI_PS_MIN_MODEM — never WIFI_PS_NONE with BT.
-  wifi_coex_preinit();
-#endif
-
+  // Wi-Fi/ESP-NOW stay off until the host's first radio command, then come up
+  // lazily (WiFi.mode in the wifi/espnow handlers). A BLE-only board never
+  // pays the Wi-Fi driver's heap — which is what kept I2C/SPI from wedging.
+  // The SW coex arbiter shares the radio with BLE; leave its defaults alone
+  // (never WIFI_PS_NONE with BT). See mod_wifi.cpp / mod_espnow.cpp.
 #if BRIDGE_BLE_LINK
   // Bluetooth link: same protocol, no USB cable. Clients authenticate with
   // SYS_AUTH (BRIDGE_PASSWORD above) before any other command is accepted.

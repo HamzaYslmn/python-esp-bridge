@@ -21,10 +21,9 @@
 // Classic ESP32 ships a dual-mode (Classic BT + BLE) controller and the
 // Arduino sdkconfig keeps it that way, but this firmware is BLE-only.
 // Hand the Classic-BT memory back to the heap BEFORE any BT init and start
-// the controller in BLE-only mode: with the Wi-Fi driver already up for
-// coexistence (BRIDGE_WIFI_COEX) there otherwise isn't enough heap for
-// Bluedroid, and its failed init crashes on core 0 (BTE_InitStack error
-// path -> OBEX_Deinit dereferences a never-allocated control block).
+// the controller in BLE-only mode — frees heap and avoids a dual-mode
+// Bluedroid init that can crash on core 0 (BTE_InitStack -> OBEX_Deinit
+// dereferences a never-allocated control block).
 // One-way until reboot; nothing in this firmware uses Classic BT.
 void bt_prepare_ble_only() {
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -126,8 +125,7 @@ void link_ble_init(const char* password) {
   bt_prepare_ble_only();
   proto_log_heap("ble: controller up");
   if (ESP.getFreeHeap() < BLE_MIN_FREE_HEAP) {
-    proto_log(2, "ble: link disabled, not enough free heap "
-                 "(set BRIDGE_WIFI_COEX 0 if Wi-Fi/ESP-NOW is unused)");
+    proto_log(2, "ble: link disabled, not enough free heap at boot");
     return;
   }
   link_password = password ? password : "";

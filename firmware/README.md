@@ -19,13 +19,14 @@ USB serial **or Bluetooth**.
 #define BRIDGE_ENABLE_CAM 0          // opt-in: camera (esp32/s2/s3 + PSRAM)
 #define BRIDGE_PASSWORD "espbridge"  // Bluetooth password ("" = open access)
 #define BRIDGE_BLE_LINK 1            // 0 = USB only
-#define BRIDGE_WIFI_COEX 1           // classic ESP32: Wi-Fi up before BLE (coex)
 ```
 
 Change the password here and reflash. USB never asks for a password.
-`BRIDGE_WIFI_COEX` pre-starts the Wi-Fi driver before Bluedroid so Wi-Fi /
-ESP-NOW / BLE can all run together (required init order on classic ESP32);
-set it to 0 to reclaim ~50 KB heap on boards that never use the radio.
+Wi-Fi / ESP-NOW / BLE all coexist: the BLE link is up at boot, and the Wi-Fi
+driver comes up lazily on the host's first Wi-Fi/ESP-NOW command — so a
+BLE-only board never pays the Wi-Fi driver's ~30–50 KB heap (which is what
+used to starve I2C/SPI). The SW coex arbiter shares the radio; IDF defaults
+are left untouched (never `WIFI_PS_NONE` with BT).
 Ethernet and camera stay compile-time opt-ins because they cost real flash;
 board pin maps live on the Python side (`espbridge.eth` / `espbridge.camera`
 presets), so one firmware build serves every board.

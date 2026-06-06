@@ -2,7 +2,6 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include <Wire.h>
-#include <esp_heap_caps.h>
 
 static bool i2c_inited[2];
 
@@ -27,39 +26,16 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x01: {  // INIT: bus, sda, scl, freq u32 -> wire_buf u16
       if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (i2c_inited[bus]) w->end();
-      // Wire's default TX buffer is 128 bytes and write() silently drops
-      // anything beyond it; size it to fit any I2C_WRITE payload. begin()
-      // allocates 2x this from the heap — which a classic ESP32 with the
-      // BLE link connected runs within a few KB of — so fall back to
-      // smaller buffers instead of failing, and report the size that stuck
-      // (hosts chunk their writes to it).
-      //
-      // The fallback must be heap-aware, not try-and-see (all measured on
-      // classic ESP32 + BLE link, core 3.3.6):
-      //  - the IDF i2c driver install after the buffer allocation eats
-      //    ~2 KB and WEDGES rx_task silently below ~7 KB free (no panic,
-      //    no error return — the board just stops answering);
-      //  - the radio stacks need ~6.5 KB free *for the rest of the
-      //    session*, or Bluedroid starts dropping replies under load
-      //    (6.7 KB rest = solid; 5.9 KB rest = host-visible timeouts).
-      // So a buffer above the 128-byte floor must leave 2*size + ~9 KB,
-      // plus a contiguous chunk to spare.
-      static const uint16_t sizes[] = {MAX_PAYLOAD, 1024, 512, 256, 128};
+      // Wire's default 128-byte TX buffer silently truncates longer writes, so
+      // grow it; begin() allocates 2x from the heap, so fall back to a smaller
+      // buffer when heap is tight (full Wi-Fi+BLE coexistence) and report the
+      // size that stuck — the host chunks its writes to it.
       uint16_t got = 0;
-      for (uint8_t i = 0; i < 5 && !got; i++) {
-        if (sizes[i] > 128) {
-          if (ESP.getFreeHeap() < 2u * sizes[i] + 9216) continue;
-          if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
-              < (size_t)sizes[i] + 2048) continue;
-        }
-        if (w->setBufferSize(sizes[i]) && w->begin(p[1], p[2], rd32(p + 3)))
-          got = sizes[i];
+      for (uint16_t sz : {MAX_PAYLOAD, 512, 128}) {
+        if (sz > 128 && ESP.getFreeHeap() < 2u * sz + 8192) continue;
+        if (w->setBufferSize(sz) && w->begin(p[1], p[2], rd32(p + 3))) { got = sz; break; }
       }
-      if (!got) {
-        proto_log_heap("i2c: init failed");  // ST_IO alone is opaque
-        proto_reply_err(seq, cmd, ST_IO);
-        return;
-      }
+      if (!got) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       i2c_inited[bus] = true;
       uint8_t out[2] = {(uint8_t)(got >> 8), (uint8_t)got};
       proto_reply(seq, cmd, out, 2);

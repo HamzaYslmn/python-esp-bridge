@@ -124,14 +124,12 @@ class OLED:
         chunk = self._chunk
         for page in range(pages):
             data = raw[page::bpr].translate(_BITREV)
-            # Pipelined: everything fire-and-forget except the final data
-            # write, which acts as the frame sync (firmware runs in order).
-            # A heap-squeezed firmware Wire buffer (128 B over BLE on a
-            # classic ESP32) can't take a whole 128-byte page in one write,
-            # so a page may span several transactions. Re-address the page +
-            # column before EVERY chunk: clones disagree on whether the
-            # column pointer survives a transaction boundary, and explicit
-            # addressing renders correctly on all of them.
+            # Pipelined: fire-and-forget except the final write, which syncs
+            # the frame (firmware runs in order). A page splits into several
+            # writes only when the Wire buffer is small (old firmware, or a
+            # tight active-coexistence heap). Re-address page+column before
+            # every chunk: clones disagree on whether the column pointer
+            # survives a transaction boundary; explicit addressing is safe.
             for off in range(0, len(data), chunk):
                 col = self.colstart + off
                 self.command(0xB0 + page, 0x00 | (col & 0x0F),

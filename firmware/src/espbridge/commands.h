@@ -243,7 +243,7 @@ enum ChipModel : uint8_t {
 #define NET_UDP_EVT     CMD(MOD_NET, 0x83)  // handle u8|ip[4]|port u16|data..
 
 // ESP-NOW (connectionless 2.4 GHz messaging; coexists with Wi-Fi STA/AP + BLE).
-// Init order on classic ESP32: Wi-Fi -> ESP-NOW -> BLE (see BRIDGE_WIFI_COEX).
+// ESPNOW_INIT brings the Wi-Fi driver up lazily (STA) if it's still off.
 // Channel rule: when Wi-Fi STA is connected ESP-NOW inherits its channel and
 // the requested channel is ignored (changing it would drop the AP).
 #define ESPNOW_INIT     CMD(MOD_ESPNOW, 0x01) // channel u8 (0=auto/inherit)|flags u8 (bit0=long range) -> mac[6]

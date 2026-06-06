@@ -289,11 +289,11 @@ Hosts must treat the tail as optional for compatibility with older firmware.
   `SYS_LOG` warning event.
 - **SYS_RESET** replies OK first, then restarts; the host must expect a new
   `SYS_READY`.
-- **Radio coexistence** (classic ESP32): the Wi-Fi stack must initialize
-  before Bluedroid, so the firmware brings the Wi-Fi driver up at boot when
-  the BLE link is enabled (`BRIDGE_WIFI_COEX` in firmware.ino, default on;
-  costs ~50 KB heap). Power save stays at the IDF default `WIFI_PS_MIN_MODEM`
-  — never `WIFI_PS_NONE` while BT is active.
+- **Radio coexistence** (classic ESP32): the BLE link runs from boot; the
+  Wi-Fi driver comes up lazily on the first Wi-Fi/ESP-NOW command, so a
+  BLE-only board never pays its heap. The SW coex arbiter shares the radio
+  with BLE; power save stays at the IDF default `WIFI_PS_MIN_MODEM` — never
+  `WIFI_PS_NONE` while BT is active.
 - **Wi-Fi scan vs ESP-NOW**: a scan hops channels, so ESP-NOW packets are
   dropped while one is running.
 - **IDF logs become `SYS_LOG` events**: the Wi-Fi/BT stacks log through

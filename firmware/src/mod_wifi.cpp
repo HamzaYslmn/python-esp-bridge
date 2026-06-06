@@ -4,49 +4,15 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include <WiFi.h>
-#include <esp_wifi.h>
 
 static bool scanning = false;
 static bool ap_active = false;
 static bool sta_started = false;
-static bool coex_pinned = false;  // Wi-Fi pre-inited for BLE coex: never drop to MODE_NULL
-static bool wifi_parked = false;  // driver inited but radio stopped (coex idle)
 
-bool wifi_is_active() {
-  // Parked = driver up, RF off: no ADC2 conflict, no coex airtime claimed.
-  return WiFi.getMode() != WIFI_MODE_NULL && !wifi_parked;
-}
-
-// Classic-ESP32 coexistence: the Wi-Fi driver must come up BEFORE Bluedroid
-// (heap ordering — Bluedroid's init crashes if the Wi-Fi driver grabs its
-// buffers afterwards). Called from setup() ahead of link_ble_init() when
-// BRIDGE_WIFI_COEX is set. Power save stays at the Arduino default
-// WIFI_PS_MIN_MODEM — customizing it (especially WIFI_PS_NONE) destabilizes
-// BLE coexistence per the IDF guide.
-//
-// Lesson from Esp-WiFi-BLE-Now: only bring the radio up when it is actually
-// used. An idle-but-started STA makes the coex arbiter timeslice the
-// 2.4 GHz radio against BLE forever (an unassociated STA never modem-
-// sleeps) and holds ~25 KB of RX buffers — both destabilize the BLE link.
-// So: init the driver in order, then PARK the radio until the host first
-// asks for Wi-Fi/ESP-NOW (wifi_ensure_started below).
-void wifi_coex_preinit() {
-  WiFi.mode(WIFI_STA);
-  esp_wifi_stop();
-  wifi_parked = true;
-  coex_pinned = true;
-  proto_log_heap("coex: wifi inited, radio parked");
-}
-
-// Resume the parked radio before any Wi-Fi/ESP-NOW use. Arduino's layer
-// still believes Wi-Fi is started (we stopped underneath it), so this is
-// the matching low-level start; a no-op everywhere else.
-void wifi_ensure_started() {
-  if (!wifi_parked) return;
-  wifi_parked = false;
-  esp_wifi_start();
-  proto_log_heap("coex: wifi radio resumed");
-}
+// Wi-Fi is off until the first command here brings it up (WiFi.mode below);
+// a BLE-only board never pays the driver's heap. Leave coex/power-save at
+// IDF defaults (never WIFI_PS_NONE with BT) — the SW arbiter handles slotting.
+bool wifi_is_active() { return WiFi.getMode() != WIFI_MODE_NULL; }
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
   uint8_t buf[5] = {0};
@@ -117,7 +83,6 @@ static bool take_str(const uint8_t*& p, uint16_t& left, char* out, uint8_t cap) 
 
 void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WIFI, op);
-  wifi_ensure_started();  // coex: the radio is parked until first Wi-Fi use
   switch (op) {
     case 0x01: {  // SCAN (async)
       // Quirk: a scan hops channels, so ESP-NOW packets are dropped while it
@@ -150,9 +115,8 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03:  // DISCONNECT
       WiFi.disconnect(true /*wifioff if no AP*/, false);
       sta_started = false;
-      // Keep the radio in STA mode while ESP-NOW rides on it or the driver is
-      // coex-pinned (turning it off would break espnow / the BLE coex order).
-      if (!ap_active && !espnow_is_active() && !coex_pinned) WiFi.mode(WIFI_MODE_NULL);
+      // Drop the radio (frees its heap) unless an AP or ESP-NOW still needs it.
+      if (!ap_active && !espnow_is_active()) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;
 
@@ -196,7 +160,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x06:  // AP_STOP
       WiFi.softAPdisconnect(true);
       ap_active = false;
-      if (!sta_started && !espnow_is_active() && !coex_pinned) WiFi.mode(WIFI_MODE_NULL);
+      if (!sta_started && !espnow_is_active()) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;
 
