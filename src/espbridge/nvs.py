@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from . import constants as C
 from .errors import RemoteError
+from .protocol import lp
 
 KEY_MAX = 15  # NVS key-length limit
 
@@ -33,8 +34,7 @@ class Nvs:
             value = value.encode()
         elif isinstance(value, int):
             value = value.to_bytes(8, "big", signed=True)
-        k = self._key(key)
-        self._b.request(C.NVS_SET, bytes([len(k)]) + k + value)
+        self._b.request(C.NVS_SET, lp(self._key(key)) + value)
 
     def get(self, key: str, default: bytes | None = None) -> bytes | None:
         try:

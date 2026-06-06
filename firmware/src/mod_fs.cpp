@@ -57,6 +57,22 @@ static bool take_path(const uint8_t* p, uint16_t len, char* out) {
   return true;
 }
 
+// fs|...|path ops: resolve the fs and parse the path at offset `off`. nullptr = bad args.
+static fs::FS* take_fs_path(const uint8_t* p, uint16_t len, uint8_t off, char* out) {
+  if (len < (uint16_t)off + 1) return nullptr;
+  fs::FS* fs = fs_of(p[0]);
+  return (fs && take_path(p + off, len - off, out)) ? fs : nullptr;
+}
+
+static void reply_df(uint8_t seq, uint16_t cmd, uint8_t id) {
+  uint8_t buf[8];
+  uint32_t total, used;
+  df_of(id, &total, &used);
+  wr32(buf, total);
+  wr32(buf + 4, used);
+  proto_reply(seq, cmd, buf, 8);
+}
+
 void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_FS, op);
   char path[FS_PATH_MAX];
@@ -78,12 +94,7 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 #endif
       else { proto_reply_err(seq, cmd, ST_UNSUPPORTED); return; }
       if (!ok) { proto_reply_err(seq, cmd, ST_IO); return; }
-      uint8_t buf[8];
-      uint32_t total, used;
-      df_of(p[0], &total, &used);
-      wr32(buf, total);
-      wr32(buf + 4, used);
-      proto_reply(seq, cmd, buf, 8);
+      reply_df(seq, cmd, p[0]);
       break;
     }
 
@@ -100,9 +111,8 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x03: {  // OPEN: fs|mode|path -> fd|size u32
-      fs::FS* fs = len >= 3 ? fs_of(p[0]) : nullptr;
-      if (!fs || !take_path(p + 2, len - 2, path))
-        { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      fs::FS* fs = take_fs_path(p, len, 2, path);
+      if (!fs) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       int fd = -1;
       for (int i = 0; i < FS_MAX_FDS; i++) if (!fds[i]) { fd = i; break; }
       if (fd < 0) { proto_reply_err(seq, cmd, ST_BUSY); return; }
@@ -152,9 +162,8 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x08: {  // LIST: fs|path; entries stream as FS_LIST_EVT, reply = count
-      fs::FS* fs = len >= 2 ? fs_of(p[0]) : nullptr;
-      if (!fs || !take_path(p + 1, len - 1, path))
-        { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      fs::FS* fs = take_fs_path(p, len, 1, path);
+      if (!fs) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       File dir = fs->open(path);
       if (!dir || !dir.isDirectory()) { proto_reply_err(seq, cmd, ST_NOT_FOUND); return; }
       uint16_t count = 0;
@@ -175,9 +184,8 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x09: {  // STAT: fs|path -> size u32|isdir u8|mtime u32
-      fs::FS* fs = len >= 2 ? fs_of(p[0]) : nullptr;
-      if (!fs || !take_path(p + 1, len - 1, path))
-        { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      fs::FS* fs = take_fs_path(p, len, 1, path);
+      if (!fs) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       File f = fs->open(path);
       if (!f) { proto_reply_err(seq, cmd, ST_NOT_FOUND); return; }
       uint8_t buf[9];
@@ -189,9 +197,8 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x0A: {  // REMOVE: fs|path (file or empty dir)
-      fs::FS* fs = len >= 2 ? fs_of(p[0]) : nullptr;
-      if (!fs || !take_path(p + 1, len - 1, path))
-        { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      fs::FS* fs = take_fs_path(p, len, 1, path);
+      if (!fs) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       fs->remove(path) || fs->rmdir(path)
           ? proto_reply_ok(seq, cmd) : proto_reply_err(seq, cmd, ST_NOT_FOUND);
       break;
@@ -209,23 +216,16 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x0C: {  // MKDIR: fs|path
-      fs::FS* fs = len >= 2 ? fs_of(p[0]) : nullptr;
-      if (!fs || !take_path(p + 1, len - 1, path))
-        { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      fs::FS* fs = take_fs_path(p, len, 1, path);
+      if (!fs) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       fs->mkdir(path) ? proto_reply_ok(seq, cmd) : proto_reply_err(seq, cmd, ST_IO);
       break;
     }
 
-    case 0x0D: {  // DF: fs -> total_kb u32|used_kb u32
+    case 0x0D:  // DF: fs -> total_kb u32|used_kb u32
       if (len < 1 || !fs_of(p[0])) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
-      uint8_t buf[8];
-      uint32_t total, used;
-      df_of(p[0], &total, &used);
-      wr32(buf, total);
-      wr32(buf + 4, used);
-      proto_reply(seq, cmd, buf, 8);
+      reply_df(seq, cmd, p[0]);
       break;
-    }
 
     default:
       proto_reply_err(seq, cmd, ST_UNKNOWN_CMD);

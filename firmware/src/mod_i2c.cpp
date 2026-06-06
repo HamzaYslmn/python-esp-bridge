@@ -41,15 +41,13 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x02: {  // SCAN -> n, addr[n]
-      uint8_t found[128];
+      uint8_t buf[120];  // 1 count + up to 119 addrs (0x01..0x77)
       uint8_t n = 0;
       for (uint8_t a = 1; a < 0x78; a++) {
         w->beginTransmission(a);
-        if (w->endTransmission() == 0) found[n++] = a;
+        if (w->endTransmission() == 0) buf[1 + n++] = a;
       }
-      uint8_t buf[129];
       buf[0] = n;
-      memcpy(buf + 1, found, n);
       proto_reply(seq, cmd, buf, 1 + n);
       break;
     }

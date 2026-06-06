@@ -62,11 +62,8 @@ class SerialTransport:
         self.ser = serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=2.0)
 
     def read(self) -> bytes:
-        data = self.ser.read(1)  # blocks up to `timeout`
-        waiting = self.ser.in_waiting
-        if data and waiting:
-            data += self.ser.read(waiting)
-        return data
+        # One syscall: drain whatever's buffered, else block up to `timeout` for 1 byte.
+        return self.ser.read(self.ser.in_waiting or 1)
 
     def write(self, data: bytes) -> None:
         self.ser.write(data)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import struct
 
 from . import constants as C
+from .protocol import lp
 
 _CHUNK = C.MAX_PAYLOAD - 8
 _IDS = {"littlefs": 0, "sd": 1, "sdmmc": 2}
@@ -123,11 +124,10 @@ class Volume:
         self._b.request(C.FS_REMOVE, self._path(path))
 
     def rename(self, src: str, dst: str) -> None:
-        s = src.encode()
         if not (src.startswith("/") and dst.startswith("/")):
             raise ValueError("paths must be absolute ('/...')")
         self._b.request(C.FS_RENAME,
-                        bytes([self._id, len(s)]) + s + dst.encode())
+                        bytes([self._id]) + lp(src) + dst.encode())
 
     def mkdir(self, path: str) -> None:
         self._b.request(C.FS_MKDIR, self._path(path))

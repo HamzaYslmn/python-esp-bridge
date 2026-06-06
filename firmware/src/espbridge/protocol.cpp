@@ -183,6 +183,7 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
     case MOD_I2S:    i2s_handle(op, seq, p, len); break;
     case MOD_ETH:    eth_handle(op, seq, p, len); break;
     case MOD_CAM:    cam_handle(op, seq, p, len); break;
+    default:         proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
   }
 }
 
@@ -238,20 +239,10 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
     case MOD_UART:  uart_handle(op, seq, p, len); break;
     case MOD_NVS:   nvs_handle_cmd(op, seq, p, len); break;
     case MOD_MCPWM: mcpwm_handle(op, seq, p, len); break;
-    // Slow / stateful handlers: hand off to net_task (RMT TX/RECV block).
-    case MOD_WIFI:
-    case MOD_NET:
-    case MOD_ESPNOW:
-    case MOD_BLE:
-    case MOD_RMT:
-    case MOD_ONEWIRE:
-    case MOD_FS:
-    case MOD_OTA:
-    case MOD_TWAI:
-    case MOD_I2S:
-    case MOD_ETH:
-    case MOD_CAM:   net_enqueue(cmd, seq, p, len); break;
-    default:        proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
+    // Everything else is a slow / stateful handler (WIFI/NET/ESPNOW/BLE/RMT/
+    // ONEWIRE/FS/OTA/TWAI/I2S/ETH/CAM) — hand off to net_task, which replies
+    // ST_UNKNOWN_CMD for any module it doesn't recognise.
+    default:        net_enqueue(cmd, seq, p, len); break;
   }
 }
 
