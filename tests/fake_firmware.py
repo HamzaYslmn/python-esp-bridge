@@ -12,7 +12,7 @@ from espbridge import constants as C
 from espbridge.protocol import FrameSplitter, decode_frame, encode_frame
 from espbridge.transport import MockTransport
 
-CAPS = C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH
+CAPS = C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH | C.Cap.ESPNOW
 
 
 class FakeFirmware:
@@ -55,6 +55,12 @@ class FakeFirmware:
         self.window_acks: list[tuple[int, int]] = []
         self.closed_handles: list[int] = []
 
+        self.espnow_inited = False
+        self.espnow_pmk: bytes | None = None
+        self.espnow_peers: dict[bytes, bytes | None] = {}  # mac -> lmk
+        self.espnow_sent: list[tuple[bytes, bytes]] = []   # (mac, data)
+        self.espnow_deliver = True  # delivered flag returned by ESPNOW_SEND
+
         self.baud_requests: list[int] = []
         self.blackhole_cmds: set[int] = set()  # commands we never answer
 
@@ -67,6 +73,10 @@ class FakeFirmware:
     def emit(self, cmd: int, payload: bytes = b"") -> None:
         """Inject an async event, as if a firmware task produced it."""
         self.transport.inject(encode_frame(C.FLAG_EVENT, 0, cmd, payload))
+
+    def emit_espnow_rx(self, src_mac: bytes, data: bytes, rssi: int = -50) -> None:
+        """Inject an incoming ESP-NOW packet."""
+        self.emit(C.ESPNOW_RX_EVT, src_mac + struct.pack(">b", rssi) + data)
 
     def _info(self) -> bytes:
         nbytes = self.name.encode()
@@ -267,6 +277,42 @@ class FakeFirmware:
             (h, n) = struct.unpack(">BH", p)
             self.window_acks.append((h, n))
             # fire-and-forget: no reply
+
+        # ---- ESP-NOW ----
+        elif cmd == C.ESPNOW_INIT:
+            self.espnow_inited = True
+            self._reply(seq, cmd, bytes.fromhex(self.mac))
+        elif cmd == C.ESPNOW_DEINIT:
+            self.espnow_inited = False
+            self.espnow_peers.clear()
+            self._reply(seq, cmd)
+        elif cmd == C.ESPNOW_SET_PMK:
+            if len(p) != 16:
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            else:
+                self.espnow_pmk = p
+                self._reply(seq, cmd)
+        elif cmd == C.ESPNOW_ADD_PEER:
+            if len(p) not in (8, 24):
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            else:
+                self.espnow_peers[p[:6]] = p[8:24] if len(p) == 24 else None
+                self._reply(seq, cmd)
+        elif cmd == C.ESPNOW_DEL_PEER:
+            self.espnow_peers.pop(p[:6], None)
+            self._reply(seq, cmd)
+        elif cmd == C.ESPNOW_SEND:
+            if not self.espnow_inited:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            elif p[:6] not in self.espnow_peers:
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            else:
+                self.espnow_sent.append((p[:6], p[6:]))
+                if seq:  # sync: reply with the delivery flag
+                    self._reply(seq, cmd, bytes([1 if self.espnow_deliver else 0]))
+                else:  # fire-and-forget: result arrives as an event
+                    self.emit(C.ESPNOW_SEND_EVT,
+                              p[:6] + bytes([0 if self.espnow_deliver else 1]))
 
         else:
             self._reply_err(seq, cmd, C.Status.UNKNOWN_CMD)

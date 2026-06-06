@@ -14,12 +14,17 @@
 void proto_init();    // create queues (before any proto_* call)
 void proto_start();   // spawn tx/rx/net tasks (end of setup())
 
+// Route IDF log output (Wi-Fi/BT stacks) away from UART0 — which IS the
+// protocol link — into SYS_LOG events. Install first thing in setup().
+void proto_log_hook_install();
+
 // Thread-safe: enqueue outbound frames (tx_task writes them).
 void proto_reply(uint8_t seq, uint16_t cmd, const uint8_t* data, uint16_t len);
 void proto_reply_ok(uint8_t seq, uint16_t cmd);
 void proto_reply_err(uint8_t seq, uint16_t cmd, uint8_t status);
 void proto_send_event(uint16_t cmd, const uint8_t* data, uint16_t len);
 void proto_log(uint8_t level, const char* msg);
+void proto_log_heap(const char* stage);  // "<stage>, N B free heap" at level 1
 
 // Block until every queued frame is on the wire (baud switch / reset).
 void proto_tx_flush();

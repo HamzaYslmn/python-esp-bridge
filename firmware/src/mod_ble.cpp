@@ -24,6 +24,7 @@ static BLEClient* client_obj = nullptr;
 
 static void ble_lazy_init() {
   if (ble_ready) return;
+  bt_prepare_ble_only();  // classic ESP32: BLE-only controller (see link.h)
   BLEDevice::init(BRIDGE_NAME);
   ble_ready = true;
 }

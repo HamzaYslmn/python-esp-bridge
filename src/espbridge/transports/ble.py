@@ -10,10 +10,12 @@ one. Notifications land in a queue that read() drains.
 """
 from __future__ import annotations
 
+import asyncio
 import queue
 import threading
 from dataclasses import dataclass
 
+from .._log import log
 from ..constants import BLE_LINK_RX_UUID, BLE_LINK_SERVICE_UUID, BLE_LINK_TX_UUID
 from ..errors import BridgeError, NoDeviceError
 
@@ -59,8 +61,6 @@ def _require_bleak():
 def find_ble_devices(timeout: float = 5.0) -> list[BleDeviceInfo]:
     """Scan for bridges advertising the BLE link service."""
     _require_bleak()
-    import asyncio
-
     from bleak import BleakScanner
 
     async def _scan():
@@ -85,8 +85,6 @@ class BleTransport:
 
     def __init__(self, address: str, *, connect_timeout: float = 10.0):
         _require_bleak()
-        import asyncio
-
         self.address = address
         self._rx: queue.Queue[bytes] = queue.Queue()
         self._loop = asyncio.new_event_loop()
@@ -101,14 +99,10 @@ class BleTransport:
             raise
 
     def _run(self, coro, timeout: float):
-        import asyncio
-
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return fut.result(timeout)
 
     async def _connect(self, address: str, timeout: float) -> None:
-        import asyncio
-
         from bleak import BleakClient
         from bleak.exc import BleakError
 
@@ -125,8 +119,13 @@ class BleTransport:
         # into 20-byte writes during the handshake.
         for _ in range(20):
             if self._rx_char.max_write_without_response_size > 20:
+                log.debug(f"BLE write chunk size: "
+                          f"{self._rx_char.max_write_without_response_size}")
                 break
             await asyncio.sleep(0.1)
+        else:
+            log.warning("BLE MTU exchange did not complete; writes will be "
+                        "chunked at 20 bytes (slow link)")
 
     def _on_notify(self, _char, data: bytearray) -> None:
         self._rx.put(bytes(data))

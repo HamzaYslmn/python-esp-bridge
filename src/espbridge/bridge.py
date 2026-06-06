@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 from . import constants as C
+from ._log import log
 from .errors import (
     AuthError,
     BridgeError,
@@ -124,12 +125,9 @@ class Bridge:
                     "no ESP32 serial port found (CP210x/CH340/CH9102/native USB); "
                     "pass port='COM5' / '/dev/ttyUSB0' explicitly — or ble=True"
                 )
-            if name is None and mac is None and len(ports) > 1:
-                names = ", ".join(p.device for p in ports)
-                raise NoDeviceError(
-                    f"multiple ESP32-like ports found ({names}); pass port=, "
-                    f"name= or mac= — or use espbridge.connect_all()"
-                )
+            # Several ESP32-like ports: probe each in turn and keep the first
+            # that answers the bridge handshake (and matches name=/mac= if
+            # given) — non-bridge boards just time out and are skipped.
             candidates = [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
                            p.device, p.usb_chip) for p in ports]
 
@@ -137,9 +135,12 @@ class Bridge:
         errors: list[str] = []
         for factory, label, chip in candidates:
             self._reset_state()
+            if probing:
+                log.debug(f"probing {label} ...")
             try:
                 self._t = factory()
             except Exception as e:
+                log.debug(f"{label}: open failed: {e}")
                 errors.append(f"{label}: {e}")
                 continue
             self._reader = threading.Thread(target=self._read_loop, daemon=True,
@@ -156,6 +157,16 @@ class Bridge:
                     if upgrade_baud and getattr(self._t, "has_baud", True):
                         self._upgrade_baud(baud, target_baud)
                     self.reset_on_exit = reset_on_exit
+                    if probing and name is None and mac is None:
+                        others = ", ".join(l for _, l, _ in candidates
+                                           if l != label) or "none"
+                        log.info(
+                            f"auto-selected {label}: "
+                            f"name={self.info.name or '(unnamed)'} "
+                            f"mac={self.info.mac} "
+                            f"chip={self.info.chip.name} "
+                            f"(other candidates: {others}; pin one with "
+                            f"port=, name=, mac= or ble='name-or-mac')")
                     return
                 errors.append(f"{label}: name={self.info.name!r} "
                               f"mac={self.info.mac} (no match)")
@@ -164,6 +175,7 @@ class Bridge:
                 self.close()
                 if not probing:
                     raise
+                log.debug(f"{label}: {e}")
                 errors.append(f"{label}: {e}")
             except BaseException:
                 self.close()
@@ -195,11 +207,8 @@ class Bridge:
                 f"no bridge{what} found over Bluetooth — is the board powered, "
                 f"in range, and flashed with BRIDGE_BLE_LINK enabled?"
             )
-        if target is None and name is None and mac is None and len(devs) > 1:
-            names = ", ".join(d.name or d.address for d in devs)
-            raise NoDeviceError(
-                f"multiple bridges advertising ({names}); pass ble='name-or-mac'"
-            )
+        # Several bridges advertising: probe in adv order, first auth +
+        # handshake wins (the caller prints which one was auto-selected).
         return [(lambda d=d: BleTransport(d.address),
                  f"BLE {d.name or d.address}", None) for d in devs]
 
@@ -228,6 +237,7 @@ class Bridge:
         self._closing = False
         self.info = None
         self.on_event(C.SYS_READY, self._on_ready)
+        self.on_event(C.SYS_LOG, self._on_sys_log)
 
     def _matches(self, name: str | None, mac: str | None) -> bool:
         assert self.info is not None
@@ -291,10 +301,12 @@ class Bridge:
         for _ in range(3):
             try:
                 self.ping(b"baud")
+                log.debug(f"baud upgraded {current} -> {target}")
                 return
             except BridgeTimeoutError:
                 continue
         # Could not talk at the new baud: fall back.
+        log.warning(f"baud upgrade to {target} failed; falling back to {current}")
         self._t.set_baudrate(current)
         try:
             self.ping(b"fallback")
@@ -310,6 +322,7 @@ class Bridge:
         chip = getattr(self._t, "usb_chip", None)
         if port is None:
             raise BridgeTimeoutError("link lost and transport cannot be reopened")
+        log.warning(f"link lost; reopening {port} at {baud} baud")
         self._t.close()
         self._reader.join(timeout=1.0)
         time.sleep(0.3)  # let the device reboot from the close-time reset
@@ -345,15 +358,18 @@ class Bridge:
         while not self._closing:
             try:
                 data = self._t.read()
-            except Exception:
+            except Exception as e:
+                if not self._closing:
+                    log.warning(f"transport read failed ({e}); link is down")
                 break  # port closed / unplugged
             if not data:
                 continue
             for chunk in self._splitter.feed(data):
                 try:
                     frame = decode_frame(chunk)
-                except ProtocolError:
-                    continue  # corrupted frame: drop; requester times out & retries
+                except ProtocolError as e:
+                    log.debug(f"dropping corrupted frame: {e}")
+                    continue  # requester times out & retries
                 self._handle_frame(frame)
         # Wake up anyone still waiting.
         with self._pending_lock:
@@ -370,6 +386,13 @@ class Bridge:
             p.frame = frame
             p.event.set()
 
+    def _on_sys_log(self, payload: bytes) -> None:
+        # Firmware log line (incl. redirected ESP-IDF Wi-Fi/BT logs):
+        # level u8 | message. Surface via the espbridge logger.
+        if payload:
+            msg = payload[1:].decode("utf-8", "replace")
+            (log.warning if payload[0] >= 2 else log.info)(f"[fw] {msg}")
+
     def _dispatch_event(self, frame: Frame) -> None:
         with self._handlers_lock:
             specific = list(self._handlers.get(frame.cmd, ()))
@@ -377,13 +400,13 @@ class Bridge:
         for cb in specific:
             try:
                 cb(frame.payload)
-            except Exception:
-                pass  # user callbacks must not kill the reader
+            except Exception:  # user callbacks must not kill the reader
+                log.exception(f"event callback {cb!r} raised")
         for cb in wildcard:
             try:
                 cb(frame)
             except Exception:
-                pass
+                log.exception(f"event callback {cb!r} raised")
 
     # ---- events API ----------------------------------------------------------------
 
@@ -532,6 +555,11 @@ class Bridge:
         from .ble import Ble
         return Ble(self)
 
+    @functools.cached_property
+    def espnow(self):
+        from .espnow import EspNow
+        return EspNow(self)
+
 
 class BridgeSet(list):
     """A list of Bridges with convenience helpers (returned by connect_all)."""
@@ -574,6 +602,7 @@ def connect_all(**kwargs) -> BridgeSet:
         try:
             out.append(Bridge(p.device, **kwargs))
         except BridgeError as e:
+            log.warning(f"connect_all: skipping {p.device}: {e}")
             errors.append(f"{p.device}: {e}")
     if not out:
         raise NoDeviceError("no bridges connected"

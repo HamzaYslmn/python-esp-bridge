@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include "modules.h"
 #include "link.h"
+#include <esp_log.h>
 
 // ---- CRC-16/CCITT-FALSE -----------------------------------------------------
 uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
@@ -58,6 +59,7 @@ static volatile uint32_t dropped = 0;
 
 static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
                           const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
+  if (!txq) { dropped++; return; }  // log hook can fire before proto_init()
   if (len > MAX_PAYLOAD) { dropped++; return; }
   Frame f = { flags, seq, cmd, len, dest, nullptr };
   if (len) {
@@ -124,6 +126,35 @@ void proto_log(uint8_t level, const char* msg) {
   proto_send_event(SYS_LOG, buf, 1 + n);
 }
 
+void proto_log_heap(const char* stage) {
+  char msg[64];
+  snprintf(msg, sizeof(msg), "%s, %lu B free heap", stage,
+           (unsigned long)ESP.getFreeHeap());
+  proto_log(1, msg);
+}
+
+// ---- IDF log capture ---------------------------------------------------------
+// The Wi-Fi/BT stacks log through esp_log; on UART links those bytes would land
+// in the middle of COBS frames and corrupt them. Redirect everything into
+// SYS_LOG events instead (ROM boot output and panics still hit UART0 raw).
+static int bridge_vprintf(const char* fmt, va_list ap) {
+#if BRIDGE_NATIVE_USB
+  return vprintf(fmt, ap);  // UART0 is free on native-USB chips: keep IDF logs
+#else
+  char line[160];
+  int n = vsnprintf(line, sizeof(line), fmt, ap);
+  // Strip the trailing CR/LF esp_log appends; SYS_LOG is line-oriented.
+  size_t L = n < 0 ? 0 : (n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
+  while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
+  if (L) proto_log(1, line);  // no-op before proto_init() (txq guard)
+  return n;
+#endif
+}
+
+void proto_log_hook_install() {
+  esp_log_set_vprintf(bridge_vprintf);
+}
+
 void proto_tx_flush() {
   while (uxQueueMessagesWaiting(txq) > 0 || tx_busy) vTaskDelay(1);
   Serial.flush();
@@ -140,9 +171,10 @@ static QueueHandle_t netq;
 static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
-    case MOD_WIFI: wifi_handle(op, seq, p, len); break;
-    case MOD_NET:  net_handle(op, seq, p, len); break;
-    case MOD_BLE:  ble_handle(op, seq, p, len); break;
+    case MOD_WIFI:   wifi_handle(op, seq, p, len); break;
+    case MOD_NET:    net_handle(op, seq, p, len); break;
+    case MOD_ESPNOW: espnow_handle(op, seq, p, len); break;
+    case MOD_BLE:    ble_handle(op, seq, p, len); break;
   }
 }
 
@@ -198,6 +230,7 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
     // Slow / stateful handlers: hand off to net_task.
     case MOD_WIFI:
     case MOD_NET:
+    case MOD_ESPNOW:
     case MOD_BLE:   net_enqueue(cmd, seq, p, len); break;
     default:        proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
   }

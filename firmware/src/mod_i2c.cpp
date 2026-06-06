@@ -7,7 +7,9 @@ static bool i2c_inited[2];
 
 static TwoWire* bus_of(uint8_t idx) {
   if (idx == 0) return &Wire;
-  if (idx == 1) return &Wire1;
+#if SOC_I2C_NUM > 1
+  if (idx == 1) return &Wire1;  // C3/C6/H2 have a single I2C controller
+#endif
   return nullptr;
 }
 

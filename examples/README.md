@@ -27,12 +27,14 @@ Without uv: `pip install -e "../src[oled,ble]"` once, then `python basics/blink.
 | `spi_transfer.py` | full-duplex SPI (flash JEDEC ID) |
 | `rtos_concurrency.py` | FreeRTOS task split: fast lane stays ~ms while radio blocks |
 
-## wireless/ — Bluetooth link, multiple boards, link speed
+## wireless/ — Bluetooth link, ESP-NOW, multiple boards, link speed
 
 | example | shows |
 |---|---|
 | `ble_blink.py` | **GPIO over Bluetooth — no USB cable.** Default password `espbridge` |
 | `ble_scan.py` | BLE advertisement scan (ESP32 as scanner, over USB) |
+| `espnow_pair.py` | **two-board ESP-NOW chat, fully wireless** — Bluetooth to the board, ESP-NOW between boards, delivery ACKs |
+| `espnow_broadcast.py` | ESP-NOW broadcast over a Bluetooth-connected bridge: one sender, any number of listeners, RSSI per packet |
 | `multi_device.py` | several boards, addressed by persistent name |
 | `benchmark.py` | latency + throughput, first over USB then over Bluetooth |
 

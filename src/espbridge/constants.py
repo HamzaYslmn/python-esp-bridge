@@ -48,6 +48,7 @@ class Cap(enum.IntFlag):
     NATIVE_USB = 1 << 7
     BLE_FW = 1 << 8
     BLE_LINK = 1 << 9  # bridge reachable over the BLE transport
+    ESPNOW = 1 << 10  # ESP-NOW connectionless messaging
 
 
 class ChipModel(enum.IntEnum):
@@ -75,6 +76,7 @@ MOD_SPI = 0x41
 MOD_UART = 0x42
 MOD_WIFI = 0x50
 MOD_NET = 0x51
+MOD_ESPNOW = 0x52
 MOD_BLE = 0x60
 
 # SYS
@@ -159,6 +161,18 @@ NET_DATA_EVT = _cmd(MOD_NET, 0x80)
 NET_ACCEPT_EVT = _cmd(MOD_NET, 0x81)
 NET_CLOSED_EVT = _cmd(MOD_NET, 0x82)
 NET_UDP_EVT = _cmd(MOD_NET, 0x83)
+
+# ESP-NOW
+ESPNOW_INIT = _cmd(MOD_ESPNOW, 0x01)
+ESPNOW_DEINIT = _cmd(MOD_ESPNOW, 0x02)
+ESPNOW_SET_PMK = _cmd(MOD_ESPNOW, 0x03)
+ESPNOW_ADD_PEER = _cmd(MOD_ESPNOW, 0x04)
+ESPNOW_DEL_PEER = _cmd(MOD_ESPNOW, 0x05)
+ESPNOW_SEND = _cmd(MOD_ESPNOW, 0x06)
+ESPNOW_RX_EVT = _cmd(MOD_ESPNOW, 0x80)
+ESPNOW_SEND_EVT = _cmd(MOD_ESPNOW, 0x81)
+
+ESPNOW_MAX_DATA = 250  # ESP_NOW_MAX_DATA_LEN
 
 # BLE
 BLE_SCAN_START = _cmd(MOD_BLE, 0x01)

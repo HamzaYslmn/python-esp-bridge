@@ -9,15 +9,21 @@ USB serial **or Bluetooth**.
 - **arduino-esp32 core 3.x** (Boards Manager → "esp32 by Espressif Systems").
   The sketch uses the 3.x LEDC/String APIs and will not build on 2.x.
 - No external libraries — BLE uses the bundled Bluedroid library.
+  Note: core 3.3.x ships NimBLE (not Bluedroid) on S3/C3/C6, so Bluetooth is
+  currently classic-ESP32 only; other chips build USB-only automatically.
 
 ## Configuration (top of `firmware.ino`)
 
 ```cpp
 #define BRIDGE_PASSWORD "espbridge"  // Bluetooth password ("" = open access)
 #define BRIDGE_BLE_LINK 1            // 0 = USB only
+#define BRIDGE_WIFI_COEX 1           // classic ESP32: Wi-Fi up before BLE (coex)
 ```
 
 Change the password here and reflash. USB never asks for a password.
+`BRIDGE_WIFI_COEX` pre-starts the Wi-Fi driver before Bluedroid so Wi-Fi /
+ESP-NOW / BLE can all run together (required init order on classic ESP32);
+set it to 0 to reclaim ~50 KB heap on boards that never use the radio.
 
 ## Flashing (Arduino IDE)
 

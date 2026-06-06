@@ -26,6 +26,12 @@
 // No-op on chips without BLE or when BRIDGE_ENABLE_BLE is 0.
 void link_ble_init(const char* password);
 
+// Classic ESP32 only: release the unused Classic-BT radio memory back to the
+// heap and bring the controller up BLE-only. MUST run before any other BT
+// init — Wi-Fi (coex) + dual-mode Bluedroid don't fit in RAM together, and a
+// failed Bluedroid init crashes on core 0. No-op on other chips / repeats.
+void bt_prepare_ble_only();
+
 bool link_ble_enabled();    // link_ble_init() succeeded
 bool link_ble_connected();  // a BLE central is currently connected
 bool link_ble_authed();     // ...and presented the correct password

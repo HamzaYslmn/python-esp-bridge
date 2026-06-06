@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from . import __version__
+from ._log import log
 from .bridge import Bridge, connect_all
 from .errors import BridgeError
 from .transports import find_ports
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_info(esp)
         return 0
     except BridgeError as e:
-        print(f"error: {e}", file=sys.stderr)
+        log.error(str(e))
         return 1
 
 

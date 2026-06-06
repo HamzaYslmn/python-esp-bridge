@@ -59,6 +59,9 @@ uint16_t sys_build_info(uint8_t* out) {
 #if BRIDGE_NATIVE_USB
   caps |= CAP_NATIVE_USB;
 #endif
+#if BRIDGE_HAS_ESPNOW
+  caps |= CAP_ESPNOW;
+#endif
   if (psramFound()) caps |= CAP_PSRAM;
   if (link_ble_enabled()) caps |= CAP_BLE_LINK;
   wr32(p, caps); p += 4;

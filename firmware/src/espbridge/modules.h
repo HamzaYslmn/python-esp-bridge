@@ -13,10 +13,15 @@ void spi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void uart_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 
 void gpio_init();
 void wifi_init();
+
+// Classic-ESP32 coexistence: bring the Wi-Fi driver up before Bluedroid
+// (called from setup() ahead of link_ble_init when BRIDGE_WIFI_COEX is set).
+void wifi_coex_preinit();
 
 // Pollers: gpio/uart run on rx_task, wifi/net on net_task; must not block.
 void gpio_poll();
@@ -24,7 +29,8 @@ void uart_poll();
 void wifi_poll();
 void net_poll();
 
-bool wifi_is_active();  // used by ADC2-conflict guard
+bool wifi_is_active();    // used by ADC2-conflict guard
+bool espnow_is_active();  // keeps mod_wifi from dropping to WIFI_MODE_NULL
 
 // SYS_INFO payload builder (also used for the SYS_READY boot banner).
 uint16_t sys_build_info(uint8_t* out);

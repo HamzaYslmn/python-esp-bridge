@@ -15,10 +15,35 @@
 #include <BLE2902.h>
 #include <esp_gap_ble_api.h>
 #include <esp_mac.h>
+#include <esp_bt.h>
+#include <esp32-hal-bt.h>
 #include <freertos/stream_buffer.h>
 
-// Big enough for several MAX_PAYLOAD frames in flight (pipelined hosts).
-#define LINK_RX_BUF 16384
+// Classic ESP32 ships a dual-mode (Classic BT + BLE) controller and the
+// Arduino sdkconfig keeps it that way, but this firmware is BLE-only.
+// Hand the Classic-BT memory back to the heap BEFORE any BT init and start
+// the controller in BLE-only mode: with the Wi-Fi driver already up for
+// coexistence (BRIDGE_WIFI_COEX) there otherwise isn't enough heap for
+// Bluedroid, and its failed init crashes on core 0 (BTE_InitStack error
+// path -> OBEX_Deinit dereferences a never-allocated control block).
+// One-way until reboot; nothing in this firmware uses Classic BT.
+void bt_prepare_ble_only() {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  static bool done = false;
+  if (done) return;
+  done = true;
+  esp_bt_mem_release(ESP_BT_MODE_CLASSIC_BT);
+  // BLEDevice::init() then sees the controller ENABLED and skips its own
+  // btStart() (which would ask for dual mode and fail post-release).
+  btStartMode(BT_MODE_BLE);
+#endif
+}
+
+// Buffers host->board BLE writes until rx_task drains them (~continuous; the
+// worst stall is a slow inline handler like an I2C scan, ~80 ms ≈ 4 KB at BLE
+// speed). Kept lean: classic-ESP32 coex (Wi-Fi + Bluedroid + ESP-NOW) runs
+// within a few KB of the heap limit, so every KB here matters.
+#define LINK_RX_BUF 6144
 
 static bool enabled = false;
 static volatile bool connected = false;
@@ -94,7 +119,20 @@ static void link_gatts_evt(esp_gatts_cb_event_t event, esp_gatt_if_t,
   if (event == ESP_GATTS_CONGEST_EVT) congested = param->congest.congested;
 }
 
+// Bluedroid host + GATT service need roughly this much heap on top of the
+// already-started controller; below it BLEDevice::init dies in operator new
+// (bad_alloc -> abort) with no way to catch it. Fail soft instead: skip the
+// BLE link, log why, and leave USB + Wi-Fi + ESP-NOW fully functional.
+#define BLE_MIN_FREE_HEAP 55000
+
 void link_ble_init(const char* password) {
+  bt_prepare_ble_only();
+  proto_log_heap("ble: controller up");
+  if (ESP.getFreeHeap() < BLE_MIN_FREE_HEAP) {
+    proto_log(2, "ble: link disabled, not enough free heap "
+                 "(set BRIDGE_WIFI_COEX 0 if Wi-Fi/ESP-NOW is unused)");
+    return;
+  }
   link_password = password ? password : "";
   rx_buf = xStreamBufferCreate(LINK_RX_BUF, 1);
   if (rx_buf == nullptr) return;
@@ -135,6 +173,7 @@ void link_ble_init(const char* password) {
   adv->setMaxPreferred(0x0C);  // 15 ms
   adv->start();
   enabled = true;
+  proto_log_heap("ble: link up");
 }
 
 bool link_ble_enabled() { return enabled; }
@@ -178,6 +217,7 @@ uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen) {
 #else  // !BRIDGE_BLE — stubs so protocol.cpp links on BLE-less builds
 
 void link_ble_init(const char*) {}
+void bt_prepare_ble_only() {}
 bool link_ble_enabled() { return false; }
 bool link_ble_connected() { return false; }
 bool link_ble_authed() { return false; }

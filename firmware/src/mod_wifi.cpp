@@ -8,9 +8,21 @@
 static bool scanning = false;
 static bool ap_active = false;
 static bool sta_started = false;
+static bool coex_pinned = false;  // Wi-Fi pre-inited for BLE coex: never drop to MODE_NULL
 
 bool wifi_is_active() {
   return WiFi.getMode() != WIFI_MODE_NULL;
+}
+
+// Classic-ESP32 coexistence: the Wi-Fi driver must come up BEFORE Bluedroid
+// so the coex arbiter sees the radios in the right order (Wi-Fi -> BLE).
+// Called from setup() ahead of link_ble_init() when BRIDGE_WIFI_COEX is set.
+// Power save stays at the Arduino default WIFI_PS_MIN_MODEM — customizing it
+// (especially WIFI_PS_NONE) destabilizes BLE coexistence per the IDF guide.
+void wifi_coex_preinit() {
+  WiFi.mode(WIFI_STA);
+  coex_pinned = true;
+  proto_log_heap("coex: wifi up");
 }
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -84,6 +96,8 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WIFI, op);
   switch (op) {
     case 0x01: {  // SCAN (async)
+      // Quirk: a scan hops channels, so ESP-NOW packets are dropped while it
+      // runs. Known trade-off; documented in PROTOCOL.md.
       if (scanning) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
@@ -112,7 +126,9 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03:  // DISCONNECT
       WiFi.disconnect(true /*wifioff if no AP*/, false);
       sta_started = false;
-      if (!ap_active) WiFi.mode(WIFI_MODE_NULL);
+      // Keep the radio in STA mode while ESP-NOW rides on it or the driver is
+      // coex-pinned (turning it off would break espnow / the BLE coex order).
+      if (!ap_active && !espnow_is_active() && !coex_pinned) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;
 
@@ -156,7 +172,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x06:  // AP_STOP
       WiFi.softAPdisconnect(true);
       ap_active = false;
-      if (!sta_started) WiFi.mode(WIFI_MODE_NULL);
+      if (!sta_started && !espnow_is_active() && !coex_pinned) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;
 

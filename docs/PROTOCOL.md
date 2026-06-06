@@ -120,7 +120,7 @@ stacks own core 0 on dual-core chips):
 |--------------|------|------|
 | `bridge_tx`  | 12   | sole serial writer; drains the outbound frame queue |
 | `bridge_rx`  | 10   | decodes frames; runs fast handlers (SYS/GPIO/ADC/DAC/TOUCH/PWM/I2C/SPI/UART) inline; pumps GPIO edge + UART RX events |
-| `bridge_net` | 9    | owns all Wi-Fi/NET/BLE state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
+| `bridge_net` | 9    | owns all Wi-Fi/NET/ESP-NOW/BLE state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
 
 Consequences visible to the host:
 
@@ -137,7 +137,36 @@ Consequences visible to the host:
 
 See the comment beside every id in `firmware/src/espbridge/commands.h` for exact payload layout;
 module ids: SYS 0x00, GPIO 0x10, ADC 0x20, DAC 0x21, TOUCH 0x22, PWM 0x30,
-I2C 0x40, SPI 0x41, UART 0x42, WIFI 0x50, NET 0x51, BLE 0x60.
+I2C 0x40, SPI 0x41, UART 0x42, WIFI 0x50, NET 0x51, ESPNOW 0x52, BLE 0x60.
+
+### ESP-NOW (module 0x52)
+
+Connectionless ESP32-to-ESP32 messaging (≤250 B per packet), gated on the
+`CAP_ESPNOW` capability bit.
+
+| cmd | payload | reply |
+|-----|---------|-------|
+| `ESPNOW_INIT` 0x01 | `channel u8` (0 = auto/inherit) \| `flags u8` (bit0 = long-range PHY) | own STA `mac[6]` |
+| `ESPNOW_DEINIT` 0x02 | — | ok |
+| `ESPNOW_SET_PMK` 0x03 | `pmk[16]` | ok |
+| `ESPNOW_ADD_PEER` 0x04 | `mac[6]` \| `channel u8` (0 = follow) \| `encrypt u8` \| `[lmk[16]]` | ok |
+| `ESPNOW_DEL_PEER` 0x05 | `mac[6]` | ok |
+| `ESPNOW_SEND` 0x06 | `mac[6]` \| `data..` (≤250 B) | `delivered u8` (1 = peer's radio ACKed) |
+| `ESPNOW_RX_EVT` 0x80 | `src_mac[6]` \| `rssi i8` \| `data..` | event |
+| `ESPNOW_SEND_EVT` 0x81 | `dst_mac[6]` \| `status u8` (0 = delivered) | event |
+
+`ESPNOW_SEND` has two lanes: with `seq != 0` the firmware blocks (≤25 ms) on
+the radio's TX callback and replies with the real delivery result; with
+`seq == 0` (fire-and-forget) it returns immediately and the result is emitted
+later as a best-effort `ESPNOW_SEND_EVT` — use it for max-rate streaming.
+Broadcasts (`ff:ff:ff:ff:ff:ff`, registered as a normal peer) are never ACKed.
+
+`ESPNOW_INIT` auto-starts the Wi-Fi driver in STA mode when it is off. While
+the board is associated to a Wi-Fi network (or running an AP), ESP-NOW
+**inherits that channel** and the requested channel is ignored (a `SYS_LOG`
+warning is emitted) — switching would drop the association. All peers must
+share a channel to hear each other. Encryption: `ESPNOW_SET_PMK` once, then
+per-peer 16-byte LMKs (both sides must match).
 
 ### Device identity (multi-device setups)
 
@@ -156,3 +185,17 @@ Hosts must treat the tail as optional for compatibility with older firmware.
   `SYS_LOG` warning event.
 - **SYS_RESET** replies OK first, then restarts; the host must expect a new
   `SYS_READY`.
+- **Radio coexistence** (classic ESP32): the Wi-Fi stack must initialize
+  before Bluedroid, so the firmware brings the Wi-Fi driver up at boot when
+  the BLE link is enabled (`BRIDGE_WIFI_COEX` in firmware.ino, default on;
+  costs ~50 KB heap). Power save stays at the IDF default `WIFI_PS_MIN_MODEM`
+  — never `WIFI_PS_NONE` while BT is active.
+- **Wi-Fi scan vs ESP-NOW**: a scan hops channels, so ESP-NOW packets are
+  dropped while one is running.
+- **IDF logs become `SYS_LOG` events**: the Wi-Fi/BT stacks log through
+  `esp_log`; on UART links those bytes would corrupt COBS frames, so the
+  firmware redirects them into `SYS_LOG` (level 1) events. ROM boot output and
+  panic dumps still hit UART0 raw. Native-USB chips keep IDF logs on UART0.
+- **Stale BLE bonds** (Bluedroid NVS): switching a board between BLE-using
+  firmwares can leave NVS namespaces that assert at boot — do a one-time
+  "Erase All Flash" when flashing over unknown firmware.

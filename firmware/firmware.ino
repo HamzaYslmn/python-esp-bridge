@@ -20,7 +20,17 @@
 // Set to 0 to turn the Bluetooth link off entirely (USB only).
 #define BRIDGE_BLE_LINK 1
 
+// Classic-ESP32 coexistence: bring the Wi-Fi stack up BEFORE Bluedroid so the
+// coex arbiter sees the radios in the right order (Wi-Fi -> ESP-NOW -> BLE).
+// Costs ~50 KB heap at boot; set 0 if this board never uses Wi-Fi/ESP-NOW.
+// Ignored on chips other than the classic ESP32 (they have no ordering rule).
+#define BRIDGE_WIFI_COEX 1
+
 void setup() {
+  // Route IDF Wi-Fi/BT logs into SYS_LOG events; raw log bytes on UART0 would
+  // corrupt protocol frames. Must precede any radio bring-up.
+  proto_log_hook_install();
+
 #if !BRIDGE_NATIVE_USB
   Serial.setRxBufferSize(SERIAL_RX_BUF);   // must precede begin(); default 256 is too small
   Serial.setTxBufferSize(SERIAL_TX_BUF);
@@ -34,6 +44,12 @@ void setup() {
   gpio_init();
   wifi_init();
   proto_start();   // spawn bridge_tx / bridge_rx / bridge_net tasks
+
+#if BRIDGE_WIFI_COEX && BRIDGE_BLE && defined(CONFIG_IDF_TARGET_ESP32)
+  // Wi-Fi driver up before BLEDevice::init() inside link_ble_init(). Power
+  // save stays at the default WIFI_PS_MIN_MODEM — never WIFI_PS_NONE with BT.
+  wifi_coex_preinit();
+#endif
 
 #if BRIDGE_BLE_LINK
   // Bluetooth link: same protocol, no USB cable. Clients authenticate with

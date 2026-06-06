@@ -3,8 +3,8 @@
 Connect an ESP32 to a Raspberry Pi (or any PC) over USB **or Bluetooth** and
 drive **every** ESP32 peripheral live from Python — GPIO, PWM, ADC, DAC,
 capacitive touch, I2C, SPI, extra UARTs, Wi-Fi (including TCP/UDP sockets
-through the ESP32 radio) and BLE. Flash the bridge firmware **once**; after
-that, everything is Python on the host. No reflashing per project.
+through the ESP32 radio), BLE and ESP-NOW. Flash the bridge firmware **once**;
+after that, everything is Python on the host. No reflashing per project.
 
 ```
 ┌────────────────┐  USB serial (≤921600 Bd) or BLE  ┌─────────────────────┐
@@ -77,6 +77,7 @@ that, everything is Python on the host. No reflashing per project.
 | Wi-Fi  | scan, STA join, AP mode, status/RSSI, state events |
 | NET    | TCP client/server + UDP **through the ESP32 radio**, socket-like API, credit-window flow control |
 | BLE    | scan, advertise, GATT server (notify/write callbacks), GATT client |
+| ESP-NOW | connectionless ESP32↔ESP32 messaging: peers + broadcast, delivery ACKs, RX with RSSI, PMK/LMK encryption — coexists with Wi-Fi and BLE |
 
 The firmware is fully event-driven on FreeRTOS: serial TX, command handling
 and the network stack run as separate tasks, so a blocking Wi-Fi/BLE
@@ -162,6 +163,12 @@ with espbridge.connect_all() as boards:    # or just open all of them
 ## Supported hardware
 
 Primary target: classic **ESP32** DevKits (ESP-32S / ESP-32D, 30- and 38-pin,
-CP2102/CH340 USB). **ESP32-S3** builds via the same sketch (native USB; no DAC,
-BLE-only). Capabilities are reported by the firmware at connect time, so the
-Python API fails fast with a clear error for anything your chip lacks.
+CP2102/CH340 USB). **ESP32-S2/S3/C3** build via the same sketch (native USB;
+ESP-NOW works everywhere; no DAC on S3/C3). Capabilities are reported by the
+firmware at connect time, so the Python API fails fast with a clear error for
+anything your chip lacks.
+
+> **Bluetooth note:** arduino-esp32 core 3.3.x ships the NimBLE host on
+> S3/C3/C6 — the bridge's Bluetooth code (BLE link + `esp.ble`) speaks
+> Bluedroid, so on those chips the firmware currently builds USB-only.
+> Classic ESP32 keeps Bluedroid: full BLE link + Wi-Fi + ESP-NOW coexistence.

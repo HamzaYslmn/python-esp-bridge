@@ -5,8 +5,8 @@
 
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 1
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_MINOR 2
+#define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -51,6 +51,7 @@ enum Status : uint8_t {
 #define CAP_NATIVE_USB (1UL << 7)
 #define CAP_BLE_FW     (1UL << 8)   // firmware compiled with BLE support
 #define CAP_BLE_LINK   (1UL << 9)   // bridge reachable over the BLE transport
+#define CAP_ESPNOW     (1UL << 10)  // ESP-NOW connectionless messaging
 
 // ---- chip models -------------------------------------------------------------
 enum ChipModel : uint8_t {
@@ -71,6 +72,7 @@ enum ChipModel : uint8_t {
 #define MOD_UART  0x42
 #define MOD_WIFI  0x50
 #define MOD_NET   0x51
+#define MOD_ESPNOW 0x52
 #define MOD_BLE   0x60
 
 #define CMD(mod, op) ((uint16_t)(((mod) << 8) | (op)))
@@ -161,6 +163,22 @@ enum ChipModel : uint8_t {
 #define NET_ACCEPT_EVT  CMD(MOD_NET, 0x81)  // listen_h u8|new_h u8|ip[4]|port u16
 #define NET_CLOSED_EVT  CMD(MOD_NET, 0x82)  // handle u8|reason u8
 #define NET_UDP_EVT     CMD(MOD_NET, 0x83)  // handle u8|ip[4]|port u16|data..
+
+// ESP-NOW (connectionless 2.4 GHz messaging; coexists with Wi-Fi STA/AP + BLE).
+// Init order on classic ESP32: Wi-Fi -> ESP-NOW -> BLE (see BRIDGE_WIFI_COEX).
+// Channel rule: when Wi-Fi STA is connected ESP-NOW inherits its channel and
+// the requested channel is ignored (changing it would drop the AP).
+#define ESPNOW_INIT     CMD(MOD_ESPNOW, 0x01) // channel u8 (0=auto/inherit)|flags u8 (bit0=long range) -> mac[6]
+#define ESPNOW_DEINIT   CMD(MOD_ESPNOW, 0x02)
+#define ESPNOW_SET_PMK  CMD(MOD_ESPNOW, 0x03) // pmk[16] (global key for encrypted peers)
+#define ESPNOW_ADD_PEER CMD(MOD_ESPNOW, 0x04) // mac[6]|channel u8 (0=follow)|encrypt u8|[lmk[16]]
+#define ESPNOW_DEL_PEER CMD(MOD_ESPNOW, 0x05) // mac[6]
+#define ESPNOW_SEND     CMD(MOD_ESPNOW, 0x06) // mac[6]|data (<=250). seq!=0 -> delivered u8 (1=peer ACKed);
+                                              // seq==0: fire-and-forget, result via ESPNOW_SEND_EVT
+#define ESPNOW_RX_EVT   CMD(MOD_ESPNOW, 0x80) // src_mac[6]|rssi i8|data..
+#define ESPNOW_SEND_EVT CMD(MOD_ESPNOW, 0x81) // dst_mac[6]|status u8 (seq==0 sends only; best-effort)
+
+#define ESPNOW_MAX_DATA 250  // ESP_NOW_MAX_DATA_LEN
 
 // BLE (UUIDs always 16 bytes / 128-bit on the wire; Python expands 16-bit UUIDs)
 #define BLE_SCAN_START  CMD(MOD_BLE, 0x01)  // duration_s u8 (0=forever)|active u8
