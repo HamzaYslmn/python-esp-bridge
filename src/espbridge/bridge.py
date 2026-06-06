@@ -232,7 +232,29 @@ class Bridge:
                 continue
         # Could not talk at the new baud: fall back.
         self._t.set_baudrate(current)
-        self.ping(b"fallback")
+        try:
+            self.ping(b"fallback")
+        except BridgeTimeoutError:
+            # The firmware already switched to `target` and can't hear us.
+            # Reopen the port: the open-time DTR/RTS toggle resets the board
+            # (reliable even where a manual reset pulse is not).
+            self._reconnect(current)
+
+    def _reconnect(self, baud: int) -> None:
+        """Reopen the serial port and redo the handshake (recovers a dead link)."""
+        port = getattr(getattr(self._t, "ser", None), "port", None)
+        chip = getattr(self._t, "usb_chip", None)
+        if port is None:
+            raise BridgeTimeoutError("link lost and transport cannot be reopened")
+        self._t.close()
+        self._reader.join(timeout=1.0)
+        time.sleep(0.3)  # let the device reboot from the close-time reset
+        self._reset_state()
+        self._t = SerialTransport(port, baud, usb_chip=chip)
+        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+                                        name="espbridge-reader")
+        self._reader.start()
+        self._handshake(reset_on_open=True)
 
     def close(self) -> None:
         if self._closing:

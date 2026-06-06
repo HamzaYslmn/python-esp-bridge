@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="stay at 115200 instead of upgrading the link speed")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("ports", help="list ESP32-like serial ports")
+    sub.add_parser("scan", help="connect to every attached device and list "
+                                "port/name/chip/mac")
     sub.add_parser("info", help="connect and print firmware/chip info (default; "
                                 "shows every device when several are attached)")
     p_name = sub.add_parser("set-name", help="store a device name on the ESP32 (NVS)")
@@ -53,6 +55,26 @@ def main(argv: list[str] | None = None) -> int:
             for p in ports:
                 print(f"{p.device}\t{p.usb_chip}\t{p.description}")
             return 0
+
+        if args.cmd == "scan":
+            ports = find_ports()
+            if not ports:
+                print("no ESP32-like serial ports found")
+                return 1
+            print(f"{'PORT':<12s} {'NAME':<16s} {'CHIP':<10s} {'MAC':<17s} FW")
+            rc = 0
+            for p in ports:
+                try:
+                    # info only — skip the baud upgrade for a quicker probe
+                    with Bridge(p.device, upgrade_baud=False) as esp:
+                        info = esp.info
+                        fw = ".".join(map(str, info.fw_version))
+                        print(f"{p.device:<12s} {info.name or '-':<16s} "
+                              f"{info.chip.name:<10s} {info.mac:<17s} v{fw}")
+                except BridgeError as e:
+                    print(f"{p.device:<12s} error: {e}")
+                    rc = 1
+            return rc
 
         if args.cmd == "set-name":
             with Bridge(args.port, name=args.name, **kwargs) as esp:

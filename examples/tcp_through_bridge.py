@@ -14,11 +14,11 @@ with Bridge() as esp:
     st = esp.wifi.connect(SSID, PASSWORD)
     print(f"connected: ip={st.ip} rssi={st.rssi} dBm")
 
-    status, body = esp.net.http_get("http://example.com/")
+    status, body = esp.net.http_get("http://httpbin.io/")
     print(f"HTTP {status}, {len(body)} bytes")
     print(body[:200].decode(errors="replace"))
 
     # Raw sockets work too:
-    with esp.net.tcp_connect("example.com", 80) as sock:
-        sock.send(b"HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+    with esp.net.tcp_connect("httpbin.io", 80) as sock:
+        sock.send(b"HEAD / HTTP/1.0\r\nHost: httpbin.io\r\n\r\n")
         print(sock.recv(timeout=10).decode(errors="replace").splitlines()[0])
