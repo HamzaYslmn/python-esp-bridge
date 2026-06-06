@@ -4,7 +4,7 @@
    with OTA)".
 2. Export a compiled binary (Sketch > Export Compiled Binary), then:
 
-       python ota_update.py path/to/firmware.ino.bin
+       python ota_update.py path/to/Bridge.ino.bin
 
 Works over `Bridge(ble=...)` too — wireless firmware updates.
 """

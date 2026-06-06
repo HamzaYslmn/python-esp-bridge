@@ -12,6 +12,6 @@ dependencies = [
 ]
 
 # Not on PyPI yet (and for development in general): use the package from this
-# repo, editable so changes in ../src/espbridge apply without reinstalling.
+# repo, editable so changes in ../espbridge apply without reinstalling.
 [tool.uv.sources]
-python-esp-bridge = { path = "../src", editable = true }
+python-esp-bridge = { path = "..", editable = true }

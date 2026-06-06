@@ -82,7 +82,7 @@ class Bridge:
     >>> esp = Bridge(mac="24:a1:60:12:34:56")
 
     Over Bluetooth instead of USB (firmware default password "espbridge",
-    change it at the top of firmware/firmware.ino):
+    change it via EspBridge.begin("...") in the sketch):
 
     >>> esp = Bridge(ble=True)                      # the only advertising bridge
     >>> esp = Bridge(ble="relays", password="espbridge")
@@ -225,8 +225,8 @@ class Bridge:
         except RemoteError as e:
             if e.status == C.Status.DENIED:
                 raise AuthError(
-                    "bridge rejected the password — check BRIDGE_PASSWORD at "
-                    "the top of firmware/firmware.ino"
+                    "bridge rejected the password — check the password passed "
+                    "to EspBridge.begin() in the firmware"
                 ) from None
             raise
 
@@ -283,13 +283,13 @@ class Bridge:
                     continue
         if not self._ready.is_set():
             raise BridgeTimeoutError(
-                "no response from bridge firmware — is it flashed? (firmware/README.md)"
+                "no response from bridge firmware — is it flashed? (docs/FIRMWARE.md)"
             )
         assert self.info is not None
         if self.info.protocol != C.PROTOCOL_VERSION:
             raise ProtocolError(
                 f"protocol mismatch: firmware speaks v{self.info.protocol}, "
-                f"this library v{C.PROTOCOL_VERSION} — reflash firmware.ino or "
+                f"this library v{C.PROTOCOL_VERSION} — reflash the firmware or "
                 f"update python-esp-bridge"
             )
 
@@ -582,7 +582,8 @@ class Bridge:
 
     def wake_cause(self) -> int:
         """esp_sleep_wakeup_cause_t of the last boot (0 = normal reset,
-        2 ext0, 3 ext1, 4 timer, 7 gpio)."""
+        2 ext0, 3 ext1, 4 timer, 7 gpio). Available on every build — reading
+        the cause is cheap, even where entering sleep isn't supported."""
         return self.request(C.SYS_WAKE_CAUSE)[0]
 
     @staticmethod

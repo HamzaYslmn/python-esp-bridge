@@ -197,18 +197,19 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       }
       break;
     }
+#else
+    case 0x08:  // sleep entry is IRAM-resident; gated off on classic+BLE
+      proto_reply_err(seq, cmd, ST_UNSUPPORTED);
+      break;
+#endif
 
+    // WAKE_CAUSE is always available: reading the cause is a cheap RTC-register
+    // read with no IRAM-resident sleep code, so it works even on classic+BLE.
     case 0x09: {  // WAKE_CAUSE -> cause u8 (0 = normal power-on/reset)
       uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
       proto_reply(seq, cmd, &cause, 1);
       break;
     }
-#else
-    case 0x08:
-    case 0x09:
-      proto_reply_err(seq, cmd, ST_UNSUPPORTED);
-      break;
-#endif
 
     case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped
       uint8_t buf[20];

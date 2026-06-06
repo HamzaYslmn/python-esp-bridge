@@ -1,7 +1,7 @@
 """Two-board ESP-NOW chat, fully wireless — Bluetooth to the board, ESP-NOW between boards.
 
 No USB cable, no router: each machine talks to its ESP32 over the Bluetooth
-link (default password "espbridge", set in firmware/firmware.ino), and the
+link (default password "espbridge", set via EspBridge.begin()), and the
 boards talk to each other over ESP-NOW (~250 bytes per packet, delivery ACKs).
 
 Run on each machine:

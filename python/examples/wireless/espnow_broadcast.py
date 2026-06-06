@@ -1,7 +1,7 @@
 """ESP-NOW broadcast, fully wireless — Bluetooth to the board, ESP-NOW onward.
 
 The bridge link is Bluetooth (no USB cable; default password "espbridge", set
-at the top of firmware/firmware.ino) and the messaging is ESP-NOW: BLE and the
+via EspBridge.begin()) and the messaging is ESP-NOW: BLE and the
 Wi-Fi radio coexisting on one classic ESP32. Every board running the listener
 hears every broadcast in radio range, with the sender's MAC and RSSI:
 

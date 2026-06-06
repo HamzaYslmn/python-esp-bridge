@@ -22,7 +22,7 @@
 
 // Register the GATT service and start advertising. Call from setup() after
 // proto_start(). `password` is what BLE clients must present via SYS_AUTH
-// (define BRIDGE_PASSWORD at the top of firmware.ino).
+// (passed in from EspBridge.begin()).
 // No-op on chips without BLE or when BRIDGE_ENABLE_BLE is 0.
 void link_ble_init(const char* password);
 

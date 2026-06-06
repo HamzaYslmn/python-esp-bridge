@@ -6,8 +6,8 @@ Power the board from anything (USB charger, battery), then:
     uv run ble_blink.py relays           # by custom name (espbridge set-name)
     uv run ble_blink.py c0:49:ef:d0:3f:e0   # or by MAC
 
-The password defaults to "espbridge" — change it at the top of
-firmware/firmware.ino (#define BRIDGE_PASSWORD) and reflash.
+The password defaults to "espbridge" — change it via
+EspBridge.begin("yourpassword") in the firmware and reflash.
 """
 import sys
 import time

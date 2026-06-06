@@ -1,6 +1,6 @@
 """espbridge — control every ESP32 peripheral from Python over USB or Bluetooth.
 
-Flash firmware/firmware.ino once, then:
+Flash the firmware once (Arduino library "python esp bridge"), then:
 
     from espbridge import Bridge
 

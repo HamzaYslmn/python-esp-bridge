@@ -6,13 +6,13 @@ from .constants import Status, cmd_name
 # What each firmware status usually means in practice — surfaced in the
 # RemoteError message so failures are actionable without the protocol docs.
 _STATUS_HINTS = {
-    Status.UNKNOWN_CMD: "firmware too old for this command — reflash firmware.ino",
+    Status.UNKNOWN_CMD: "firmware too old for this command — reflash the firmware",
     Status.BAD_ARGS: "invalid arguments (pin/bus/length out of range for this chip?)",
     Status.UNSUPPORTED: "not available on this chip or firmware build",
     Status.BUSY: "resource is busy — a previous operation is still running",
     Status.TIMEOUT: "the peripheral/device did not respond in time",
     Status.NO_MEM: "firmware is out of heap — check esp.free_heap(), use smaller "
-                   "payloads, or disable unused radios (BRIDGE_WIFI_COEX/BLE)",
+                   "payloads, or build without BLE (BRIDGE_ENABLE_BLE 0)",
     Status.BAD_PIN: "that pin doesn't exist or can't do this on this chip",
     Status.NOT_INIT: "peripheral not initialized — call its init()/begin first",
     Status.IO: "no ACK on the wire — check wiring, power, device address and "
@@ -46,8 +46,8 @@ class UnsupportedError(BridgeError):
 
 
 class AuthError(BridgeError):
-    """The bridge rejected the wireless-link password (see BRIDGE_PASSWORD
-    at the top of firmware/firmware.ino)."""
+    """The bridge rejected the wireless-link password (the one passed to
+    EspBridge.begin() in the firmware)."""
 
 
 class RemoteError(BridgeError):

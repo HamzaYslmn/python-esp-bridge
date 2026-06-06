@@ -25,9 +25,10 @@ are implemented in Python where they are easy to read, test and extend.
 
 ## Quick start
 
-1. **Flash the firmware once** — open [`firmware/firmware.ino`](firmware/) in
-   Arduino IDE (esp32 core 3.x, partition scheme *Huge APP*), hit Upload.
-   Details: [`firmware/README.md`](firmware/README.md).
+1. **Flash the firmware once** — install the **`python esp bridge`** library
+   (Arduino IDE Library Manager), open *File → Examples → python esp bridge →
+   Bridge*, pick partition scheme *Huge APP*, hit Upload. The whole sketch is
+   `EspBridge.begin();`. Details: [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 2. **Install the Python library** on the Pi/PC:
 
    ```sh
@@ -58,7 +59,7 @@ are implemented in Python where they are easy to read, test and extend.
 
    Or with **no USB cable at all** — boards advertise as `espbridge_<mac>`
    (plus your custom name) and require a password (default `espbridge`,
-   change it at the top of `firmware.ino`):
+   change it via `EspBridge.begin("yourpassword")` in the sketch):
 
    ```python
    with Bridge(ble=True, password="espbridge") as esp:   # over Bluetooth
@@ -206,13 +207,16 @@ firmware's link buffer can absorb, on both USB serial and Bluetooth.
 
 ## Repo layout
 
+The repo root **is** the Arduino library (so it's publishable to the Arduino
+Library Manager); the Python package lives under `python/`.
+
 | path | what |
 |------|------|
-| [`firmware/`](firmware/) | Arduino firmware (flash once; Bluetooth password lives at the top of `firmware.ino`) |
-| [`src/`](src/) | Python package `python-esp-bridge` (import `espbridge`; transports: USB serial + BLE) |
-| [`examples/`](examples/) | grouped: `basics/`, `devices/` (NeoPixel, DHT, DS18B20, HC-SR04, IR, stepper, CAN, I2S), `system/` (files, NVS, deep sleep, OTA), `wireless/`, `network/`, `displays/`, `compat/` (gpiozero, adafruit, luma, smbus, rpi_gpio) |
-| [`tests/`](tests/) | hardware-free protocol/bridge tests (`pytest tests/`) |
+| [`src/`](src/) + [`examples/Bridge/`](examples/Bridge/) | Arduino library — the flash-once firmware (C/C++) + its example sketch (`EspBridge.begin()`) |
+| `library.properties`, `keywords.txt` | Arduino Library Manager metadata (at the repo root, as the registry requires) |
+| [`python/`](python/) | Python package `python-esp-bridge` (import `espbridge`) with its own `tests/` and grouped `examples/` (`basics/`, `devices/`, `system/`, `wireless/`, `network/`, `displays/`, `compat/`) |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | binary wire protocol spec (framing, transports, auth) |
+| [`docs/FIRMWARE.md`](docs/FIRMWARE.md) | firmware flashing, partition scheme & build-flag reference |
 
 ## Supported hardware
 

@@ -20,4 +20,4 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Run tests
-        run: uv run --with pytest --with pyserial --with pillow --with gpiozero pytest tests/ -q
+        run: uv run --with pytest --with pyserial --with pillow --with gpiozero pytest python/tests/ -q

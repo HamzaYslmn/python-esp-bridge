@@ -4,8 +4,8 @@ Binary protocol over USB serial between a host (PC / Raspberry Pi) and the
 bridge firmware on an ESP32. Optimized for speed and simplicity: no JSON, no
 base64, no compression.
 
-Canonical constants live in [`firmware/src/espbridge/commands.h`](../firmware/src/espbridge/commands.h) and
-[`src/espbridge/constants.py`](../src/espbridge/constants.py) — those two files
+Canonical constants live in [`src/espbridge/commands.h`](../src/espbridge/commands.h) and
+[`python/espbridge/constants.py`](../python/espbridge/constants.py) — those two files
 must stay identical in meaning.
 
 ## Framing
@@ -96,7 +96,7 @@ chunk reassembly trivial. `SYS_SET_BAUD` is meaningless over BLE (skip it).
 USB implies physical access and needs no password. Over BLE, every command
 except `SYS_AUTH` is rejected with `ST_DENIED (0x0D)` until the client sends
 `SYS_AUTH` with the password as payload (firmware default `"espbridge"`,
-compiled in via `BRIDGE_PASSWORD` at the top of `firmware.ino`; empty string
+set via `EspBridge.begin("...")` in the sketch; empty string
 = open access). On success the firmware replies OK and then emits the
 `SYS_READY` banner to that client, so the handshake proceeds exactly like
 USB. Auth state is per-connection and resets on disconnect.
@@ -153,7 +153,7 @@ Consequences visible to the host:
 
 ## Command reference
 
-See the comment beside every id in `firmware/src/espbridge/commands.h` for exact payload layout;
+See the comment beside every id in `src/espbridge/commands.h` for exact payload layout;
 module ids: SYS 0x00, GPIO 0x10, ADC 0x20, DAC 0x21, TOUCH 0x22, PWM 0x30,
 RMT 0x31, MCPWM 0x33, I2C 0x40, SPI 0x41, UART 0x42, ONEWIRE 0x43, TWAI 0x44,
 I2S 0x45, WIFI 0x50, NET 0x51, ESPNOW 0x52, ETH 0x53, BLE 0x60, FS 0x70,
@@ -234,8 +234,8 @@ boot's wake reason. Gated on `CAP_SLEEP` (see IRAM note below).
 
 ### ETH (module 0x53) and CAM (module 0x73) — compile-time opt-ins
 
-Disabled by default (`BRIDGE_ENABLE_ETH` / `BRIDGE_ENABLE_CAM` in
-firmware.ino). Board specifics live on the host: `espbridge.eth.PRESETS`
+Disabled by default (build flags `-DBRIDGE_ENABLE_ETH=1` /
+`-DBRIDGE_ENABLE_CAM=1`). Board specifics live on the host: `espbridge.eth.PRESETS`
 (WT32-ETH01, Olimex POE, W5500-SPI…) and `espbridge.camera.PRESETS`
 (AI-Thinker ESP32-CAM, XIAO-S3-Sense…) send pin maps over the wire. Once
 Ethernet has an IP, all NET sockets ride it automatically (unified core-3.x

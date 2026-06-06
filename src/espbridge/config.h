@@ -86,9 +86,10 @@
 #else
   #define BRIDGE_HAS_SDMMC 0
 #endif
-// The IDF sleep API (sleep_modes.c) is IRAM-resident (~1.7 KB) — that's the
-// entire remaining IRAM budget on classic ESP32 once Wi-Fi + Bluedroid are
-// in. Same trade as SD: set BRIDGE_ENABLE_BLE 0 to get sleep on classic.
+// The IDF sleep API (sleep_modes.c) is IRAM-resident — even deep sleep + wake
+// cause overflow classic ESP32's last ~436 B of IRAM once Wi-Fi + Bluedroid
+// are in (measured). Same trade as SD: build BRIDGE_ENABLE_BLE 0 (USB-only) to
+// get sleep on classic. S2/S3/C3/C6 have it in every build.
 #if defined(CONFIG_IDF_TARGET_ESP32) && BRIDGE_ENABLE_BLE
   #define BRIDGE_HAS_SLEEP 0
 #else
@@ -112,7 +113,7 @@
   #define BRIDGE_HAS_MCPWM 0
 #endif
 
-// Heavy opt-ins (default OFF; enable in firmware.ino). ETH needs a PHY chip
+// Heavy opt-ins (default OFF; enable with -DBRIDGE_ENABLE_ETH=1). ETH needs a PHY chip
 // (RMII on classic ESP32, or W5500/DM9051 over SPI on any chip); CAM needs an
 // OV-series sensor + PSRAM and exists on esp32/s2/s3 only.
 #ifndef BRIDGE_ENABLE_ETH

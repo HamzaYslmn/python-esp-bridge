@@ -1,6 +1,6 @@
 """Firmware update over the protocol link — USB serial or Bluetooth.
 
-    esp.ota.flash("firmware.ino.bin",
+    esp.ota.flash("Bridge.ino.bin",
                   progress=lambda done, total: print(f"{done}/{total}"))
 
 Needs a partition table with two app slots: in Arduino IDE pick

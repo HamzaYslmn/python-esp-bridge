@@ -7,7 +7,7 @@ battery and run this from anywhere in radio range.
     uv run ble_oled.py        # 0.96" SSD1306 / clones
     uv run ble_oled.py 2      # 1.3" SH1106 (image shifted sideways? try 1..4)
 
-Password defaults to "espbridge" (BRIDGE_PASSWORD in firmware/firmware.ino).
+Password defaults to "espbridge" (set via EspBridge.begin() in the firmware).
 BLE moves ~5-20 KB/s, so expect ~1-2 fps for full-frame pushes — fine for
 status displays; use USB for animation.
 """

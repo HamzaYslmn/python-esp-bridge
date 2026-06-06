@@ -1,9 +1,9 @@
 import sys
 from pathlib import Path
 
-# Allow running pytest from the repo root without installing the package.
+# Allow running pytest from the python/ project root without installing the package.
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent / "src"))
+sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
 
 import pytest  # noqa: E402

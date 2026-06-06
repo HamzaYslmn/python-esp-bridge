@@ -63,7 +63,7 @@ enum Status : uint8_t {
 #define CAP_ETH        (1UL << 18)  // Ethernet (compile-time opt-in)
 #define CAP_CAM        (1UL << 19)  // camera (compile-time opt-in, needs PSRAM)
 #define CAP_MCPWM      (1UL << 20)  // complementary PWM pair with deadtime
-#define CAP_SLEEP      (1UL << 21)  // deep/light sleep (IRAM-gated on classic+BLE)
+#define CAP_SLEEP      (1UL << 21)  // deep/light sleep (IRAM-gated off on classic+BLE)
 
 // ---- chip models -------------------------------------------------------------
 enum ChipModel : uint8_t {

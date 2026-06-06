@@ -1,9 +1,9 @@
 # Examples
 
-Flash the firmware first ([`../firmware/README.md`](../firmware/README.md)), plug the
+Flash the firmware first ([`../../docs/FIRMWARE.md`](../../docs/FIRMWARE.md)), plug the
 ESP32 in via USB (or pair over Bluetooth — see `wireless/`), then run any
 example with [uv](https://docs.astral.sh/uv/) — the local `espbridge` package
-from `../src` is installed automatically (editable, so library changes apply
+from `..` is installed automatically (editable, so library changes apply
 immediately):
 
 ```sh
@@ -13,7 +13,7 @@ uv run displays/oled_ssd1306.py
 uv run wireless/ble_blink.py      # no USB needed
 ```
 
-Without uv: `pip install -e "../src[oled,ble]"` once, then `python basics/blink.py`.
+Without uv: `pip install -e "..[oled,ble]"` once, then `python basics/blink.py`.
 
 ## basics/ — core peripherals over USB
 
@@ -63,8 +63,8 @@ Without uv: `pip install -e "../src[oled,ble]"` once, then `python basics/blink.
 Bridges advertise as `espbridge_<mac>` (or `espbridge_<mac>_<name>` once you
 `espbridge set-name`), so `espbridge scan --ble` finds and labels every board.
 
-The Bluetooth password defaults to `espbridge`; change it by editing
-`#define BRIDGE_PASSWORD` at the top of `../firmware/firmware.ino` and reflashing.
+The Bluetooth password defaults to `espbridge`; change it by passing it to
+`EspBridge.begin("yourpassword")` in the Arduino sketch and reflashing.
 
 ## network/ — Wi-Fi through the ESP32 radio
 

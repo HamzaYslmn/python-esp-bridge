@@ -280,7 +280,7 @@ requires-dist = [
     { name = "adafruit-circuitpython-bme280", specifier = ">=2" },
     { name = "gpiozero", specifier = ">=2" },
     { name = "luma-oled", specifier = ">=3.12" },
-    { name = "python-esp-bridge", extras = ["oled", "ble"], editable = "../src" },
+    { name = "python-esp-bridge", extras = ["oled", "ble"], editable = "../" },
 ]
 
 [[package]]
@@ -522,7 +522,7 @@ wheels = [
 [[package]]
 name = "python-esp-bridge"
 version = "0.3.3"
-source = { editable = "../src" }
+source = { editable = "../" }
 dependencies = [
     { name = "pyserial" },
 ]

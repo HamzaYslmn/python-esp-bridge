@@ -1,6 +1,6 @@
 """python-esp-bridge — shared protocol contract.
 
-MUST stay in sync with firmware/src/espbridge/commands.h.
+MUST stay in sync with src/espbridge/commands.h.
 """
 from __future__ import annotations
 
@@ -361,7 +361,7 @@ KNOWN_USB_IDS = {
 BLE_LINK_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_LINK_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # host -> board (write)
 BLE_LINK_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # board -> host (notify)
-DEFAULT_PASSWORD = "espbridge"  # firmware default; change in firmware.ino
+DEFAULT_PASSWORD = "espbridge"  # firmware default; change via EspBridge.begin()
 
 # Safe upgraded baud per bridge chip (conservative defaults; CH340 can do 2M).
 UPGRADE_BAUD = {
