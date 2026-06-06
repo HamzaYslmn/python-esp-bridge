@@ -28,3 +28,6 @@ bool wifi_is_active();  // used by ADC2-conflict guard
 
 // SYS_INFO payload builder (also used for the SYS_READY boot banner).
 uint16_t sys_build_info(uint8_t* out);
+
+// NVS-persisted device name ("" when unset); appended to the BLE adv name.
+const char* sys_device_name();

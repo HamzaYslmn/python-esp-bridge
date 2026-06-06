@@ -1,7 +1,7 @@
 [project]
 name = "python-esp-bridge"
-version = "0.0.2"
-description = "Control every ESP32 peripheral from Python over USB serial — GPIO, ADC, DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE"
+version = "0.1.0"
+description = "Control every ESP32 peripheral from Python over USB serial or Bluetooth — GPIO, ADC, DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "HamzaYslmn" }]
@@ -10,6 +10,7 @@ dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]
 oled = ["pillow>=10"]  # espbridge.oled: PIL drawing for SSD1306/SH1106 displays
+ble = ["bleak>=0.22"]  # espbridge.transports.ble: Bluetooth instead of USB
 
 [project.urls]
 Homepage = "https://github.com/HamzaYslmn/python-esp-bridge"

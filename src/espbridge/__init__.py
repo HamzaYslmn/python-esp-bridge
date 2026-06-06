@@ -1,6 +1,6 @@
 """espbridge — control every ESP32 peripheral from Python over USB serial.
 
-Flash esp/esp.ino once, then:
+Flash firmware/firmware.ino once, then:
 
     from espbridge import Bridge
 
@@ -15,6 +15,7 @@ Flash esp/esp.ino once, then:
 from .bridge import Bridge, BridgeSet, Info, connect_all
 from .constants import Cap, ChipModel, Status
 from .errors import (
+    AuthError,
     BridgeError,
     BridgeTimeoutError,
     NoDeviceError,
@@ -22,18 +23,27 @@ from .errors import (
     RemoteError,
     UnsupportedError,
 )
-from .transport import find_ports
+from .transports import find_ports
 
-__version__ = "0.0.2"
+
+def find_ble_devices(timeout: float = 5.0):
+    """Scan for bridges advertising over Bluetooth (needs the [ble] extra)."""
+    from .transports.ble import find_ble_devices as _scan
+
+    return _scan(timeout)
+
+__version__ = "0.1.0"
 
 __all__ = [
     "Bridge",
     "BridgeSet",
     "connect_all",
+    "find_ble_devices",
     "Info",
     "Cap",
     "ChipModel",
     "Status",
+    "AuthError",
     "BridgeError",
     "BridgeTimeoutError",
     "NoDeviceError",

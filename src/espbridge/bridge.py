@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from . import constants as C
 from .errors import (
+    AuthError,
     BridgeError,
     BridgeTimeoutError,
     NoDeviceError,
@@ -18,7 +19,7 @@ from .errors import (
     UnsupportedError,
 )
 from .protocol import Frame, FrameSplitter, decode_frame, encode_frame
-from .transport import SerialTransport, find_ports
+from .transports import SerialTransport, find_ports
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,12 @@ class Bridge:
 
     >>> esp = Bridge(name="relays")
     >>> esp = Bridge(mac="24:a1:60:12:34:56")
+
+    Over Bluetooth instead of USB (firmware default password "espbridge",
+    change it at the top of firmware/firmware.ino):
+
+    >>> esp = Bridge(ble=True)                      # the only advertising bridge
+    >>> esp = Bridge(ble="relays", password="espbridge")
     """
 
     def __init__(
@@ -86,6 +93,8 @@ class Bridge:
         *,
         name: str | None = None,
         mac: str | None = None,
+        ble: bool | str = False,
+        password: str | None = None,
         baud: int = 115200,
         upgrade_baud: bool = True,
         target_baud: int | None = None,
@@ -98,18 +107,22 @@ class Bridge:
         self.reset_on_exit = False  # set for real only once connected (see below)
         self.info: Info | None = None
 
-        # Candidate ports: explicit transport/port, or every ESP32-like port.
+        # Candidates: (transport factory, label, usb_chip).
         if transport is not None:
-            candidates = [(transport, None, getattr(transport, "usb_chip", None))]
+            candidates = [(lambda t=transport: t, "transport",
+                           getattr(transport, "usb_chip", None))]
+        elif ble:
+            candidates = self._ble_candidates(ble, name, mac)
         elif port is not None:
             chip = next((p.usb_chip for p in find_ports() if p.device == port), None)
-            candidates = [(None, port, chip)]
+            candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
+                           port, chip)]
         else:
             ports = find_ports()
             if not ports:
                 raise NoDeviceError(
                     "no ESP32 serial port found (CP210x/CH340/CH9102/native USB); "
-                    "pass port='COM5' / '/dev/ttyUSB0' explicitly"
+                    "pass port='COM5' / '/dev/ttyUSB0' explicitly — or ble=True"
                 )
             if name is None and mac is None and len(ports) > 1:
                 names = ", ".join(p.device for p in ports)
@@ -117,40 +130,91 @@ class Bridge:
                     f"multiple ESP32-like ports found ({names}); pass port=, "
                     f"name= or mac= — or use espbridge.connect_all()"
                 )
-            candidates = [(None, p.device, p.usb_chip) for p in ports]
+            candidates = [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
+                           p.device, p.usb_chip) for p in ports]
 
         probing = len(candidates) > 1
         errors: list[str] = []
-        for t, prt, chip in candidates:
+        for factory, label, chip in candidates:
             self._reset_state()
             try:
-                self._t = t if t is not None else SerialTransport(prt, baud, usb_chip=chip)
+                self._t = factory()
             except Exception as e:
-                errors.append(f"{prt}: {e}")
+                errors.append(f"{label}: {e}")
                 continue
             self._reader = threading.Thread(target=self._read_loop, daemon=True,
                                             name="espbridge-reader")
             self._reader.start()
             try:
-                self._handshake(reset_on_open)
+                if getattr(self._t, "needs_auth", False):
+                    self._auth(password)
+                    self._handshake(reset_on_open=False)
+                else:
+                    self._handshake(reset_on_open)
                 assert self.info is not None
                 if self._matches(name, mac):
-                    if upgrade_baud:
+                    if upgrade_baud and getattr(self._t, "has_baud", True):
                         self._upgrade_baud(baud, target_baud)
                     self.reset_on_exit = reset_on_exit
                     return
-                errors.append(f"{prt or 'transport'}: name={self.info.name!r} "
+                errors.append(f"{label}: name={self.info.name!r} "
                               f"mac={self.info.mac} (no match)")
                 self.close()
             except (BridgeTimeoutError, ProtocolError) as e:
                 self.close()
                 if not probing:
                     raise
-                errors.append(f"{prt or 'transport'}: {e}")
+                errors.append(f"{label}: {e}")
             except BaseException:
                 self.close()
                 raise
         raise NoDeviceError("no matching bridge found — " + "; ".join(errors))
+
+    @staticmethod
+    def _ble_candidates(ble: bool | str, name: str | None, mac: str | None):
+        from .transports.ble import BleTransport, find_ble_devices
+
+        target = ble if isinstance(ble, str) else None
+        devs = find_ble_devices()
+        if target is not None:
+            tmac = _norm_mac(target)
+            devs = [d for d in devs
+                    if d.name == target or d.device_name == target
+                    or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac]
+        # The advertised name carries the bridge MAC and custom name: narrow
+        # the candidates before connecting when the caller passed name=/mac=.
+        # On no match keep the full list (adv data can be stale/truncated) —
+        # the post-connect _matches() check stays authoritative either way.
+        if mac is not None:
+            devs = [d for d in devs if _norm_mac(d.mac) == _norm_mac(mac)] or devs
+        if name is not None:
+            devs = [d for d in devs if d.device_name == name] or devs
+        if not devs:
+            what = f" named/at {target!r}" if target else ""
+            raise NoDeviceError(
+                f"no bridge{what} found over Bluetooth — is the board powered, "
+                f"in range, and flashed with BRIDGE_BLE_LINK enabled?"
+            )
+        if target is None and name is None and mac is None and len(devs) > 1:
+            names = ", ".join(d.name or d.address for d in devs)
+            raise NoDeviceError(
+                f"multiple bridges advertising ({names}); pass ble='name-or-mac'"
+            )
+        return [(lambda d=d: BleTransport(d.address),
+                 f"BLE {d.name or d.address}", None) for d in devs]
+
+    def _auth(self, password: str | None) -> None:
+        """Authenticate a wireless link (SYS_AUTH) before the handshake."""
+        pw = (C.DEFAULT_PASSWORD if password is None else password).encode()
+        try:
+            self.request(C.SYS_AUTH, pw, timeout=5.0)
+        except RemoteError as e:
+            if e.status == C.Status.DENIED:
+                raise AuthError(
+                    "bridge rejected the password — check BRIDGE_PASSWORD at "
+                    "the top of firmware/firmware.ino"
+                ) from None
+            raise
 
     def _reset_state(self) -> None:
         self._splitter = FrameSplitter()
@@ -203,13 +267,13 @@ class Bridge:
                     continue
         if not self._ready.is_set():
             raise BridgeTimeoutError(
-                "no response from bridge firmware — is it flashed? (esp/README.md)"
+                "no response from bridge firmware — is it flashed? (firmware/README.md)"
             )
         assert self.info is not None
         if self.info.protocol != C.PROTOCOL_VERSION:
             raise ProtocolError(
                 f"protocol mismatch: firmware speaks v{self.info.protocol}, "
-                f"this library v{C.PROTOCOL_VERSION} — reflash esp/esp.ino or "
+                f"this library v{C.PROTOCOL_VERSION} — reflash firmware.ino or "
                 f"update python-esp-bridge"
             )
 

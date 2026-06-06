@@ -1,30 +1,31 @@
 # python-esp-bridge
 
-Plug an ESP32 into a Raspberry Pi (or any PC) over USB and drive **every**
-ESP32 peripheral live from Python — GPIO, PWM, ADC, DAC, capacitive touch,
-I2C, SPI, extra UARTs, Wi-Fi (including TCP/UDP sockets through the ESP32
-radio) and BLE. Flash the bridge firmware **once**; after that, everything is
-Python on the host. No reflashing per project.
+Connect an ESP32 to a Raspberry Pi (or any PC) over USB **or Bluetooth** and
+drive **every** ESP32 peripheral live from Python — GPIO, PWM, ADC, DAC,
+capacitive touch, I2C, SPI, extra UARTs, Wi-Fi (including TCP/UDP sockets
+through the ESP32 radio) and BLE. Flash the bridge firmware **once**; after
+that, everything is Python on the host. No reflashing per project.
 
 ```
-┌────────────────┐   USB serial, binary protocol   ┌─────────────────────┐
-│ Pi / PC        │ ───────────────────────────────►│ ESP32 (bridge fw)   │
-│ Python:        │   COBS+CRC16, up to 921600 Bd   │ FreeRTOS tasks:     │
+┌────────────────┐  USB serial (≤921600 Bd) or BLE  ┌─────────────────────┐
+│ Pi / PC        │ ───────────────────────────────► │ ESP32 (bridge fw)   │
+│ Python:        │   binary protocol, COBS+CRC16    │ FreeRTOS tasks:     │
 │  espbridge     │ ◄─────────────────────────────── │  tx / rx / network  │
-└────────────────┘        replies + async events   └─────────────────────┘
+└────────────────┘        replies + async events    └─────────────────────┘
 ```
 
 ![Oled](docs/img/oled.png)
 
 ## Quick start
 
-1. **Flash the firmware once** — open [`esp/esp.ino`](esp/) in Arduino IDE
-   (esp32 core 3.x, partition scheme *Huge APP*), hit Upload.
-   Details: [`esp/README.md`](esp/README.md).
+1. **Flash the firmware once** — open [`firmware/firmware.ino`](firmware/) in
+   Arduino IDE (esp32 core 3.x, partition scheme *Huge APP*), hit Upload.
+   Details: [`firmware/README.md`](firmware/README.md).
 2. **Install the Python library** on the Pi/PC:
 
    ```sh
-   pip install python-esp-bridge
+   pip install python-esp-bridge          # USB only
+   pip install "python-esp-bridge[ble]"   # + Bluetooth support
    ```
 
 3. **Go:**
@@ -48,8 +49,18 @@ Python on the host. No reflashing per project.
        status, body = esp.net.http_get("http://example.com/")  # ...as your modem
    ```
 
+   Or with **no USB cable at all** — boards advertise as `espbridge_<mac>`
+   (plus your custom name) and require a password (default `espbridge`,
+   change it at the top of `firmware.ino`):
+
+   ```python
+   with Bridge(ble=True, password="espbridge") as esp:   # over Bluetooth
+       esp.gpio.write(2, 1)
+   ```
+
    `espbridge` on the command line prints connection info; `espbridge ports`
-   lists candidate serial ports.
+   lists candidate serial ports; `espbridge scan` probes every attached board
+   and `espbridge scan --ble` finds bridges advertising over Bluetooth.
 
 ## Features
 
@@ -142,11 +153,11 @@ with espbridge.connect_all() as boards:    # or just open all of them
 
 | path | what |
 |------|------|
-| [`esp/`](esp/) | Arduino firmware (flash once) |
-| [`src/`](src/) | Python package `python-esp-bridge` (import `espbridge`) |
-| [`examples/`](examples/) | native API examples in the root; per-ecosystem folders (`gpiozero/`, `adafruit/`, `luma/`, `smbus/`, `rpi_gpio/`) for the compat shims |
+| [`firmware/`](firmware/) | Arduino firmware (flash once; Bluetooth password lives at the top of `firmware.ino`) |
+| [`src/`](src/) | Python package `python-esp-bridge` (import `espbridge`; transports: USB serial + BLE) |
+| [`examples/`](examples/) | grouped: `basics/`, `wireless/`, `network/`, `displays/`, `compat/` (gpiozero, adafruit, luma, smbus, rpi_gpio) |
 | [`tests/`](tests/) | hardware-free protocol/bridge tests (`pytest tests/`) |
-| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | binary wire protocol spec |
+| [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | binary wire protocol spec (framing, transports, auth) |
 
 ## Supported hardware
 

@@ -7,7 +7,7 @@ import sys
 from . import __version__
 from .bridge import Bridge, connect_all
 from .errors import BridgeError
-from .transport import find_ports
+from .transports import find_ports
 
 
 def _print_info(esp: Bridge) -> None:
@@ -32,12 +32,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--version", action="version", version=f"espbridge {__version__}")
     ap.add_argument("-p", "--port", help="serial port (default: auto-detect)")
     ap.add_argument("-n", "--name", help="select device by stored name")
+    ap.add_argument("-b", "--ble", nargs="?", const=True, metavar="NAME_OR_MAC",
+                    help="connect over Bluetooth instead of USB")
+    ap.add_argument("--password", help="Bluetooth link password "
+                                       "(default: 'espbridge')")
     ap.add_argument("--no-baud-upgrade", action="store_true",
                     help="stay at 115200 instead of upgrading the link speed")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("ports", help="list ESP32-like serial ports")
-    sub.add_parser("scan", help="connect to every attached device and list "
-                                "port/name/chip/mac")
+    p_scan = sub.add_parser("scan", help="connect to every attached device and "
+                                         "list port/name/chip/mac")
+    p_scan.add_argument("--ble", action="store_true", dest="scan_ble",
+                        help="scan for bridges advertising over Bluetooth")
     sub.add_parser("info", help="connect and print firmware/chip info (default; "
                                 "shows every device when several are attached)")
     p_name = sub.add_parser("set-name", help="store a device name on the ESP32 (NVS)")
@@ -45,8 +51,25 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     kwargs = dict(upgrade_baud=not args.no_baud_upgrade)
+    if args.ble:
+        kwargs["ble"] = args.ble
+    if args.password is not None:
+        kwargs["password"] = args.password
 
     try:
+        if args.cmd == "scan" and args.scan_ble:
+            from .transports.ble import find_ble_devices
+
+            devs = find_ble_devices()
+            if not devs:
+                print("no bridges advertising over Bluetooth")
+                return 1
+            print(f"{'NAME':<16s} {'MAC':<18s} {'ADVERTISED':<32s} RSSI")
+            for d in devs:
+                print(f"{d.device_name or '-':<16s} {d.mac or '-':<18s} "
+                      f"{d.name:<32s} {d.rssi} dBm")
+            return 0
+
         if args.cmd == "ports":
             ports = find_ports()
             if not ports:
@@ -80,10 +103,12 @@ def main(argv: list[str] | None = None) -> int:
             with Bridge(args.port, name=args.name, **kwargs) as esp:
                 esp.set_name(args.new_name)
                 print(f"{esp.info.mac} is now named {args.new_name!r}")
+                print("(the Bluetooth advertised name updates on next reset)")
             return 0
 
         # default: info
-        if args.port is None and args.name is None and len(find_ports()) > 1:
+        if args.port is None and args.name is None and not args.ble \
+                and len(find_ports()) > 1:
             with connect_all(**kwargs) as boards:
                 for i, esp in enumerate(boards):
                     if i:

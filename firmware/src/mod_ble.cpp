@@ -4,6 +4,7 @@
 // enqueue frames via proto_send_event (tx_task owns the serial port).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/link.h"
 
 #if BRIDGE_BLE
 
@@ -173,8 +174,13 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (n == 0 || char_count + n > BLE_MAX_CHARS ||
           len < (uint16_t)(17 + n * 17)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (!server_obj) {
-        server_obj = BLEDevice::createServer();
-        server_obj->setCallbacks(&srv_cb);
+        // Share the BLE link's GATT server when it exists (one server per
+        // device); its connect/disconnect callbacks stay in charge then.
+        server_obj = (BLEServer*)link_ble_server();
+        if (!server_obj) {
+          server_obj = BLEDevice::createServer();
+          server_obj->setCallbacks(&srv_cb);
+        }
       }
       BLEService* svc = server_obj->createService(wire_to_uuid(p));
       uint8_t ids[BLE_MAX_CHARS];

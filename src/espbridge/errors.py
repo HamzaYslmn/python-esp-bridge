@@ -24,6 +24,11 @@ class UnsupportedError(BridgeError):
     """The connected chip lacks this capability (e.g. DAC on ESP32-S3)."""
 
 
+class AuthError(BridgeError):
+    """The bridge rejected the wireless-link password (see BRIDGE_PASSWORD
+    at the top of firmware/firmware.ino)."""
+
+
 class RemoteError(BridgeError):
     """The firmware returned an error status for a request."""
 

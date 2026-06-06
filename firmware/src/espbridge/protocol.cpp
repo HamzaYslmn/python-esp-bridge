@@ -1,6 +1,7 @@
 // python-esp-bridge — COBS framing, CRC16, FreeRTOS tasks, dispatch.
 #include "protocol.h"
 #include "modules.h"
+#include "link.h"
 
 // ---- CRC-16/CCITT-FALSE -----------------------------------------------------
 uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
@@ -45,16 +46,20 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
 }
 
 // ---- outbound queue + tx task ---------------------------------------------------
-struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t* buf; };
+// dest: DEST_ALL broadcasts (serial always, BLE when authenticated);
+// LINK_BLE targets only the BLE client (pre-auth SYS_AUTH conversation).
+#define DEST_ALL 0xFF
+
+struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t dest; uint8_t* buf; };
 
 static QueueHandle_t txq;
 static volatile bool tx_busy = false;
 static volatile uint32_t dropped = 0;
 
 static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
-                          const uint8_t* data, uint16_t len) {
+                          const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
   if (len > MAX_PAYLOAD) { dropped++; return; }
-  Frame f = { flags, seq, cmd, len, nullptr };
+  Frame f = { flags, seq, cmd, len, dest, nullptr };
   if (len) {
     f.buf = (uint8_t*)malloc(len);
     if (!f.buf) { dropped++; return; }
@@ -84,7 +89,12 @@ static void tx_task(void*) {
     wr16(logical + 4 + f.len, crc16_ccitt(logical, 4 + f.len));
     uint16_t n = cobs_encode(logical, 4 + f.len + 2, encoded);
     encoded[n++] = 0x00;
-    Serial.write(encoded, n);
+    if (f.dest == DEST_ALL) {
+      Serial.write(encoded, n);
+      if (link_ble_authed()) link_ble_write(encoded, n);
+    } else if (f.dest == LINK_BLE) {
+      link_ble_write(encoded, n);  // pre-auth: SYS_AUTH replies / ST_DENIED
+    }
     tx_busy = false;
   }
 }
@@ -163,9 +173,13 @@ static void net_enqueue(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t le
 }
 
 // ---- RX & dispatch (rx_task) -------------------------------------------------------
-static uint8_t rxacc[ENC_BUF_SIZE];
-static uint16_t rxlen = 0;
-static bool rxoverflow = false;
+// One COBS accumulator per link: USB and BLE bytes may interleave arbitrarily.
+struct RxState {
+  uint8_t acc[ENC_BUF_SIZE];
+  uint16_t len = 0;
+  bool overflow = false;
+};
+static RxState rxstate[2];  // [LINK_USB], [LINK_BLE]
 static uint8_t rxframe[MAX_FRAME];
 
 static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
@@ -189,14 +203,69 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
   }
 }
 
-static void handle_encoded(const uint8_t* enc, uint16_t enclen) {
+// Constant-time-ish password compare (no early exit on mismatch).
+static bool password_ok(const uint8_t* p, uint16_t len) {
+  const char* pw = link_ble_password();
+  uint16_t pwlen = strlen(pw);
+  uint8_t diff = (len == pwlen) ? 0 : 1;
+  for (uint16_t i = 0; i < len; i++) diff |= p[i] ^ (uint8_t)pw[i % (pwlen ? pwlen : 1)];
+  return diff == 0;  // empty BRIDGE_PASSWORD = open access
+}
+
+// SYS_AUTH + the BLE auth gate run here, before normal dispatch, because they
+// are link-layer concerns: replies must reach a not-yet-authenticated client.
+static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
+                        const uint8_t* p, uint16_t len) {
+  uint8_t dest = origin == LINK_BLE ? LINK_BLE : DEST_ALL;
+  if (cmd == SYS_AUTH) {
+    if (origin != LINK_BLE) {  // USB implies physical access: always granted
+      enqueue_frame(0, seq, cmd, nullptr, 0, dest);
+      return true;
+    }
+    if (password_ok(p, len)) {
+      link_ble_set_authed(true);
+      enqueue_frame(0, seq, cmd, nullptr, 0, LINK_BLE);
+      // Boot-banner equivalent so the host handshake works like USB.
+      uint8_t info[64];
+      enqueue_frame(FLAG_EVENT, 0, SYS_READY, info, sys_build_info(info), LINK_BLE);
+    } else {
+      uint8_t st = ST_DENIED;
+      enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, LINK_BLE);
+    }
+    return true;
+  }
+  if (origin == LINK_BLE && !link_ble_authed()) {
+    uint8_t st = ST_DENIED;
+    enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, LINK_BLE);
+    return true;
+  }
+  return false;
+}
+
+static void handle_encoded(uint8_t origin, const uint8_t* enc, uint16_t enclen) {
   uint16_t n = cobs_decode(enc, enclen, rxframe);
   if (n < 6) return;  // hdr(4) + crc(2) minimum; silently drop garbage
   uint16_t crc = rd16(rxframe + n - 2);
   if (crc16_ccitt(rxframe, n - 2) != crc) return;  // corrupted: drop, host retries on timeout
   uint8_t seq = rxframe[1];
   uint16_t cmd = rd16(rxframe + 2);
+  if (handle_auth(origin, seq, cmd, rxframe + 4, n - 6)) return;
   dispatch(seq, cmd, rxframe + 4, n - 6);
+}
+
+static void pump_bytes(uint8_t origin, const uint8_t* chunk, int n) {
+  RxState& rx = rxstate[origin];
+  for (int i = 0; i < n; i++) {
+    uint8_t b = chunk[i];
+    if (b == 0x00) {
+      if (!rx.overflow && rx.len > 0) handle_encoded(origin, rx.acc, rx.len);
+      rx.len = 0;
+      rx.overflow = false;
+    } else {
+      if (rx.len < sizeof(rx.acc)) rx.acc[rx.len++] = b;
+      else rx.overflow = true;  // discard until next delimiter
+    }
+  }
 }
 
 // Returns true if any bytes were processed (rx_task idles briefly otherwise).
@@ -213,17 +282,13 @@ static bool proto_pump_rx() {
     int n = Serial.read(chunk, avail);
     if (n <= 0) break;
     any = true;
-    for (int i = 0; i < n; i++) {
-      uint8_t b = chunk[i];
-      if (b == 0x00) {
-        if (!rxoverflow && rxlen > 0) handle_encoded(rxacc, rxlen);
-        rxlen = 0;
-        rxoverflow = false;
-      } else {
-        if (rxlen < sizeof(rxacc)) rxacc[rxlen++] = b;
-        else rxoverflow = true;  // discard until next delimiter
-      }
-    }
+    pump_bytes(LINK_USB, chunk, n);
+  }
+  for (;;) {
+    uint16_t n = link_ble_read(chunk, sizeof(chunk));
+    if (n == 0) break;
+    any = true;
+    pump_bytes(LINK_BLE, chunk, n);
   }
   return any;
 }

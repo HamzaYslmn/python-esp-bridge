@@ -1,6 +1,6 @@
 """python-esp-bridge — shared protocol contract.
 
-MUST stay in sync with esp/src/espbridge/commands.h.
+MUST stay in sync with firmware/src/espbridge/commands.h.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ class Status(enum.IntEnum):
     WIFI = 0x0A
     SOCKET = 0x0B
     CRC = 0x0C
+    DENIED = 0x0D  # wireless link not authenticated (see SYS_AUTH)
 
 
 class Cap(enum.IntFlag):
@@ -46,6 +47,7 @@ class Cap(enum.IntFlag):
     PSRAM = 1 << 6
     NATIVE_USB = 1 << 7
     BLE_FW = 1 << 8
+    BLE_LINK = 1 << 9  # bridge reachable over the BLE transport
 
 
 class ChipModel(enum.IntEnum):
@@ -82,6 +84,7 @@ SYS_SET_BAUD = _cmd(MOD_SYS, 0x03)
 SYS_RESET = _cmd(MOD_SYS, 0x04)
 SYS_FREE_HEAP = _cmd(MOD_SYS, 0x05)
 SYS_SET_NAME = _cmd(MOD_SYS, 0x06)
+SYS_AUTH = _cmd(MOD_SYS, 0x07)
 SYS_READY = _cmd(MOD_SYS, 0x80)
 SYS_LOG = _cmd(MOD_SYS, 0x81)
 
@@ -188,6 +191,13 @@ KNOWN_USB_IDS = {
     (0x1A86, 0x55D4): "ch9102",   # CH9102 (CH340 successor)
     (0x303A, None): "native",     # Espressif native USB (S2/S3/C3/...)
 }
+
+# BLE link: Nordic-UART-style GATT service the firmware exposes as a transport.
+# MUST stay in sync with firmware link_ble.cpp.
+BLE_LINK_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+BLE_LINK_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # host -> board (write)
+BLE_LINK_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # board -> host (notify)
+DEFAULT_PASSWORD = "espbridge"  # firmware default; change in firmware.ino
 
 # Safe upgraded baud per bridge chip (conservative defaults; CH340 can do 2M).
 UPGRADE_BAUD = {

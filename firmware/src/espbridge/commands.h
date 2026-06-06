@@ -5,8 +5,8 @@
 
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 0
-#define FW_VERSION_PATCH 2
+#define FW_VERSION_MINOR 1
+#define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -37,6 +37,7 @@ enum Status : uint8_t {
   ST_WIFI        = 0x0A,
   ST_SOCKET      = 0x0B,
   ST_CRC         = 0x0C,
+  ST_DENIED      = 0x0D,  // wireless link not authenticated (see SYS_AUTH)
 };
 
 // ---- capability bits (SYS_INFO.caps u32) ------------------------------------
@@ -49,6 +50,7 @@ enum Status : uint8_t {
 #define CAP_PSRAM      (1UL << 6)
 #define CAP_NATIVE_USB (1UL << 7)
 #define CAP_BLE_FW     (1UL << 8)   // firmware compiled with BLE support
+#define CAP_BLE_LINK   (1UL << 9)   // bridge reachable over the BLE transport
 
 // ---- chip models -------------------------------------------------------------
 enum ChipModel : uint8_t {
@@ -80,6 +82,7 @@ enum ChipModel : uint8_t {
 #define SYS_RESET       CMD(MOD_SYS, 0x04)
 #define SYS_FREE_HEAP   CMD(MOD_SYS, 0x05)  // -> free u32|min_free u32|largest u32|dropped_events u32
 #define SYS_SET_NAME    CMD(MOD_SYS, 0x06)  // payload = device name (0..32 bytes), persisted in NVS
+#define SYS_AUTH        CMD(MOD_SYS, 0x07)  // payload = password; required over BLE before any other cmd
 #define SYS_READY       CMD(MOD_SYS, 0x80)  // event at boot; payload = same as SYS_INFO
 #define SYS_LOG         CMD(MOD_SYS, 0x81)  // event: level u8|msg
 

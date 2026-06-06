@@ -4,7 +4,7 @@ Binary protocol over USB serial between a host (PC / Raspberry Pi) and the
 bridge firmware on an ESP32. Optimized for speed and simplicity: no JSON, no
 base64, no compression.
 
-Canonical constants live in [`esp/src/espbridge/commands.h`](../esp/src/espbridge/commands.h) and
+Canonical constants live in [`firmware/src/espbridge/commands.h`](../firmware/src/espbridge/commands.h) and
 [`src/espbridge/constants.py`](../src/espbridge/constants.py) — those two files
 must stay identical in meaning.
 
@@ -69,6 +69,38 @@ switches and re-pings (3 attempts); on failure it drops back to 115200.
 Defaults: 921600 (safe for CP2102/CH340/CH9102); CH340 supports up to
 2,000,000 opt-in.
 
+## Transports
+
+The frame stream is transport-agnostic; two links carry it today:
+
+**USB serial** — the default. Boot handshake and baud negotiation as above.
+
+**Bluetooth (BLE)** — a Nordic-UART-style GATT service, no USB cable needed:
+
+| | UUID |
+|---|---|
+| service | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` |
+| RX (host → board) | `6e400002-…` write / write-no-response |
+| TX (board → host) | `6e400003-…` notify, chunked to ATT MTU |
+
+Boards advertise the service plus the name `espbridge_<mac>` (or
+`espbridge_<mac>_<name>` once a custom name is stored via `SYS_SET_NAME` —
+the advertised name updates on the next reset), so hosts can discover,
+display and address every bridge without connecting.
+
+Frames are byte-identical to the serial link; COBS `0x00` delimiters make MTU
+chunk reassembly trivial. `SYS_SET_BAUD` is meaningless over BLE (skip it).
+
+### Wireless authentication (`SYS_AUTH`)
+
+USB implies physical access and needs no password. Over BLE, every command
+except `SYS_AUTH` is rejected with `ST_DENIED (0x0D)` until the client sends
+`SYS_AUTH` with the password as payload (firmware default `"espbridge"`,
+compiled in via `BRIDGE_PASSWORD` at the top of `firmware.ino`; empty string
+= open access). On success the firmware replies OK and then emits the
+`SYS_READY` banner to that client, so the handshake proceeds exactly like
+USB. Auth state is per-connection and resets on disconnect.
+
 ## NET flow control (socket proxy)
 
 The serial link is slower than Wi-Fi, so each proxied TCP socket has a credit
@@ -103,7 +135,7 @@ Consequences visible to the host:
 
 ## Command reference
 
-See the comment beside every id in `esp/src/espbridge/commands.h` for exact payload layout;
+See the comment beside every id in `firmware/src/espbridge/commands.h` for exact payload layout;
 module ids: SYS 0x00, GPIO 0x10, ADC 0x20, DAC 0x21, TOUCH 0x22, PWM 0x30,
 I2C 0x40, SPI 0x41, UART 0x42, WIFI 0x50, NET 0x51, BLE 0x60.
 

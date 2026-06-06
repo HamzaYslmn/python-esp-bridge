@@ -17,11 +17,19 @@ CAPS = C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH
 
 class FakeFirmware:
     def __init__(self, proto_version: int = C.PROTOCOL_VERSION,
-                 name: str = "", mac: str = "24a160123456"):
+                 name: str = "", mac: str = "24a160123456",
+                 password: str | None = None):
         self.transport = MockTransport(responder=self._on_host_bytes)
         self.proto_version = proto_version
         self.name = name
         self.mac = mac
+        # password set = behave like the BLE link: reject everything except
+        # SYS_AUTH with ST_DENIED until the right password arrives.
+        self.password = password
+        self.authed = password is None
+        if password is not None:  # make the mock look like a BLE transport
+            self.transport.needs_auth = True
+            self.transport.has_baud = False
         self._splitter = FrameSplitter()
 
         self.gpio_modes: dict[int, int] = {}
@@ -87,6 +95,20 @@ class FakeFirmware:
 
     def _handle(self, seq: int, cmd: int, p: bytes) -> None:
         if cmd in self.blackhole_cmds:
+            return
+
+        # ---- wireless auth gate (mirrors protocol.cpp handle_auth) ----
+        if cmd == C.SYS_AUTH:
+            if self.password is None or p == self.password.encode():
+                self.authed = True
+                self._reply(seq, cmd)
+                if self.password is not None:
+                    self.boot()  # READY banner follows successful auth (BLE)
+            else:
+                self._reply_err(seq, cmd, C.Status.DENIED)
+            return
+        if not self.authed:
+            self._reply_err(seq, cmd, C.Status.DENIED)
             return
 
         # ---- SYS ----

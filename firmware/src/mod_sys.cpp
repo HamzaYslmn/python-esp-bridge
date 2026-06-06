@@ -1,6 +1,7 @@
 // SYS: ping, info, baud switch, reset, heap stats, persistent device name.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/link.h"
 #include <esp_mac.h>
 #include <esp_heap_caps.h>
 #include <Preferences.h>
@@ -19,6 +20,11 @@ static void load_name() {
     prefs.end();
   }
   name_loaded = true;
+}
+
+const char* sys_device_name() {
+  load_name();
+  return bridge_name;
 }
 
 uint16_t sys_build_info(uint8_t* out) {
@@ -54,6 +60,7 @@ uint16_t sys_build_info(uint8_t* out) {
   caps |= CAP_NATIVE_USB;
 #endif
   if (psramFound()) caps |= CAP_PSRAM;
+  if (link_ble_enabled()) caps |= CAP_BLE_LINK;
   wr32(p, caps); p += 4;
 
   *p++ = SOC_GPIO_PIN_COUNT;
