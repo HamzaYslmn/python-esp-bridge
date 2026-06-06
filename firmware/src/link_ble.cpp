@@ -129,6 +129,10 @@ void link_ble_init(const char* password) {
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(BLE_LINK_SERVICE_UUID);
   adv->setScanResponse(true);  // name goes in the scan response
+  // Slave Connection Interval Range AD field: centrals read this at connect
+  // time — before they would even see (let alone ignore) an update request.
+  adv->setMinPreferred(0x06);  // 7.5 ms
+  adv->setMaxPreferred(0x0C);  // 15 ms
   adv->start();
   enabled = true;
 }

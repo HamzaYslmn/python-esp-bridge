@@ -107,6 +107,8 @@ class BleTransport:
         return fut.result(timeout)
 
     async def _connect(self, address: str, timeout: float) -> None:
+        import asyncio
+
         from bleak import BleakClient
         from bleak.exc import BleakError
 
@@ -117,16 +119,24 @@ class BleTransport:
         except BleakError as e:
             raise NoDeviceError(f"BLE connect to {address} failed: {e}") from None
         self._client = client
-        # write-without-response payload limit for this connection
-        self._chunk = max(20, client.mtu_size - 3)
+        self._rx_char = client.services.get_characteristic(BLE_LINK_RX_UUID)
+        # The write-without-response limit starts at 20 and jumps after the
+        # MTU exchange (bleak docs); wait briefly so frames are not shredded
+        # into 20-byte writes during the handshake.
+        for _ in range(20):
+            if self._rx_char.max_write_without_response_size > 20:
+                break
+            await asyncio.sleep(0.1)
 
     def _on_notify(self, _char, data: bytearray) -> None:
         self._rx.put(bytes(data))
 
     async def _write(self, data: bytes) -> None:
-        for i in range(0, len(data), self._chunk):
+        # Re-read per write: the limit can grow once the MTU exchange lands.
+        chunk = max(20, self._rx_char.max_write_without_response_size)
+        for i in range(0, len(data), chunk):
             await self._client.write_gatt_char(
-                BLE_LINK_RX_UUID, data[i : i + self._chunk], response=False)
+                self._rx_char, data[i : i + chunk], response=False)
 
     async def _disconnect(self) -> None:
         if self._client is not None:

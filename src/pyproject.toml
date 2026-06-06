@@ -1,6 +1,6 @@
 [project]
 name = "python-esp-bridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Control every ESP32 peripheral from Python over USB serial or Bluetooth — GPIO, ADC, DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE"
 readme = "README.md"
 requires-python = ">=3.10"
