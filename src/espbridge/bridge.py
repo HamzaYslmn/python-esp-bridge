@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import struct
 import threading
 import time
@@ -100,10 +101,15 @@ class Bridge:
         target_baud: int | None = None,
         reset_on_open: bool = True,
         timeout: float = 2.0,
+        retries: int = 1,
         reset_on_exit: bool = False,
         transport=None,
     ):
         self.timeout = timeout
+        # How often request() re-sends after a response timeout. Only commands
+        # that are safe to re-execute are retried (see constants.NON_IDEMPOTENT);
+        # a lost frame on a busy/lossy link then heals invisibly.
+        self.retries = retries
         self.reset_on_exit = False  # set for real only once connected (see below)
         self.info: Info | None = None
 
@@ -230,6 +236,7 @@ class Bridge:
         self._pending_lock = threading.Lock()
         self._seq = 0
         self._write_lock = threading.Lock()
+        self._unacked = 0  # fire-and-forget bytes since the last reply (see send)
         self._handlers: dict[int | None, list] = {}
         self._handlers_lock = threading.Lock()
         self._ready = threading.Event()
@@ -432,17 +439,50 @@ class Bridge:
                     return self._seq
         raise BridgeTimeoutError("255 requests in flight — firmware not answering")
 
-    def request(self, cmd: int, payload: bytes = b"", timeout: float | None = None) -> bytes:
-        """Send a request and return the response payload (raises RemoteError on error status)."""
+    def request(self, cmd: int, payload: bytes = b"", timeout: float | None = None,
+                retries: int | None = None) -> bytes:
+        """Send a request and return the response payload (raises RemoteError on error status).
+
+        After a response timeout the request is re-sent up to `retries` times
+        (default: Bridge(retries=...)) — but only for commands that are safe
+        to execute twice (constants.NON_IDEMPOTENT lists the exceptions).
+        The final timeout pings the firmware to tell a lost frame ("link
+        alive") apart from a dead link/board in the error message.
+        """
+        if retries is None:
+            retries = 0 if cmd in C.NON_IDEMPOTENT else self.retries
+        if not self._ready.is_set():
+            retries = 0  # probing/handshake: fail fast, callers retry themselves
+        for attempt in range(retries + 1):
+            try:
+                return self._request_once(cmd, payload, timeout)
+            except BridgeTimeoutError:
+                if attempt >= retries or self._closing:
+                    raise self._timeout_error(cmd, timeout) from None
+                log.warning(f"{C.cmd_name(cmd)}: no response, "
+                            f"retrying ({attempt + 1}/{retries})")
+
+    def _request_once(self, cmd: int, payload: bytes, timeout: float | None) -> bytes:
         seq = self._alloc_seq()
         p = self._pending[seq]
+        debug = log.isEnabledFor(logging.DEBUG)
+        if debug:
+            log.debug(f"-> {C.cmd_name(cmd)} seq={seq} ({len(payload)} B)")
         try:
             with self._write_lock:
                 self._t.write(encode_frame(0, seq, cmd, payload))
             if not p.event.wait(timeout if timeout is not None else self.timeout):
-                raise BridgeTimeoutError(f"no response for command 0x{cmd:04X}")
+                raise BridgeTimeoutError(f"no response for {C.cmd_name(cmd)}")
             if p.frame is None:
                 raise BridgeTimeoutError("connection closed while waiting for response")
+            # Any reply proves the firmware consumed every byte sent before it
+            # (requests are executed in arrival order): the link RX buffer is
+            # empty again, so the fire-and-forget window restarts from zero.
+            self._unacked = 0
+            if debug:
+                log.debug(f"<- {C.cmd_name(cmd)} seq={seq} "
+                          f"{'ERR' if p.frame.is_error else 'ok'} "
+                          f"({len(p.frame.payload)} B)")
             if p.frame.is_error:
                 status = p.frame.payload[0] if p.frame.payload else 0xFF
                 raise RemoteError(status, cmd)
@@ -451,17 +491,50 @@ class Bridge:
             with self._pending_lock:
                 self._pending.pop(seq, None)
 
+    def _timeout_error(self, cmd: int, timeout: float | None) -> BridgeTimeoutError:
+        """Build a timeout error that says whether the link itself is dead."""
+        msg = (f"no response for {C.cmd_name(cmd)} within "
+               f"{timeout if timeout is not None else self.timeout:g}s")
+        if cmd != C.SYS_PING and self._ready.is_set() and not self._closing:
+            try:
+                self._request_once(C.SYS_PING, b"alive?", 1.0)
+                msg += (" — the link is alive (ping OK), so the request or its "
+                        "reply was dropped in transit (radio interference or "
+                        "firmware heap pressure — check esp.free_heap()); "
+                        "Bridge(retries=...) re-sends safe commands "
+                        "automatically")
+            except Exception:  # incl. transport write errors on a dead link
+                msg += (" — and the bridge no longer answers pings: link lost, "
+                        "board reset/brown-out, or firmware stuck (power and "
+                        "cable/radio range are the usual suspects)")
+        return BridgeTimeoutError(msg)
+
     def send(self, cmd: int, payload: bytes = b"") -> None:
-        """Fire-and-forget (seq=0): the firmware will not reply."""
+        """Fire-and-forget (seq=0): the firmware will not reply.
+
+        Unwaited frames get no acknowledgment, so nothing naturally paces
+        them — a long pipelined burst (e.g. an OLED frame push) can overrun
+        the firmware's link RX buffer, which drops bytes and corrupts frames
+        (the classic symptom: a BridgeTimeoutError on the final waited write).
+        Once more than the transport's `burst_window` bytes are in flight, a
+        ping round-trip drains the pipe before this frame is sent.
+        """
+        data = encode_frame(0, 0, cmd, payload)
+        window = getattr(self._t, "burst_window", None)
+        if window and self._ready.is_set() and self._unacked + len(data) > window:
+            self.request(C.SYS_PING, b"\x00")  # fence: resets _unacked
         with self._write_lock:
-            self._t.write(encode_frame(0, 0, cmd, payload))
+            self._t.write(data)
+            self._unacked += len(data)
 
     # ---- conveniences ---------------------------------------------------------------------
 
     def ping(self, payload: bytes = b"ping") -> float:
         """Round-trip a payload; returns latency in seconds."""
         t0 = time.perf_counter()
-        echoed = self.request(C.SYS_PING, payload)
+        # retries=0: a retried ping would report 2x latency, and the
+        # baud-upgrade/probe paths run their own retry loops around this.
+        echoed = self.request(C.SYS_PING, payload, retries=0)
         if echoed != payload:
             raise ProtocolError("ping payload mismatch")
         return time.perf_counter() - t0
@@ -477,9 +550,12 @@ class Bridge:
 
     def free_heap(self) -> dict:
         v = self.request(C.SYS_FREE_HEAP)
-        free, min_free, largest, dropped = struct.unpack(">4I", v)
-        return {"free": free, "min_free": min_free, "largest_block": largest,
-                "dropped_events": dropped}
+        free, min_free, largest, dropped = struct.unpack_from(">4I", v)
+        out = {"free": free, "min_free": min_free, "largest_block": largest,
+               "dropped_events": dropped}
+        if len(v) >= 20:  # firmware >= 0.3.2: bytes the BLE link RX buffer dropped
+            out["link_rx_dropped"] = struct.unpack_from(">I", v, 16)[0]
+        return out
 
     def deep_sleep(self, seconds: float = 0, *, wake_pin: int | None = None,
                    wake_level: int = 1) -> None:

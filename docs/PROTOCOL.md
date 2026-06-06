@@ -101,6 +101,24 @@ compiled in via `BRIDGE_PASSWORD` at the top of `firmware.ino`; empty string
 `SYS_READY` banner to that client, so the handshake proceeds exactly like
 USB. Auth state is per-connection and resets on disconnect.
 
+## Link flow control (fire-and-forget bursts)
+
+Fire-and-forget requests (`seq = 0`) get no reply, so nothing paces them. The
+firmware buffers inbound bytes (UART ring `SERIAL_RX_BUF` = 4096 B; BLE link
+stream buffer `LINK_RX_BUF` = 6144 B) and drains them only as fast as handlers
+execute — a pipelined burst (an OLED frame push is ~9 KB of `I2C_WRITE`s, each
+1 KB page taking ~23 ms on a 400 kHz bus) can overrun the buffer, and overrun
+bytes are **dropped** (CRC then discards the mangled frames; the host-visible
+symptom is a timeout on the next *waited* request).
+
+Hosts must therefore cap un-acknowledged fire-and-forget bytes and insert any
+cheap request (`SYS_PING`) as a **fence**: frames are consumed in arrival
+order, so its reply proves the firmware drained every byte sent before it.
+The Python library does this automatically (transport `burst_window`:
+3072 serial / 4096 BLE). The firmware counts BLE-side overflow drops and
+reports them in `SYS_FREE_HEAP` (5th u32, fw ≥ 0.3.2) alongside a
+rate-limited `SYS_LOG` warning — drops are never silent.
+
 ## NET flow control (socket proxy)
 
 The serial link is slower than Wi-Fi, so each proxied TCP socket has a credit

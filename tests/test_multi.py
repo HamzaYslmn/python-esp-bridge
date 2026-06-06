@@ -68,11 +68,17 @@ def test_select_by_mac(monkeypatch):
         b.close()
 
 
-def test_no_selector_with_multiple_ports_raises(monkeypatch):
-    fakes = {"COM7": FakeFirmware(), "COM8": FakeFirmware()}
+def test_no_selector_with_multiple_ports_probes_and_picks_first(monkeypatch):
+    # Since v0.1.1 multiple candidates are probed in order and the first
+    # answering bridge wins (a log line tells the user how to pin one).
+    fakes = {"COM7": FakeFirmware(mac="aabbccddee01"),
+             "COM8": FakeFirmware(mac="aabbccddee02")}
     _fake_farm(monkeypatch, fakes)
-    with pytest.raises(NoDeviceError, match="multiple ESP32-like ports"):
-        Bridge(upgrade_baud=False, reset_on_open=False)
+    b = Bridge(upgrade_baud=False, reset_on_open=False)
+    try:
+        assert b.info.mac == "aa:bb:cc:dd:ee:01"
+    finally:
+        b.close()
 
 
 def test_selector_no_match_lists_candidates(monkeypatch):

@@ -223,8 +223,36 @@ struct RxState {
 static RxState rxstate[2];  // [LINK_USB], [LINK_BLE]
 static uint8_t rxframe[MAX_FRAME];
 
+// Wedge watchdog: some IDF calls can block rx_task forever with no panic
+// and no error (seen: i2c driver install at exhausted heap). tx_task stays
+// alive, so a watcher can still tell the host WHERE the firmware is stuck
+// instead of leaving it guessing at timeouts.
+static volatile uint16_t cur_cmd = 0xFFFF;  // command rx_task is inside, if any
+static volatile uint32_t disp_n = 0;
+
+static void watch_task(void*) {
+  uint32_t last_n = 0;
+  uint8_t stuck = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    uint16_t c = cur_cmd;
+    if (c != 0xFFFF && disp_n == last_n) {
+      if (++stuck >= 2 && (stuck & 1) == 0) {  // after 2 s, then every 2 s
+        char msg[56];
+        snprintf(msg, sizeof(msg), "rx_task stuck in cmd 0x%04X for %u s", c, stuck);
+        proto_log(2, msg);
+      }
+    } else {
+      stuck = 0;
+    }
+    last_n = disp_n;
+  }
+}
+
 static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
+  cur_cmd = cmd;
+  disp_n++;
   switch (mod) {
     // Fast handlers: run inline on rx_task.
     case MOD_SYS:   sys_handle(op, seq, p, len); break;
@@ -253,6 +281,7 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
     case MOD_CAM:   net_enqueue(cmd, seq, p, len); break;
     default:        proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
   }
+  cur_cmd = 0xFFFF;
 }
 
 // Constant-time-ish password compare (no early exit on mismatch).
@@ -366,4 +395,6 @@ void proto_start() {
   xTaskCreatePinnedToCore(tx_task, "bridge_tx", 4096, nullptr, 12, nullptr, BRIDGE_CORE);
   xTaskCreatePinnedToCore(rx_task, "bridge_rx", 8192, nullptr, 10, nullptr, BRIDGE_CORE);
   xTaskCreatePinnedToCore(net_task, "bridge_net", 8192, nullptr, 9, nullptr, BRIDGE_CORE);
+  // Above rx_task so a wedged handler can't starve it; sleeps 1 s between looks.
+  xTaskCreatePinnedToCore(watch_task, "bridge_watch", 2048, nullptr, 11, nullptr, BRIDGE_CORE);
 }

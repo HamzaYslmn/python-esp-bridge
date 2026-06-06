@@ -109,6 +109,8 @@ class FakeFirmware:
 
         self.baud_requests: list[int] = []
         self.blackhole_cmds: set[int] = set()  # commands we never answer
+        self.drop_once_cmds: set[int] = set()  # swallow the next such frame (lossy link)
+        self.handled: list[int] = []           # every cmd that reached _handle
 
     # ---- helpers -------------------------------------------------------------
 
@@ -150,6 +152,10 @@ class FakeFirmware:
             self._handle(frame.seq, frame.cmd, frame.payload)
 
     def _handle(self, seq: int, cmd: int, p: bytes) -> None:
+        self.handled.append(cmd)
+        if cmd in self.drop_once_cmds:  # emulate a frame lost on a lossy link
+            self.drop_once_cmds.discard(cmd)
+            return
         if cmd in self.blackhole_cmds:
             return
 
@@ -175,8 +181,8 @@ class FakeFirmware:
         elif cmd == C.SYS_SET_BAUD:
             self.baud_requests.append(struct.unpack(">I", p)[0])
             self._reply(seq, cmd)
-        elif cmd == C.SYS_FREE_HEAP:
-            self._reply(seq, cmd, struct.pack(">4I", 200_000, 150_000, 100_000, 0))
+        elif cmd == C.SYS_FREE_HEAP:  # fw >= 0.3.2: 5th u32 = link rx drops
+            self._reply(seq, cmd, struct.pack(">5I", 200_000, 150_000, 100_000, 0, 0))
         elif cmd == C.SYS_SET_NAME:
             if len(p) > C.BRIDGE_NAME_MAX:
                 self._reply_err(seq, cmd, C.Status.BAD_ARGS)

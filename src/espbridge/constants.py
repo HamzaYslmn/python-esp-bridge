@@ -305,6 +305,49 @@ CAM_RELEASE = _cmd(MOD_CAM, 0x04)
 CAM_SET = _cmd(MOD_CAM, 0x05)
 CAM_DEINIT = _cmd(MOD_CAM, 0x06)
 
+# Commands NOT safe to auto-retry after a response timeout: re-executing one
+# whose request got through (only the reply was lost) would double-send data,
+# advance a cursor, or re-trigger a one-shot side effect. Everything else on
+# the bridge sets a level/state and is idempotent. Errs on the side of
+# inclusion — see Bridge.request(retries=).
+NON_IDEMPOTENT = frozenset({
+    SYS_SET_BAUD, SYS_RESET, SYS_SLEEP,
+    UART_WRITE,
+    OW_WRITE, OW_READ, OW_TRIPLET,   # 1-Wire transfers consume bus bits
+    RMT_TX, RMT_TX_BYTES,            # would replay the pulse train
+    TWAI_SEND, I2S_WRITE,
+    NET_SEND, NET_SEND_TO, ESPNOW_SEND,
+    FS_OPEN, FS_READ, FS_WRITE,      # fd allocation / file-position cursor
+    OTA_BEGIN, OTA_WRITE, OTA_END,   # sequential update state machine
+    BLE_GATTC_WRITE,                 # writes to a foreign BLE device
+    CAM_CAPTURE,                     # grabs/replaces the held frame buffer
+})
+
+# Reverse lookup for error messages and debug logs. A name qualifies when its
+# prefix matches the module its value belongs to — this filters out same-prefix
+# scalars like UART_CHUNK or ESPNOW_MAX_DATA whose values land in no module.
+_MOD_PREFIX = {
+    MOD_SYS: "SYS_", MOD_GPIO: "GPIO_", MOD_ADC: "ADC_", MOD_DAC: "DAC_",
+    MOD_TOUCH: "TOUCH_", MOD_PWM: "PWM_", MOD_RMT: "RMT_", MOD_MCPWM: "MCPWM_",
+    MOD_I2C: "I2C_", MOD_SPI: "SPI_", MOD_UART: "UART_", MOD_ONEWIRE: "OW_",
+    MOD_TWAI: "TWAI_", MOD_I2S: "I2S_", MOD_WIFI: "WIFI_", MOD_NET: "NET_",
+    MOD_ESPNOW: "ESPNOW_", MOD_ETH: "ETH_", MOD_BLE: "BLE_", MOD_FS: "FS_",
+    MOD_NVS: "NVS_", MOD_OTA: "OTA_", MOD_CAM: "CAM_",
+}
+
+_CMD_NAMES = {
+    v: n for n, v in list(globals().items())
+    if type(v) is int and 0 <= v <= 0xFFFF
+    and n.startswith(_MOD_PREFIX.get(v >> 8, "\0"))
+}
+
+
+def cmd_name(cmd: int) -> str:
+    """Human name for a command code: 0x4003 -> 'I2C_WRITE (0x4003)'."""
+    name = _CMD_NAMES.get(cmd)
+    return f"{name} (0x{cmd:04X})" if name else f"0x{cmd:04X}"
+
+
 # USB-UART bridge chips found on ESP32 dev boards: (vid, pid) -> chip
 KNOWN_USB_IDS = {
     (0x10C4, 0xEA60): "cp210x",   # CP2102/CP2104 (most DevKitC)

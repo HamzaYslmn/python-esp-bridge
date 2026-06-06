@@ -53,6 +53,7 @@ static const char* link_password = "";
 static BLEServer* server = nullptr;
 static BLECharacteristic* tx_chr = nullptr;
 static StreamBufferHandle_t rx_buf = nullptr;
+static volatile uint32_t rx_dropped = 0;  // bytes lost to RX buffer overflow
 
 // Hands-off link policy (lesson from Esp-WiFi-BLE-Now, which runs all three
 // radios stably): the peripheral issues NO link-layer control procedures —
@@ -89,7 +90,21 @@ class LinkRxCb : public BLECharacteristicCallbacks {
     // Bluedroid callbacks run on a BT task: plain (non-ISR) send is fine.
     // Allow a short block so pipelined bursts backpressure the BT task
     // instead of dropping bytes; past that the host times out & retries.
-    xStreamBufferSend(rx_buf, c->getData(), c->getLength(), pdMS_TO_TICKS(50));
+    size_t n = xStreamBufferSend(rx_buf, c->getData(), c->getLength(),
+                                 pdMS_TO_TICKS(50));
+    if (n < c->getLength()) {
+      // Never drop silently — corrupted frames look like random timeouts on
+      // the host. Count (SYS_FREE_HEAP reports it) and warn, rate-limited.
+      rx_dropped += c->getLength() - n;
+      static uint32_t last_warn = 0;
+      uint32_t now = millis();
+      if (now - last_warn > 1000) {
+        last_warn = now;
+        proto_log(2, "ble: rx overflow — frames lost (host writing faster "
+                     "than commands execute; update python-esp-bridge for "
+                     "burst throttling)");
+      }
+    }
   }
 };
 static LinkRxCb link_rx_cb;
@@ -164,6 +179,7 @@ void link_ble_init(const char* password) {
 
 bool link_ble_enabled() { return enabled; }
 bool link_ble_connected() { return connected; }
+uint32_t link_ble_rx_dropped() { return rx_dropped; }
 bool link_ble_authed() { return connected && authed; }
 void link_ble_set_authed(bool v) { authed = v; }
 const char* link_ble_password() { return link_password; }
@@ -203,6 +219,7 @@ void link_ble_init(const char*) {}
 void bt_prepare_ble_only() {}
 bool link_ble_enabled() { return false; }
 bool link_ble_connected() { return false; }
+uint32_t link_ble_rx_dropped() { return 0; }
 bool link_ble_authed() { return false; }
 void link_ble_set_authed(bool) {}
 const char* link_ble_password() { return ""; }

@@ -76,9 +76,12 @@ void setup() {
   uint8_t info[64];
   uint16_t n = sys_build_info(info);
   proto_send_event(SYS_READY, info, n);
+
+  // Everything runs in dedicated FreeRTOS tasks — delete the Arduino loop
+  // task instead of parking it: its 8 KB stack goes back to the heap, which
+  // a classic ESP32 running Wi-Fi + Bluedroid needs badly (Bluedroid stops
+  // delivering notifications below ~8 KB free, killing the BLE link).
+  vTaskDelete(nullptr);  // never returns
 }
 
-void loop() {
-  // Everything runs in dedicated FreeRTOS tasks; park the Arduino loop task.
-  vTaskDelay(portMAX_DELAY);
-}
+void loop() {}  // never runs (loopTask deleted at end of setup)

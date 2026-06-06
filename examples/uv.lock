@@ -521,7 +521,7 @@ wheels = [
 
 [[package]]
 name = "python-esp-bridge"
-version = "0.3.0"
+version = "0.3.2"
 source = { editable = "../src" }
 dependencies = [
     { name = "pyserial" },

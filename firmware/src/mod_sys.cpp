@@ -211,13 +211,14 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 #endif
 
-    case 0x05: {  // FREE_HEAP
-      uint8_t buf[16];
+    case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped
+      uint8_t buf[20];
       wr32(buf, ESP.getFreeHeap());
       wr32(buf + 4, ESP.getMinFreeHeap());
       wr32(buf + 8, heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       wr32(buf + 12, proto_dropped_events());
-      proto_reply(seq, cmd, buf, 16);
+      wr32(buf + 16, link_ble_rx_dropped());  // fw >= 0.3.2 (host len-checks)
+      proto_reply(seq, cmd, buf, 20);
       break;
     }
 

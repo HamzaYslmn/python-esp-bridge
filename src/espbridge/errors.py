@@ -1,7 +1,28 @@
 """Exception hierarchy for espbridge."""
 from __future__ import annotations
 
-from .constants import Status
+from .constants import Status, cmd_name
+
+# What each firmware status usually means in practice — surfaced in the
+# RemoteError message so failures are actionable without the protocol docs.
+_STATUS_HINTS = {
+    Status.UNKNOWN_CMD: "firmware too old for this command — reflash firmware.ino",
+    Status.BAD_ARGS: "invalid arguments (pin/bus/length out of range for this chip?)",
+    Status.UNSUPPORTED: "not available on this chip or firmware build",
+    Status.BUSY: "resource is busy — a previous operation is still running",
+    Status.TIMEOUT: "the peripheral/device did not respond in time",
+    Status.NO_MEM: "firmware is out of heap — check esp.free_heap(), use smaller "
+                   "payloads, or disable unused radios (BRIDGE_WIFI_COEX/BLE)",
+    Status.BAD_PIN: "that pin doesn't exist or can't do this on this chip",
+    Status.NOT_INIT: "peripheral not initialized — call its init()/begin first",
+    Status.IO: "no ACK on the wire — check wiring, power, device address and "
+               "pull-ups (i2c.scan() shows who's answering)",
+    Status.WIFI: "Wi-Fi operation failed — check credentials/radio state",
+    Status.SOCKET: "socket failed — host unreachable or handle already closed",
+    Status.CRC: "payload integrity check failed",
+    Status.DENIED: "wireless link not authenticated (SYS_AUTH/password)",
+    Status.NOT_FOUND: "no such key/path/handle",
+}
 
 
 class BridgeError(Exception):
@@ -40,4 +61,6 @@ class RemoteError(BridgeError):
             self.status = status  # unknown code
             name = f"0x{status:02X}"
         self.cmd = cmd
-        super().__init__(f"firmware error {name} for command 0x{cmd:04X}")
+        hint = _STATUS_HINTS.get(self.status)
+        super().__init__(f"{cmd_name(cmd)} failed: {name}"
+                         + (f" — {hint}" if hint else ""))

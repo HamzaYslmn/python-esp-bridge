@@ -83,6 +83,55 @@ def test_timeout_when_firmware_silent(bridge, fw):
     assert bridge.free_heap()["free"] == 200_000
 
 
+def test_cmd_name_lookup():
+    assert C.cmd_name(C.I2C_WRITE) == "I2C_WRITE (0x4003)"
+    assert C.cmd_name(C.GPIO_WRITE) == "GPIO_WRITE (0x1002)"
+    assert C.cmd_name(0x7F01) == "0x7F01"  # unknown stays hex
+    # same-prefix scalars (UART_CHUNK=256, NET_CHUNK=512) must not leak in
+    assert C.cmd_name(C.UART_CHUNK) == "0x0100"
+    assert C.cmd_name(C.NET_CHUNK) == "0x0200"
+
+
+def test_remote_error_message_names_cmd_and_hints(bridge):
+    with pytest.raises(RemoteError, match=r"I2C_WRITE \(0x4003\) failed: IO — no ACK"):
+        bridge.i2c.write(0x3C, b"\x00")  # no fake device at 0x3C -> ST_IO
+
+
+def test_retry_recovers_a_lost_request(bridge, fw):
+    fw.drop_once_cmds.add(C.SYS_FREE_HEAP)  # first frame vanishes, retry lands
+    assert bridge.request(C.SYS_FREE_HEAP, timeout=0.2)
+    assert fw.handled.count(C.SYS_FREE_HEAP) == 2
+
+
+def test_non_idempotent_commands_are_not_retried(bridge, fw):
+    fw.drop_once_cmds.add(C.UART_WRITE)
+    with pytest.raises(BridgeTimeoutError, match="link is alive"):
+        bridge.request(C.UART_WRITE, b"\x01x", timeout=0.2)
+    assert fw.handled.count(C.UART_WRITE) == 1  # never re-sent
+
+
+def test_timeout_error_diagnoses_dead_link(bridge, fw):
+    fw.blackhole_cmds.update({C.GPIO_READ, C.SYS_PING})
+    with pytest.raises(BridgeTimeoutError, match="no longer answers"):
+        bridge.request(C.GPIO_READ, b"\x02", timeout=0.1)
+
+
+def test_send_burst_is_fenced(bridge, fw):
+    """Pipelined fire-and-forget writes must be throttled to burst_window."""
+    fw.i2c_devices[0x3C] = b""
+    bridge._t.burst_window = 150  # tiny window: a couple of frames
+    for _ in range(10):
+        bridge.i2c.write(0x3C, b"\x40" + b"\xff" * 40, wait=False)
+    assert len(fw.i2c_writes) == 10            # nothing lost
+    assert fw.handled.count(C.SYS_PING) >= 2   # fences were inserted
+    bridge.i2c.write(0x3C, b"\x00\xaf")        # waited write resets the window
+    assert bridge._unacked == 0
+
+
+def test_free_heap_reports_link_rx_drops(bridge):
+    assert bridge.free_heap()["link_rx_dropped"] == 0
+
+
 def test_gpio_edge_events_dispatch(bridge, fw):
     got = []
     done = threading.Event()

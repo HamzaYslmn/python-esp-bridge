@@ -184,6 +184,26 @@ with espbridge.connect_all() as boards:    # or just open all of them
     boards.by_name("relays").gpio.write(2, 1)
 ```
 
+## Troubleshooting
+
+Errors name the command and say what to check (`I2C_WRITE (0x4003) failed:
+IO — no ACK on the wire — check wiring, power, device address and pull-ups`).
+A timeout additionally pings the board so the message tells you whether the
+link itself died or a single frame got lost. Useful knobs:
+
+```python
+esp = Bridge(retries=1)         # default: re-send safe commands once on timeout
+esp.free_heap()                 # heap + dropped-frame counters from the firmware
+```
+
+```bash
+ESPBRIDGE_DEBUG=1 python app.py   # trace every request/response with names
+```
+
+Lost frames on a busy link are also *prevented* now: pipelined bursts
+(OLED frames, NeoPixel updates) are automatically throttled to what the
+firmware's link buffer can absorb, on both USB serial and Bluetooth.
+
 ## Repo layout
 
 | path | what |

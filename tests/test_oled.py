@@ -35,16 +35,17 @@ def _cmd_stream(writes):
 
 
 def _data_pages(writes):
-    """Reassemble per-page payloads — one page spans multiple chunked writes."""
-    pages: list[bytearray] = []
-    collecting = False
+    """Reassemble per-page payloads — one page spans multiple chunked writes,
+    each preceded by its own page+column addressing command."""
+    pages: dict[int, bytearray] = {}
+    cur = None
     for _, d in writes:
         if d[0] == 0x00 and len(d) >= 2 and 0xB0 <= d[1] <= 0xB7:
-            pages.append(bytearray())  # page-start command opens a new page
-            collecting = True
-        elif d[0] == 0x40 and collecting:
-            pages[-1] += d[1:]
-    return [bytes(p) for p in pages]
+            cur = d[1] - 0xB0
+            pages.setdefault(cur, bytearray())
+        elif d[0] == 0x40 and cur is not None:
+            pages[cur] += d[1:]
+    return [bytes(pages[k]) for k in sorted(pages)]
 
 
 def test_init_powers_both_chip_families_and_clears():
@@ -90,6 +91,30 @@ def test_colstart_two_for_genuine_sh1106():
     oled.clear()
     cmds = [w[1] for w in esp.i2c.writes if w[1][0] == 0x00]
     assert all(c[2] == 0x02 and c[3] == 0x10 for c in cmds)
+
+
+def test_split_page_writes_readdress_each_chunk():
+    """A heap-squeezed firmware Wire buffer (128 B over BLE) can't take a full
+    128-byte page per write; every chunk must re-set page + column explicitly
+    because clones disagree on column-pointer behavior across transactions."""
+    esp = FakeEsp()
+    oled = OLED(esp, colstart=2)
+    oled._chunk = 125  # what i2c.max_write - 1 yields with a 128 B Wire buffer
+    esp.i2c.writes.clear()
+
+    img = Image.new("1", (128, 64))
+    img.putpixel((126, 0), 1)  # page 0, column 126 — lands in the 3-byte tail
+    oled.show(img)
+
+    cmds = [w[1] for w in esp.i2c.writes if w[1][0] == 0x00]
+    datas = [w[1] for w in esp.i2c.writes if w[1][0] == 0x40]
+    assert len(cmds) == 16 and len(datas) == 16  # 8 pages x 2 chunks, addressed
+    assert all(len(d) - 1 in (125, 3) for d in datas)
+    # chunk addressing: col 0+2 then col 125+2 (=0x7F), per page
+    assert [(c[2], c[3]) for c in cmds[:2]] == [(0x02, 0x10), (0x0F, 0x17)]
+    pages = _data_pages(esp.i2c.writes)
+    assert len(pages) == 8 and all(len(p) == 128 for p in pages)
+    assert pages[0][126] == 0x01  # tail chunk carries the right bytes
 
 
 def test_draw_context_manager_pushes_frame():

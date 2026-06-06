@@ -48,6 +48,12 @@ class SerialTransport:
 
     has_baud = True
     needs_auth = False  # USB implies physical access
+    # Max unacknowledged fire-and-forget bytes before Bridge.send() inserts a
+    # ping fence. The firmware UART RX ring is SERIAL_RX_BUF (4096) and drains
+    # only as fast as commands execute — at 921600 baud a pipelined burst
+    # (OLED frame push) outruns a slow handler (1 KB I2C write ~ 23 ms) and
+    # the ring silently drops the overflow.
+    burst_window = 3072
 
     def __init__(self, port: str, baud: int = 115200, usb_chip: str | None = None):
         import serial

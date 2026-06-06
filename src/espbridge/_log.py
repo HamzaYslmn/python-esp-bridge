@@ -60,7 +60,11 @@ class _Formatter(logging.Formatter):
 
 log = logging.getLogger("espbridge")
 if not log.handlers:
-    if log.level == logging.NOTSET:  # respect a level the app set first
+    if os.environ.get("ESPBRIDGE_DEBUG"):
+        # Frame-level tracing (every request/response with command names)
+        # without touching the script: ESPBRIDGE_DEBUG=1 python app.py
+        log.setLevel(logging.DEBUG)
+    elif log.level == logging.NOTSET:  # respect a level the app set first
         log.setLevel(logging.INFO)
     _handler = logging.StreamHandler(sys.stderr)
     _handler.setFormatter(_Formatter(_supports_color(sys.stderr)))

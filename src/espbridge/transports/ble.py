@@ -82,6 +82,12 @@ class BleTransport:
     has_baud = False    # wireless: no baud negotiation
     needs_auth = True   # firmware requires SYS_AUTH before other commands
     usb_chip = None
+    # Max unacknowledged fire-and-forget bytes before Bridge.send() inserts a
+    # ping fence. The firmware buffers BLE writes in a LINK_RX_BUF (6144 B)
+    # stream buffer that drains only as fast as commands execute; BLE delivers
+    # faster than a 1 KB I2C write executes (~23 ms at 400 kHz), so an
+    # unthrottled burst overflows it and frames are dropped (-> host timeout).
+    burst_window = 4096
 
     def __init__(self, address: str, *, connect_timeout: float = 10.0):
         _require_bleak()

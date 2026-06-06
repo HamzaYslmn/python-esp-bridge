@@ -107,13 +107,6 @@ class OLED:
     def command(self, *cmds: int, wait: bool = True) -> None:
         self._i2c.write(self.addr, bytes([_CMD, *cmds]), self._bus, wait=wait)
 
-    def _write_data(self, data: bytes, *, wait: bool = True) -> None:
-        chunk = self._chunk
-        for off in range(0, len(data), chunk):
-            self._i2c.write(self.addr, bytes([_DATA]) + data[off : off + chunk],
-                            self._bus,
-                            wait=wait and off + chunk >= len(data))
-
     # ---- drawing ---------------------------------------------------------------
 
     def show(self, image=None) -> None:
@@ -127,15 +120,26 @@ class OLED:
         # the panel wants the top pixel in bit 0, hence the bit reversal).
         raw = image.transpose(self._Image.Transpose.TRANSPOSE).tobytes()
         bpr = self.height // 8  # transposed row = bpr bytes, one per page
-        low = 0x00 | (self.colstart & 0x0F)
-        high = 0x10 | (self.colstart >> 4)
         pages = self.height // 8
+        chunk = self._chunk
         for page in range(pages):
+            data = raw[page::bpr].translate(_BITREV)
             # Pipelined: everything fire-and-forget except the final data
             # write, which acts as the frame sync (firmware runs in order).
-            self.command(0xB0 + page, low, high, wait=False)
-            self._write_data(raw[page::bpr].translate(_BITREV),
-                             wait=page == pages - 1)
+            # A heap-squeezed firmware Wire buffer (128 B over BLE on a
+            # classic ESP32) can't take a whole 128-byte page in one write,
+            # so a page may span several transactions. Re-address the page +
+            # column before EVERY chunk: clones disagree on whether the
+            # column pointer survives a transaction boundary, and explicit
+            # addressing renders correctly on all of them.
+            for off in range(0, len(data), chunk):
+                col = self.colstart + off
+                self.command(0xB0 + page, 0x00 | (col & 0x0F),
+                             0x10 | (col >> 4), wait=False)
+                end = min(off + chunk, len(data))
+                self._i2c.write(self.addr, bytes([_DATA]) + data[off:end],
+                                self._bus,
+                                wait=page == pages - 1 and end >= len(data))
 
     @contextlib.contextmanager
     def draw(self):
