@@ -87,7 +87,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       uint8_t buf[255];
       size_t got = w->requestFrom(p[1], rlen);
       if (got != rlen) { proto_reply_err(seq, cmd, ST_IO); return; }
-      for (uint8_t i = 0; i < rlen; i++) buf[i] = w->read();
+      w->readBytes(buf, rlen);  // bulk drain, not 255 virtual read() calls
       proto_reply(seq, cmd, buf, rlen);
       break;
     }
@@ -103,7 +103,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       uint8_t buf[255];
       size_t got = w->requestFrom(addr, rlen);
       if (got != rlen) { proto_reply_err(seq, cmd, ST_IO); return; }
-      for (uint8_t i = 0; i < rlen; i++) buf[i] = w->read();
+      w->readBytes(buf, rlen);  // bulk drain, not 255 virtual read() calls
       proto_reply(seq, cmd, buf, rlen);
       break;
     }

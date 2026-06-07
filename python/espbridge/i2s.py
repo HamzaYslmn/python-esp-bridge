@@ -67,15 +67,17 @@ class I2s:
             n = int(seconds * self._rate) * self._frame
         if n is None:
             n = _CHUNK
-        out = bytearray()
-        while len(out) < n:
-            want = min(_CHUNK, n - len(out))
+        parts: list[bytes] = []
+        got = 0
+        while got < n:
+            want = min(_CHUNK, n - got)
             chunk = self._b.request(C.I2S_READ, struct.pack(">H", want),
                                     timeout=10.0)
-            out += chunk
             if not chunk:
                 break
-        return bytes(out)
+            parts.append(chunk)
+            got += len(chunk)
+        return b"".join(parts)
 
     def end(self) -> None:
         self._b.request(C.I2S_DEINIT)

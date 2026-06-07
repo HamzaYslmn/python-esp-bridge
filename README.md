@@ -45,7 +45,8 @@ are implemented in Python where they are easy to read, test and extend.
        print(esp.info)                        # chip, MAC, capabilities
 
        esp.gpio.mode(2, "output")             # like RPi GPIO, but on the ESP32
-       esp.gpio.write(2, 1)
+       esp.gpio.write(2, 1)                    # returns the pin's read-back level
+       esp.gpio.write(2, 1, verify=True)      # ...and raises if it didn't take
        print(esp.adc.read_mv(34), "mV")
        esp.dac.write(25, 128)                 # true analog out (classic ESP32)
        esp.pwm.servo(13, angle=90)
@@ -74,7 +75,7 @@ are implemented in Python where they are easy to read, test and extend.
 
 | module | highlights |
 |--------|------------|
-| GPIO   | modes incl. pull-up/down & open-drain, batch writes, edge interrupts with debounce → Python callbacks |
+| GPIO   | modes incl. pull-up/down & open-drain, batch writes, writes return the pin's read-back level for confirmation (`verify=` raises on mismatch), edge interrupts with debounce → Python callbacks |
 | ADC    | raw + calibrated mV, attenuation config (ADC2/Wi-Fi conflict guarded) |
 | DAC    | 8-bit output + hardware cosine generator (classic ESP32 / S2) |
 | PWM    | LEDC: any pin, freq/resolution, `duty_pct`, `tone`, `servo` |

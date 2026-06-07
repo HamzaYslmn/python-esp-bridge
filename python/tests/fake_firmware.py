@@ -199,7 +199,7 @@ class FakeFirmware:
                 self._reply_err(seq, cmd, C.Status.BAD_PIN)
             else:
                 self.gpio_levels[p[0]] = p[1]
-                self._reply(seq, cmd)
+                self._reply(seq, cmd, bytes([p[1]]))  # echo level back (read-back ACK)
         elif cmd == C.GPIO_READ:
             self._reply(seq, cmd, bytes([self.gpio_levels.get(p[0], 0)]))
         elif cmd == C.GPIO_WRITE_MASK:

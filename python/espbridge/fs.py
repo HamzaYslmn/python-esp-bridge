@@ -32,14 +32,16 @@ class RemoteFile:
 
     def read(self, n: int | None = None) -> bytes:
         """Read n bytes (whole file when n is None)."""
-        out = bytearray()
-        while n is None or len(out) < n:
-            want = _CHUNK if n is None else min(_CHUNK, n - len(out))
+        parts: list[bytes] = []
+        got = 0
+        while n is None or got < n:
+            want = _CHUNK if n is None else min(_CHUNK, n - got)
             chunk = self._b.request(C.FS_READ, struct.pack(">BH", self._fd, want))
-            out += chunk
+            parts.append(chunk)
+            got += len(chunk)
             if len(chunk) < want:  # EOF
                 break
-        return bytes(out)
+        return b"".join(parts)
 
     def write(self, data: bytes) -> int:
         written = 0

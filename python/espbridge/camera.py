@@ -61,16 +61,17 @@ class Camera:
         """Grab one frame and pull it across the link (JPEG bytes)."""
         r = self._b.request(C.CAM_CAPTURE, timeout=10.0)
         total = struct.unpack(">I", r[:4])[0]
-        out = bytearray()
-        while len(out) < total:
+        out = bytearray(total)  # size known up front: fill by slice, no O(n^2) growth
+        pos = 0
+        while pos < total:
             chunk = self._b.request(
-                C.CAM_READ, struct.pack(">IH", len(out),
-                                        min(_CHUNK, total - len(out))))
+                C.CAM_READ, struct.pack(">IH", pos, min(_CHUNK, total - pos)))
             if not chunk:
                 break
-            out += chunk
+            out[pos:pos + len(chunk)] = chunk
+            pos += len(chunk)
         self._b.request(C.CAM_RELEASE)
-        return bytes(out)
+        return bytes(out[:pos])
 
     def set(self, prop: str, value: int) -> None:
         """Tune the sensor: framesize, quality, brightness (-2..2),

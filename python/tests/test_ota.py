@@ -1,6 +1,9 @@
 """OTA: chunked image transfer, progress, partition-scheme error."""
+import math
+
 import pytest
 
+from espbridge import constants as C
 from espbridge.errors import UnsupportedError
 
 
@@ -17,7 +20,7 @@ def test_flash_roundtrip(bridge, fw):
     assert fw.ota_size == 5000
     assert fw.ota_committed is True
     assert ticks[-1] == (5000, 5000)
-    assert len(ticks) == 5  # 1024 B chunks
+    assert len(ticks) == math.ceil(5000 / C.OTA_CHUNK)  # one tick per chunk
 
 
 def test_flash_no_reboot(bridge, fw):

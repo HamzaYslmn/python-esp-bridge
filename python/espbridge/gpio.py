@@ -5,6 +5,7 @@ import struct
 from dataclasses import dataclass
 
 from . import constants as C
+from .errors import BridgeError
 
 MODES = {
     "input": 0,
@@ -40,8 +41,26 @@ class Gpio:
         m = MODES[mode] if isinstance(mode, str) else int(mode)
         self._b.request(C.GPIO_SET_MODE, bytes([pin, m]))
 
-    def write(self, pin: int, value: int | bool) -> None:
-        self._b.request(C.GPIO_WRITE, bytes([pin, 1 if value else 0]))
+    def write(self, pin: int, value: int | bool, *, verify: bool = False) -> int:
+        """Set a pin; returns the level the firmware reads back as confirmation.
+
+        The call already blocks for the firmware's ACK (it raises RemoteError /
+        BridgeTimeoutError if the command didn't execute). The returned value is
+        the pin's *actual* level read immediately after the write — for a normal
+        push-pull output that echoes what you wrote; for open-drain or a pin not
+        in output mode it reports the real pad state. With ``verify=True`` a
+        mismatch (pin not an output, shorted, or driven by something else)
+        raises BridgeError instead of returning silently.
+        """
+        want = 1 if value else 0
+        r = self._b.request(C.GPIO_WRITE, bytes([pin, want]))
+        level = r[0] if r else want  # r is empty only on pre-read-back firmware
+        if verify and level != want:
+            raise BridgeError(
+                f"GPIO{pin} read back {level} after writing {want}: pin not in "
+                "output mode, shorted, or driven by another source?"
+            )
+        return level
 
     def read(self, pin: int) -> int:
         return self._b.request(C.GPIO_READ, bytes([pin]))[0]

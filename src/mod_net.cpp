@@ -46,7 +46,9 @@ static void closed_event(uint8_t handle, uint8_t reason) {
 }
 
 void net_poll() {
-  static uint8_t buf[1 + 6 + NET_CHUNK];  // worst case: UDP header + chunk
+  // Stack local, not static BSS: net_task has an 8 KB stack and 519 B here is
+  // well within it, freeing that RAM for the heap-constrained Wi-Fi+BLE coex.
+  uint8_t buf[1 + 6 + NET_CHUNK];  // worst case: UDP header + chunk
   for (uint8_t i = 0; i < NET_MAX_SOCKETS; i++) {
     Sock* s = &socks[i];
     uint8_t handle = i + 1;

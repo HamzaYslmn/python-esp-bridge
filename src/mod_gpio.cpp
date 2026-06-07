@@ -70,11 +70,15 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
-    case 0x02: {  // WRITE: pin, value
+    case 0x02: {  // WRITE: pin, value -> level read back (confirmation ACK)
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (!valid_pin(p[0])) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       digitalWrite(p[0], p[1] ? HIGH : LOW);
-      proto_reply_ok(seq, cmd);
+      // Read the pin straight back so the host gets the actual resulting level,
+      // not just "command executed". For a push-pull output this echoes the
+      // driven value; for open-drain / input it reports the real pad state.
+      uint8_t v = (uint8_t)digitalRead(p[0]);
+      proto_reply(seq, cmd, &v, 1);
       break;
     }
 

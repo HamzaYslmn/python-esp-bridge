@@ -295,7 +295,10 @@ OTA_WRITE = _cmd(MOD_OTA, 0x02)
 OTA_END = _cmd(MOD_OTA, 0x03)
 OTA_ABORT = _cmd(MOD_OTA, 0x04)
 
-OTA_CHUNK = 1024
+# Full-frame OTA chunks (was 1024): halves the round-trip count per MB. The
+# firmware's OTA_WRITE handler streams whatever length arrives into esp_ota_write,
+# so the only ceiling is MAX_PAYLOAD; -8 leaves room for the frame header/CRC.
+OTA_CHUNK = MAX_PAYLOAD - 8
 
 # CAM
 CAM_INIT = _cmd(MOD_CAM, 0x01)

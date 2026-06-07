@@ -22,6 +22,8 @@ from ..errors import BridgeError, NoDeviceError
 
 ADV_NAME_PREFIX = "espbridge_"  # firmware advertises espbridge_<mac>[_<name>]
 
+_RX_SHUTDOWN = object()  # sentinel put on the RX queue to wake a blocked read()
+
 
 @dataclass(frozen=True)
 class BleDeviceInfo:
@@ -99,7 +101,8 @@ class BleTransport:
     def __init__(self, address: str, *, connect_timeout: float = 10.0):
         _require_bleak()
         self.address = address
-        self._rx: queue.Queue[bytes] = queue.Queue()
+        self._rx: queue.Queue = queue.Queue()
+        self._chunk_size = 20  # write-without-response size; grows after MTU exchange
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever,
                                         daemon=True, name="espbridge-ble")
@@ -139,16 +142,19 @@ class BleTransport:
         else:
             log.warning("BLE MTU exchange did not complete; writes will be "
                         "chunked at 20 bytes (slow link)")
+        # Cache the negotiated chunk size: stable once the MTU exchange lands,
+        # so per-write attribute reads are unnecessary.
+        self._chunk_size = max(20, self._rx_char.max_write_without_response_size)
 
     def _on_notify(self, _char, data: bytearray) -> None:
         self._rx.put(bytes(data))
 
     async def _write(self, data: bytes) -> None:
-        # Re-read per write: the limit can grow once the MTU exchange lands.
-        chunk = max(20, self._rx_char.max_write_without_response_size)
+        chunk = self._chunk_size  # cached at connect; no per-write attribute read
+        mv = memoryview(data)     # zero-copy chunk slices
         for i in range(0, len(data), chunk):
             await self._client.write_gatt_char(
-                self._rx_char, data[i : i + chunk], response=False)
+                self._rx_char, mv[i : i + chunk], response=False)
 
     async def _disconnect(self) -> None:
         if self._client is not None:
@@ -158,10 +164,10 @@ class BleTransport:
                 pass
 
     def read(self) -> bytes:
-        try:
-            return self._rx.get(timeout=0.05)
-        except queue.Empty:
-            return b""
+        # Block until a notification lands (or close() injects the sentinel) —
+        # no idle polling, and inbound frames hand off the instant they arrive.
+        item = self._rx.get()
+        return b"" if item is _RX_SHUTDOWN else item
 
     def write(self, data: bytes) -> None:
         self._run(self._write(data), timeout=10.0)
@@ -177,6 +183,7 @@ class BleTransport:
         self._thread.join(timeout=2.0)
 
     def close(self) -> None:
+        self._rx.put(_RX_SHUTDOWN)  # wake the reader thread blocked in read()
         try:
             self._run(self._disconnect(), timeout=5.0)
         except Exception:

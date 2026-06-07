@@ -62,6 +62,13 @@ def test_gpio_write_read(bridge, fw):
     assert fw.gpio_levels[4] == 1 and fw.gpio_levels[5] == 0 and fw.gpio_levels[12] == 1
 
 
+def test_gpio_write_returns_readback(bridge, fw):
+    bridge.gpio.mode(2, "output")
+    assert bridge.gpio.write(2, 1) == 1          # write returns the confirmed level
+    assert bridge.gpio.write(2, 0) == 0
+    assert bridge.gpio.write(2, 1, verify=True) == 1  # verify passes when it matches
+
+
 def test_remote_error_maps_status(bridge):
     with pytest.raises(RemoteError) as ei:
         bridge.gpio.write(13, 1)  # fake: write before set_mode -> BAD_PIN
