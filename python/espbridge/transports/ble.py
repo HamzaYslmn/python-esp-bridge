@@ -88,6 +88,13 @@ class BleTransport:
     # faster than a 1 KB I2C write executes (~23 ms at 400 kHz), so an
     # unthrottled burst overflows it and frames are dropped (-> host timeout).
     burst_window = 4096
+    # Same cap, applied to *waited* requests too: pipelined/concurrent requests
+    # (several threads, or large echoes) would otherwise flood the same buffer
+    # because the slow BLE notify reply-path can't complete them fast enough.
+    # Bounds in-flight bytes to ~one frame past this, well under LINK_RX_BUF.
+    # Serial leaves this unset: it drains at line rate and self-paces, so
+    # capping it would needlessly throttle its pipelining.
+    max_inflight = 4096
 
     def __init__(self, address: str, *, connect_timeout: float = 10.0):
         _require_bleak()

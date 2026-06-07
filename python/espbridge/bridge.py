@@ -236,7 +236,13 @@ class Bridge:
         self._pending_lock = threading.Lock()
         self._seq = 0
         self._write_lock = threading.Lock()
-        self._unacked = 0  # fire-and-forget bytes since the last reply (see send)
+        # In-flight bytes written but not yet known-drained by the firmware.
+        # Any reply proves the firmware consumed everything before it (requests
+        # run in arrival order), so a reply resets this to 0. _flow gates writes
+        # against the transport's window so pipelined traffic can't overflow the
+        # firmware's link RX buffer (the BLE rx-overflow / frame-loss path).
+        self._unacked = 0
+        self._flow = threading.Condition()
         self._handlers: dict[int | None, list] = {}
         self._handlers_lock = threading.Lock()
         self._ready = threading.Event()
@@ -343,6 +349,7 @@ class Bridge:
         if self._closing:
             return
         self._closing = True
+        self._notify_writers()  # release any writer blocked on the window
         if self.reset_on_exit and self._ready.is_set():
             try:
                 self.request(C.SYS_RESET, timeout=1.0)
@@ -381,6 +388,7 @@ class Bridge:
         with self._pending_lock:
             for p in self._pending.values():
                 p.event.set()
+        self._notify_writers()  # release writers blocked on the window
 
     def _handle_frame(self, frame: Frame) -> None:
         if frame.is_event:
@@ -462,23 +470,56 @@ class Bridge:
                 log.warning(f"{C.cmd_name(cmd)}: no response, "
                             f"retrying ({attempt + 1}/{retries})")
 
+    def _reserve_window(self, size: int) -> None:
+        """Atomically wait for room in the firmware's RX window, then reserve
+        `size` bytes — gating pipelined/concurrent requests so they can't
+        overflow its link buffer. Wait and reserve happen under one lock, or
+        every caller would pass the check before any increments the counter
+        (then all write at once → overflow). Only transports that set
+        `max_inflight` (BLE) wait; serial just accounts the bytes (for send()'s
+        fence) and never blocks. Falls through after a wait rather than
+        deadlocking a quiet link — the buffer holds one extra frame."""
+        with self._flow:
+            window = getattr(self._t, "max_inflight", None)
+            if window and self._ready.is_set():
+                while self._unacked + size > window and not self._closing:
+                    if not self._flow.wait(timeout=self.timeout):
+                        break
+            self._unacked += size
+
+    def _release_window(self, size: int) -> None:
+        with self._flow:
+            self._unacked = max(0, self._unacked - size)
+            self._flow.notify_all()
+
+    def _notify_writers(self) -> None:
+        """Wake every writer blocked on the in-flight window (shutdown paths)."""
+        with self._flow:
+            self._flow.notify_all()
+
     def _request_once(self, cmd: int, payload: bytes, timeout: float | None) -> bytes:
         seq = self._alloc_seq()
         p = self._pending[seq]
         debug = log.isEnabledFor(logging.DEBUG)
         if debug:
             log.debug(f"-> {C.cmd_name(cmd)} seq={seq} ({len(payload)} B)")
+        data = encode_frame(0, seq, cmd, payload)
+        self._reserve_window(len(data))
+        replied = False
         try:
             with self._write_lock:
-                self._t.write(encode_frame(0, seq, cmd, payload))
+                self._t.write(data)
             if not p.event.wait(timeout if timeout is not None else self.timeout):
                 raise BridgeTimeoutError(f"no response for {C.cmd_name(cmd)}")
             if p.frame is None:
                 raise BridgeTimeoutError("connection closed while waiting for response")
+            replied = True
             # Any reply proves the firmware consumed every byte sent before it
             # (requests are executed in arrival order): the link RX buffer is
-            # empty again, so the fire-and-forget window restarts from zero.
-            self._unacked = 0
+            # empty again, so the in-flight window restarts from zero.
+            with self._flow:
+                self._unacked = 0
+                self._flow.notify_all()
             if debug:
                 log.debug(f"<- {C.cmd_name(cmd)} seq={seq} "
                           f"{'ERR' if p.frame.is_error else 'ok'} "
@@ -488,6 +529,8 @@ class Bridge:
                 raise RemoteError(status, cmd)
             return p.frame.payload
         finally:
+            if not replied:  # write failed / timed out: free the reserved window
+                self._release_window(len(data))
             with self._pending_lock:
                 self._pending.pop(seq, None)
 
@@ -521,10 +564,14 @@ class Bridge:
         """
         data = encode_frame(0, 0, cmd, payload)
         window = getattr(self._t, "burst_window", None)
-        if window and self._ready.is_set() and self._unacked + len(data) > window:
-            self.request(C.SYS_PING, b"\x00")  # fence: resets _unacked
+        if window and self._ready.is_set():
+            with self._flow:
+                over = self._unacked + len(data) > window
+            if over:
+                self.request(C.SYS_PING, b"\x00")  # fence: a reply resets _unacked
         with self._write_lock:
             self._t.write(data)
+        with self._flow:
             self._unacked += len(data)
 
     # ---- conveniences ---------------------------------------------------------------------

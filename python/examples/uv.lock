@@ -266,7 +266,7 @@ wheels = [
 
 [[package]]
 name = "espbridge-examples"
-version = "0.1.1"
+version = "0.1.2"
 source = { virtual = "." }
 dependencies = [
     { name = "adafruit-circuitpython-bme280" },
@@ -521,7 +521,7 @@ wheels = [
 
 [[package]]
 name = "python-esp-bridge"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "../" }
 dependencies = [
     { name = "pyserial" },
