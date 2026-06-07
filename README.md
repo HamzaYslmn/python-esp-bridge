@@ -25,6 +25,8 @@ are implemented in Python where they are easy to read, test and extend.
 
 ## Quick start
 
+*Works on Raspberry Pi OS, Linux, Windows, and macOS (requires Python ≥ 3.10).*
+
 1. **Flash the firmware once** — install the **`python esp bridge`** library
    (Arduino IDE Library Manager), open *File → Examples → python esp bridge →
    Bridge*, pick partition scheme *Huge APP*, hit Upload. The whole sketch is
@@ -222,32 +224,32 @@ Library Manager); the Python package lives under `python/`.
 ## Supported hardware
 
 Primary target: classic **ESP32** DevKits (ESP-32S / ESP-32D, 30- and 38-pin,
-CP2102/CH340 USB). **ESP32-S2/S3/C3** build via the same sketch (native USB;
-ESP-NOW works everywhere; no DAC on S3/C3). Capabilities are reported by the
+CP2102/CH340 USB). **ESP32-S2/S3/C3/C6/H2** build via the same sketch (native USB;
+ESP-NOW works everywhere; no DAC on S3/C3/C6/H2). Capabilities are reported by the
 firmware at connect time, so the Python API fails fast with a clear error for
 anything your chip lacks.
 
-> **Bluetooth note:** arduino-esp32 core 3.3.x ships the NimBLE host on
-> S3/C3/C6 — the bridge's Bluetooth code (BLE link + `esp.ble`) speaks
+> **Bluetooth note:** arduino-esp32 core 3.x ships the NimBLE host on
+> S3/C3/C6/H2 — the bridge's Bluetooth code (BLE link + `esp.ble`) speaks
 > Bluedroid, so on those chips the firmware currently builds USB-only.
 > Classic ESP32 keeps Bluedroid: full BLE link + Wi-Fi + ESP-NOW coexistence.
 
 > **Classic-ESP32 IRAM trade-off:** with Wi-Fi + Bluetooth both loaded the
 > chip's instruction RAM is full, so the default classic build skips SD-card
 > support (LittleFS still works) and deep/light sleep. Build with
-> `BRIDGE_ENABLE_BLE 0` (USB-only) to get SD + sleep back; S2/S3/C3/C6 have
+> `BRIDGE_ENABLE_BLE 0` (USB-only) to get SD + sleep back; S2/S3/C3/C6/H2 have
 > everything regardless. The Python API raises a clear `UnsupportedError`
 > either way (`Cap.SLEEP`, `Cap.SDMMC` probing).
 
-### Per-chip support matrix (v0.3.0 modules)
+### Per-chip support matrix (v0.3.5 modules)
 
-| | ESP32 | S2 | S3 | C3 | C6 |
-|---|---|---|---|---|---|
-| RMT / 1-Wire / CAN / I2S / NVS / OTA | ✓ | ✓ | ✓ | ✓ | ✓ |
-| LittleFS | ✓ | ✓ | ✓ | ✓ | ✓ |
-| SD (SPI) / sleep | BLE off only | ✓ | ✓ | ✓ | ✓ |
-| SDMMC slot | BLE off only | — | ✓ | — | — |
-| MCPWM (deadtime pair) | ✓ | — | ✓ | — | ✓ |
-| Camera (opt-in) | ✓ (PSRAM) | ✓ (PSRAM) | ✓ (PSRAM) | — | — |
-| Ethernet RMII (opt-in) | ✓ | — | — | — | — |
-| Ethernet SPI W5500 (opt-in) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| | ESP32 | S2 | S3 | C3 | C6 | H2 |
+|---|---|---|---|---|---|---|
+| RMT / 1-Wire / CAN / I2S / NVS / OTA | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| LittleFS | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| SD (SPI) / sleep | BLE off only | ✓ | ✓ | ✓ | ✓ | ✓ |
+| SDMMC slot | BLE off only | — | ✓ | — | — | — |
+| MCPWM (deadtime pair) | ✓ | — | ✓ | — | ✓ | ✓ |
+| Camera (opt-in) | ✓ (PSRAM) | ✓ (PSRAM) | ✓ (PSRAM) | — | — | — |
+| Ethernet RMII (opt-in) | ✓ | — | — | — | — | — |
+| Ethernet SPI W5500 (opt-in) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
