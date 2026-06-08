@@ -1,4 +1,3 @@
-Forza Horizon — DualSense Adaptive Triggers
 Attribution & Sponsor License (v1.0)
 Copyright (C) 2025 Hamza Yeşilmen ("HamzaYslmn")
 
@@ -15,7 +14,7 @@ using, copying, modifying, or distributing this software ("the Software").
    Subject to the conditions below, the copyright holder grants you a
    worldwide, royalty-free, non-exclusive license to:
 
-     (a) use and run the Software for any purpose, personal or commercial;
+     (a) use and run the Software for personal, non-commercial purposes only;
      (b) study and modify the Software and create derivative works; and
      (c) reproduce and distribute the Software and your derivative works, in
          source or compiled form.
@@ -31,7 +30,7 @@ using, copying, modifying, or distributing this software ("the Software").
        attribution:
 
          "Originally created by Hamza Yeşilmen (HamzaYslmn)."
-         Source:  https://github.com/HamzaYslmn/python-esp-bridge
+         Source:  https://github.com/HamzaYslmn/Forza-Horizon-DualSense-Python
 
        You may add your own attribution for your changes, but not in a way that
        removes, obscures, or misrepresents the attribution above.
@@ -82,5 +81,6 @@ using, copying, modifying, or distributing this software ("the Software").
    SOFTWARE.
 
 ================================================================================
-For other licensing arrangements, contact the copyright holder.
+For other licensing arrangements (including commercial licensing without
+attribution or sponsor requirements), please contact: resmiyslmn@gmail.com
 ================================================================================
