@@ -216,9 +216,7 @@ class Bridge:
                 log.debug(f"{label}: open failed: {e}")
                 errors.append(f"{label}: {e}")
                 continue
-            self._reader = threading.Thread(target=self._read_loop, daemon=True,
-                                            name="espbridge-reader")
-            self._reader.start()
+            self._start_reader()
             try:
                 if getattr(self._t, "needs_auth", False):
                     self._auth(password)
@@ -297,12 +295,14 @@ class Bridge:
 
         target = ble if isinstance(ble, str) else None
 
+        def _is_target(d) -> bool:
+            tmac = _norm_mac(target)
+            return (d.name == target or d.device_name == target
+                    or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac)
+
         def _strict_match(d) -> bool:
-            if target is not None:
-                tmac = _norm_mac(target)
-                if not (d.name == target or d.device_name == target
-                        or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac):
-                    return False
+            if target is not None and not _is_target(d):
+                return False
             if mac is not None and _norm_mac(d.mac) != _norm_mac(mac):
                 return False
             if name is not None and d.device_name != name:
@@ -320,10 +320,7 @@ class Bridge:
             # check is the authoritative comparison.
             devs = find_ble_devices()
             if target is not None:
-                tmac = _norm_mac(target)
-                devs = [d for d in devs
-                        if d.name == target or d.device_name == target
-                        or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac]
+                devs = [d for d in devs if _is_target(d)]
             if mac is not None:
                 devs = [d for d in devs if _norm_mac(d.mac) == _norm_mac(mac)] or devs
             if name is not None:
@@ -410,9 +407,7 @@ class Bridge:
         # Wait for the SYS_READY banner; if it doesn't arrive, pulse a manual
         # reset, then fall back to polling SYS_INFO (handles boards where
         # the auto-reset circuit is disabled or absent).
-        if self._ready.wait(3.0 if not reset_on_open else 1.5):
-            pass
-        elif reset_on_open:
+        if not self._ready.wait(3.0 if not reset_on_open else 1.5) and reset_on_open:
             self._t.pulse_reset()
             self._ready.wait(3.0)
 
@@ -467,6 +462,11 @@ class Bridge:
             # boards where a direct reset pulse is not.
             self._reconnect(current)
 
+    def _start_reader(self) -> None:
+        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+                                        name="espbridge-reader")
+        self._reader.start()
+
     def _reconnect(self, baud: int) -> None:
         """Reopen the serial port and redo the handshake (recovers a dead link)."""
         port = getattr(getattr(self._t, "ser", None), "port", None)
@@ -479,9 +479,7 @@ class Bridge:
         time.sleep(0.3)  # wait for the device to reboot after the close-time reset
         self._reset_state()
         self._t = SerialTransport(port, baud, usb_chip=chip)
-        self._reader = threading.Thread(target=self._read_loop, daemon=True,
-                                        name="espbridge-reader")
-        self._reader.start()
+        self._start_reader()
         self._handshake(reset_on_open=True)
 
     def close(self) -> None:
@@ -625,6 +623,7 @@ class Bridge:
                     raise self._timeout_error(cmd, timeout) from None
                 log.warning(f"{C.cmd_name(cmd)}: no response, "
                             f"retrying ({attempt + 1}/{retries})")
+        raise self._timeout_error(cmd, timeout)  # unreachable: loop always returns/raises
 
     def _reserve_window(self, size: int) -> None:
         """Wait for room in the firmware's RX window, then reserve `size` bytes.
@@ -647,18 +646,20 @@ class Bridge:
                         break
             self._unacked += size
 
+    def _decr_window(self, size: int, *, clear_send: bool = False) -> None:
+        with self._flow:
+            self._unacked = max(0, self._unacked - size)
+            if clear_send:
+                self._send_bytes = 0
+            self._flow.notify_all()
+
     def _ack_window(self, size: int) -> None:
         """A request's reply arrived: release that request's own reserved bytes,
         and clear pending send() bytes (the reply proves they were consumed)."""
-        with self._flow:
-            self._unacked = max(0, self._unacked - size)
-            self._send_bytes = 0
-            self._flow.notify_all()
+        self._decr_window(size, clear_send=True)
 
     def _release_window(self, size: int) -> None:
-        with self._flow:
-            self._unacked = max(0, self._unacked - size)
-            self._flow.notify_all()
+        self._decr_window(size)
 
     def _notify_writers(self) -> None:
         """Wake every writer blocked on the in-flight window (shutdown paths)."""

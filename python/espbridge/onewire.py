@@ -75,8 +75,9 @@ class OneWire:
             self.write(pin, bytes([ALARM_SEARCH if alarm else SEARCH_ROM]))
             disc = 0
             for bit in range(64):
+                byte_i, bit_i = divmod(bit, 8)
                 if bit + 1 < last_disc:
-                    hint = rom[bit // 8] >> (bit % 8) & 1
+                    hint = rom[byte_i] >> bit_i & 1
                 else:
                     hint = 1 if bit + 1 == last_disc else 0
                 id_bit, cmp_bit, taken = self._triplet(pin, hint)
@@ -85,9 +86,9 @@ class OneWire:
                 if not id_bit and not cmp_bit and taken == 0:
                     disc = bit + 1  # remember this as the last fork where we chose 0
                 if taken:
-                    rom[bit // 8] |= 1 << (bit % 8)
+                    rom[byte_i] |= 1 << bit_i
                 else:
-                    rom[bit // 8] &= ~(1 << (bit % 8))
+                    rom[byte_i] &= ~(1 << bit_i)
             if crc8(bytes(rom)) == 0:
                 roms.append(rom.hex())
             last_disc = disc

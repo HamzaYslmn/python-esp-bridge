@@ -42,14 +42,18 @@ def _short(value, limit: int = 200) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
+def _call_head(name: str, params: dict) -> str:
+    args = ", ".join(f"{k}={v!r}" for k, v in params.items())
+    return f"{name}({args})"
+
+
 def _feedback_message(name: str, params: dict, result) -> str:
     # When the tool already returns a human-readable confirmation string (e.g.
     # "GPIO2 set to output"), that string is the feedback. For structured
     # results (dicts, ints, etc.), format as "call(args) -> short_repr".
     if isinstance(result, str):
         return result
-    args = ", ".join(f"{k}={v!r}" for k, v in params.items())
-    head = f"{name}({args})"
+    head = _call_head(name, params)
     return head if result is None else f"{head} -> {_short(result)}"
 
 
@@ -79,8 +83,7 @@ def emit_feedback(name: str, params: dict, result, *, ok: bool = True) -> None:
             msg, level = _feedback_message(name, params, result), "info"
             log.info(msg)
         else:
-            args = ", ".join(f"{k}={v!r}" for k, v in params.items())
-            msg = f"{name}({args}) FAILED: {type(result).__name__}: {result}"
+            msg = f"{_call_head(name, params)} FAILED: {type(result).__name__}: {result}"
             level = "warning"
             log.warning(msg)
         if get_context is not None:

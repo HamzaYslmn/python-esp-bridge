@@ -127,14 +127,15 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x04: {  // STATUS -> status, ip[4], gw[4], mask[4], rssi i8, channel, mac[6]
       uint8_t buf[21];
-      buf[0] = (uint8_t)WiFi.status();
+      wl_status_t st = WiFi.status();
+      buf[0] = (uint8_t)st;
       uint32_t ip = (uint32_t)WiFi.localIP();
       uint32_t gw = (uint32_t)WiFi.gatewayIP();
       uint32_t mask = (uint32_t)WiFi.subnetMask();
       memcpy(buf + 1, &ip, 4);
       memcpy(buf + 5, &gw, 4);
       memcpy(buf + 9, &mask, 4);
-      buf[13] = (uint8_t)(int8_t)(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+      buf[13] = (uint8_t)(int8_t)(st == WL_CONNECTED ? WiFi.RSSI() : 0);
       buf[14] = (uint8_t)WiFi.channel();
       WiFi.macAddress(buf + 15);
       proto_reply(seq, cmd, buf, 21);

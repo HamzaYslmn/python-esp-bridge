@@ -125,7 +125,8 @@ class Watch:
                      outside=(lo, hi)    — value outside a band
                      change=delta        — value moved by >= delta since last event
         hysteresis: for above/below, how far the value must fall back before the
-                   rule re-arms (suppresses chatter around the threshold).
+                   rule re-arms (suppresses chatter around the threshold). Ignored
+                   by equals/between/outside/change (those use exact bands/deltas).
         period_ms: how often the board samples (default 100 ms).
         on_enter/on_exit: emit when the condition becomes true / false again.
         initial:   also emit one event for the very first sample (current state).
@@ -188,7 +189,7 @@ class Watch:
         for _ in range(r[0]):
             wid, state = r[pos], r[pos + 1]
             (value,) = struct.unpack_from(">i", r, pos + 2)
-            pos += 6
+            pos += 6  # id u8 + state u8 + value i32
             out.append((wid, bool(state), value))
         return out
 

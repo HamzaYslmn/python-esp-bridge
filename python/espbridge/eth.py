@@ -58,6 +58,8 @@ class Eth:
         bridge.on_event(C.ETH_STATE_EVT, self._on_state)
 
     def _on_state(self, payload: bytes) -> None:
+        if not payload:
+            return
         if payload[0] == 2:  # state 2 = got IP from DHCP
             self._ip = _ip(payload[1:5])
             self._got_ip.set()

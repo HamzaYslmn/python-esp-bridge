@@ -16,6 +16,8 @@ This module deliberately does not import luma — it only implements the
 """
 from __future__ import annotations
 
+from ..constants import MAX_PAYLOAD
+
 _CMD_MODE = 0x00   # control byte: command stream follows
 _DATA_MODE = 0x40  # control byte: display data follows
 
@@ -31,13 +33,15 @@ class LumaI2C:
         # the control byte prefix. Old firmware had a 128-byte Wire TX buffer
         # that silently truncated longer writes, so we respect max_write when
         # available and fall back to 2046 (a safe limit on current firmware).
+        # Read once here, so construct LumaI2C *after* esp.i2c.init() to pick
+        # up the firmware-negotiated buffer size.
         self._chunk = getattr(i2c, "max_write", 2046) - 1
 
     def command(self, *cmd: int) -> None:
         self._i2c.write(self._addr, bytes([_CMD_MODE, *cmd]), self._bus)
 
     def data(self, data) -> None:
-        data = bytes(bytearray(data))  # luma may pass a list of ints
+        data = bytes(data)  # luma may pass a list of ints
         for off in range(0, len(data), self._chunk):
             self._i2c.write(self._addr,
                             bytes([_DATA_MODE]) + data[off : off + self._chunk],
@@ -77,7 +81,7 @@ class LumaSPI:
         # Split large payloads into chunks that fit within the bridge's max
         # transfer size. CS is toggled around each chunk, but display
         # controllers latch data per byte, so mid-transfer CS gaps are fine.
-        max_chunk = 2046  # bridge MAX_PAYLOAD minus the per-transfer header
+        max_chunk = MAX_PAYLOAD - 2  # SPI_TRANSFER payload cap minus header (matches spi._CHUNK)
         for off in range(0, len(data), max_chunk):
             self._spi.transfer(data[off : off + max_chunk], cs=self._cs, host=self._host)
 
@@ -87,7 +91,7 @@ class LumaSPI:
 
     def data(self, data) -> None:
         self._gpio.write(self._dc, 1)
-        self._send(bytes(bytearray(data)))
+        self._send(bytes(data))
 
     def cleanup(self) -> None:
         pass  # nothing to release; the Bridge owns the SPI bus and GPIO pins

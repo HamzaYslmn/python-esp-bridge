@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import struct
 import threading
+import time
 
 from . import constants as C
 
@@ -69,7 +70,6 @@ class UartPort:
 
     def read_until(self, sep: bytes = b"\n", timeout: float = 2.0) -> bytes:
         """Read until `sep` is seen; on timeout returns whatever is buffered."""
-        import time
         deadline = time.monotonic() + timeout
         with self._cond:
             while True:

@@ -50,6 +50,11 @@ class PinStatus:
         return self.pwm_freq > 0
 
 
+def _pin_status(pin: int, level: int, mode: int, freq: int, duty: int) -> PinStatus:
+    name = _MODE_NAMES.get(mode)
+    return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty)
+
+
 class Gpio:
     """Digital pins: modes, read/write, batch ops, edge interrupts.
 
@@ -132,8 +137,7 @@ class Gpio:
             raise
         level, mode = r[0], r[1]
         freq, duty = struct.unpack_from(">II", r, 2)
-        name = _MODE_NAMES.get(mode)
-        return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty)
+        return _pin_status(pin, level, mode, freq, duty)
 
     def dump(self) -> list[PinStatus]:
         """Return the full status of every active pin in a single round-trip.
@@ -152,8 +156,7 @@ class Gpio:
             pin, mode, level = r[pos], r[pos + 1], r[pos + 2]
             freq, duty = struct.unpack_from(">II", r, pos + 3)
             pos += 11
-            name = _MODE_NAMES.get(mode)
-            out.append(PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty))
+            out.append(_pin_status(pin, level, mode, freq, duty))
         return out
 
     def watch(self, pin: int, edge: str = "change", debounce_ms: int = 0, callback=None) -> None:

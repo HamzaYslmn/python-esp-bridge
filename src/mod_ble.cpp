@@ -58,15 +58,16 @@ static BLEUUID wire_to_uuid(const uint8_t* w) {
 }
 
 // ---- scan ---------------------------------------------------------------------
+static const uint8_t BLE_ADV_MAX_PAYLOAD = 62;  // max adv+scanrsp bytes we forward
 class AdvCb : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
-    uint8_t buf[8 + 62];
+    uint8_t buf[8 + BLE_ADV_MAX_PAYLOAD];
     // getNative() returns a pointer to the raw 6-byte address array.
     // The type changed across arduino-esp32 versions; uint8_t* is correct on core 3.x.
     memcpy(buf, dev.getAddress().getNative(), 6);
     buf[6] = (uint8_t)dev.getAddressType();
     buf[7] = (uint8_t)(int8_t)dev.getRSSI();
-    uint8_t plen = dev.getPayloadLength() > 62 ? 62 : dev.getPayloadLength();
+    uint8_t plen = dev.getPayloadLength() > BLE_ADV_MAX_PAYLOAD ? BLE_ADV_MAX_PAYLOAD : dev.getPayloadLength();
     memcpy(buf + 8, dev.getPayload(), plen);
     proto_send_event(BLE_ADV_EVT, buf, 8 + plen);
   }

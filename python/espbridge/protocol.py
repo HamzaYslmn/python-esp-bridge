@@ -121,7 +121,7 @@ def decode_frame(encoded: bytes) -> Frame:
     if len(logical) < 6:
         raise ProtocolError(f"frame too short: {len(logical)} bytes")
     (crc,) = struct.unpack_from(">H", logical, len(logical) - 2)
-    if crc16_ccitt(logical[:-2]) != crc:
+    if crc16_ccitt(memoryview(logical)[:-2]) != crc:
         raise ProtocolError("CRC mismatch")
     flags, seq, cmd = _HDR.unpack_from(logical)
     return Frame(flags, seq, cmd, logical[4:-2])

@@ -29,7 +29,7 @@ class I2c:
         if self._max_write is not None:
             return self._max_write
         info = self._b.info
-        if info is not None and info.fw_version < (0, 0, 2):
+        if info is not None and info.fw_version < (0, 3, 0):
             return 128
         return C.MAX_PAYLOAD - 2  # 2 bytes of header (bus index + device address) come before the data
 
@@ -50,8 +50,8 @@ class I2c:
         writes with a final waited one to sync (the firmware executes
         requests in arrival order)."""
         if len(data) > self.max_write:
-            raise ValueError(f"max {self.max_write} bytes per I2C write "
-                             "(update the firmware for 2046)")
+            raise ValueError(f"max {self.max_write} bytes per I2C write on this firmware "
+                             f"(newer firmware raises this to {C.MAX_PAYLOAD - 2} bytes)")
         payload = bytes([bus, addr]) + bytes(data)
         if wait:
             self._b.request(C.I2C_WRITE, payload)

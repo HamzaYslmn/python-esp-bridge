@@ -6,6 +6,11 @@ import struct
 from . import constants as C
 
 
+def _full_scale(res_bits: int) -> int:
+    """Largest raw LEDC duty count for a given resolution (2**res_bits - 1)."""
+    return (1 << res_bits) - 1
+
+
 class Pwm:
     """PWM output via the LEDC peripheral, plus servo/tone helpers.
 
@@ -32,7 +37,7 @@ class Pwm:
         if pin not in self._attached:
             self.attach(pin)
         _, res = self._attached[pin]
-        self.write(pin, round((2**res - 1) * max(0.0, min(100.0, percent)) / 100.0))
+        self.write(pin, round(_full_scale(res) * max(0.0, min(100.0, percent)) / 100.0))
 
     def detach(self, pin: int) -> None:
         """Stop PWM on a pin and free its LEDC channel."""
@@ -48,4 +53,4 @@ class Pwm:
         if self._attached.get(pin) != (50, 14):  # servo needs 50 Hz, 14-bit resolution
             self.attach(pin, 50, 14)
         us = min_us + (max_us - min_us) * max(0.0, min(180.0, angle)) / 180.0
-        self.write(pin, round(us / 20000.0 * (2**14 - 1)))
+        self.write(pin, round(us / 20000.0 * _full_scale(14)))
