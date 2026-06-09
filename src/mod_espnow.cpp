@@ -15,14 +15,15 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_mac.h>
+#include <atomic>
 
 static bool inited = false;
 
 // Send-completion plumbing. Sends are serialized; TX callbacks arrive in order, so
 // the counter drains fire-and-forget sends (emit SEND_EVT) before the blocking sync send (give sem).
 static SemaphoreHandle_t tx_done_sem;
-static volatile uint8_t ff_outstanding = 0;          // fire-and-forget sends in flight
-static volatile uint8_t sync_status = 1;             // last sync result (0 = ACKed)
+static std::atomic<uint8_t> ff_outstanding{0};       // fire-and-forget sends in flight
+static std::atomic<uint8_t> sync_status{1};          // last sync result (0 = ACKed)
 
 bool espnow_is_active() { return inited; }
 

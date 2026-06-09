@@ -5,8 +5,8 @@
 
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 7
+#define FW_VERSION_MINOR 4
+#define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE

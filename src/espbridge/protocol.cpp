@@ -3,6 +3,7 @@
 #include "modules.h"
 #include "link.h"
 #include <esp_log.h>
+#include <atomic>  // inter-task counters/flags: atomic is the correct primitive (volatile is not)
 
 // ---- CRC-16/CCITT-FALSE (table-driven) --------------------------------------
 // 256-entry table (512 B rodata) replaces the per-byte 8-iteration bit loop:
@@ -90,8 +91,8 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
 struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t dest; uint8_t* buf; };
 
 static QueueHandle_t txq;
-static volatile bool tx_busy = false;
-static volatile uint32_t dropped = 0;
+static std::atomic<bool> tx_busy{false};       // tx_task busy-with-a-frame flag (read by proto_tx_flush)
+static std::atomic<uint32_t> dropped{0};       // frames dropped across all producer tasks
 
 static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
                           const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {

@@ -1489,9 +1489,10 @@ wheels = [
 
 [[package]]
 name = "python-esp-bridge"
-version = "0.3.6"
+version = "0.4.0"
 source = { editable = "../" }
 dependencies = [
+    { name = "bleak" },
     { name = "pyserial" },
 ]
 
@@ -1510,6 +1511,7 @@ oled = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bleak", specifier = ">=3.0.2" },
     { name = "bleak", marker = "extra == 'ble'", specifier = ">=0.22" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.3" },
     { name = "pillow", marker = "extra == 'oled'", specifier = ">=10" },

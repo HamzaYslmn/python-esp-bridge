@@ -1,16 +1,17 @@
 // NET: TCP/UDP sockets proxied over serial; per-socket credit windows backpressure TCP instead of dropping.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
-#include <WiFi.h>
-#include <WiFiUdp.h>
+#include <NetworkClient.h>
+#include <NetworkServer.h>
+#include <NetworkUdp.h>
 
 enum SockType : uint8_t { SK_FREE = 0, SK_TCP, SK_LISTEN, SK_UDP };
 
 struct Sock {
   SockType type = SK_FREE;
-  WiFiClient tcp;
-  WiFiServer* server = nullptr;
-  WiFiUDP udp;
+  NetworkClient tcp;
+  NetworkServer* server = nullptr;
+  NetworkUDP udp;
   uint16_t window_used = 0;  // bytes sent to host, unacked
 };
 
@@ -72,7 +73,7 @@ void net_poll() {
         free_sock(s);
       }
     } else if (s->type == SK_LISTEN) {
-      WiFiClient c = s->server->accept();
+      NetworkClient c = s->server->accept();
       if (c) {
         int8_t ni = alloc_sock();
         if (ni < 0) {
@@ -99,7 +100,7 @@ void net_poll() {
         wr16(buf + 5, s->udp.remotePort());
         int rd = s->udp.read(buf + 7, n > NET_CHUNK ? NET_CHUNK : n);
         if (rd > 0) proto_send_event(NET_UDP_EVT, buf, 7 + rd);
-        s->udp.flush();  // drop tail beyond NET_CHUNK
+        s->udp.clear();  // drop tail beyond NET_CHUNK (3.x: flush() no longer discards RX)
       }
     }
   }
@@ -134,7 +135,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       int8_t i = alloc_sock();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
-      socks[i].server = new WiFiServer(rd16(p));
+      socks[i].server = new NetworkServer(rd16(p));
       socks[i].server->begin();
       socks[i].type = SK_LISTEN;
       uint8_t handle = i + 1;
