@@ -71,7 +71,7 @@ class Bridge:
     """Connection to a python-esp-bridge ESP32.
 
     >>> from espbridge import Bridge
-    >>> with Bridge() as esp:         # auto-detects the serial port
+    >>> with Bridge() as esp:         # Bluetooth first, then USB serial
     ...     esp.gpio.mode(2, "output")
     ...     esp.gpio.write(2, 1)
 
@@ -124,17 +124,29 @@ class Bridge:
             candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
                            port, chip)]
         else:
-            ports = find_ports()
-            if not ports:
+            # Default: prefer a wireless (BLE) bridge, then fall back to USB
+            # serial. BLE is skipped cleanly when the [ble] extra isn't installed
+            # or nothing is advertising, so a USB-only setup still just works.
+            # Pin a transport with port=, ble=True/'name', name= or mac=.
+            candidates = []
+            try:
+                candidates += self._ble_candidates(True, name, mac)
+            except NoDeviceError:
+                pass  # nothing advertising over Bluetooth in range
+            except ImportError:
+                log.debug("Bluetooth unavailable (pip install "
+                          "'python-esp-bridge[ble]'); using USB serial")
+            # Then every ESP32-like serial port, probed in order; the first that
+            # answers the handshake (and matches name=/mac= if given) wins —
+            # non-bridge boards just time out and are skipped.
+            candidates += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
+                            p.device, p.usb_chip) for p in find_ports()]
+            if not candidates:
                 raise NoDeviceError(
-                    "no ESP32 serial port found (CP210x/CH340/CH9102/native USB); "
-                    "pass port='COM5' / '/dev/ttyUSB0' explicitly — or ble=True"
+                    "no bridge found over Bluetooth or USB serial — power the "
+                    "board (and flash it: docs/FIRMWARE.md), or pass "
+                    "port='COM5'/'/dev/ttyUSB0' or ble=True"
                 )
-            # Several ESP32-like ports: probe each in turn and keep the first
-            # that answers the bridge handshake (and matches name=/mac= if
-            # given) — non-bridge boards just time out and are skipped.
-            candidates = [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
-                           p.device, p.usb_chip) for p in ports]
 
         probing = len(candidates) > 1
         errors: list[str] = []
@@ -176,7 +188,10 @@ class Bridge:
                 errors.append(f"{label}: name={self.info.name!r} "
                               f"mac={self.info.mac} (no match)")
                 self.close()
-            except (BridgeTimeoutError, ProtocolError) as e:
+            except (BridgeTimeoutError, ProtocolError, AuthError) as e:
+                # While probing several candidates (e.g. BLE-then-serial in the
+                # default path), a timeout/auth-failure on one just moves on to
+                # the next; with a single explicit candidate it propagates.
                 self.close()
                 if not probing:
                     raise
@@ -358,6 +373,10 @@ class Bridge:
         self._t.close()
         if self._reader is not threading.current_thread():
             self._reader.join(timeout=1.0)
+
+    def is_closing(self) -> bool:
+        """True once close() has been called (the link is down or going down)."""
+        return self._closing
 
     def __enter__(self) -> "Bridge":
         return self

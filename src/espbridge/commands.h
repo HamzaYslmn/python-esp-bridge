@@ -6,7 +6,7 @@
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 3
-#define FW_VERSION_PATCH 5
+#define FW_VERSION_PATCH 7
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -124,6 +124,8 @@ enum ChipModel : uint8_t {
 #define GPIO_READ_ALL   CMD(MOD_GPIO, 0x05) // -> levels u64 BE
 #define GPIO_WATCH      CMD(MOD_GPIO, 0x06) // pin u8|edge u8 (1 rise,2 fall,3 change)|debounce_ms u16
 #define GPIO_UNWATCH    CMD(MOD_GPIO, 0x07) // pin u8
+#define GPIO_STATUS     CMD(MOD_GPIO, 0x08) // pin u8 -> level u8|mode u8 (0..4 as SET_MODE; 0xFF = not set via bridge)|pwm_freq u32|pwm_duty u32
+#define GPIO_DUMP       CMD(MOD_GPIO, 0x09) // -> count u8, then per active pin: pin u8|mode u8|level u8|pwm_freq u32|pwm_duty u32 (pins set via bridge or PWM-driven)
 #define GPIO_EDGE_EVT   CMD(MOD_GPIO, 0x80) // pin u8|level u8|millis u32
 
 // ADC

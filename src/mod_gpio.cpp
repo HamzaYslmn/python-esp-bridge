@@ -8,6 +8,7 @@ static QueueHandle_t edgeq;
 
 static uint16_t debounce_ms[SOC_GPIO_PIN_COUNT];   // per watched pin
 static uint32_t last_edge_ms[SOC_GPIO_PIN_COUNT];
+static uint8_t pin_mode[SOC_GPIO_PIN_COUNT];       // last mode set via SET_MODE (0xFF = unknown)
 
 static bool valid_pin(uint8_t pin) {
   return pin < SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_GPIO((gpio_num_t)pin);
@@ -33,6 +34,7 @@ static void IRAM_ATTR gpio_isr(void* arg) {
 
 void gpio_init() {
   edgeq = xQueueCreate(64, sizeof(EdgeRaw));
+  memset(pin_mode, 0xFF, sizeof(pin_mode));  // 0xFF = mode not set via the bridge
 }
 
 void gpio_poll() {
@@ -65,6 +67,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         case 4: pinMode(pin, OUTPUT_OPEN_DRAIN); break;
         default: proto_reply_err(seq, cmd, ST_BAD_ARGS); return;
       }
+      pin_mode[pin] = mode;  // remembered so GPIO_STATUS can report it
       proto_reply_ok(seq, cmd);
       if (strap_pin(pin)) proto_log(1, "strap pin: state at boot affects boot mode");
       break;
@@ -131,6 +134,44 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       detachInterrupt(digitalPinToInterrupt(p[0]));
       debounce_ms[p[0]] = 0;
       proto_reply_ok(seq, cmd);
+      break;
+    }
+
+    case 0x08: {  // STATUS: pin -> level u8|mode u8|pwm_freq u32|pwm_duty u32
+      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      uint8_t pin = p[0];
+      if (!valid_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
+      // Full picture from the chip, not just "command accepted": the live pad
+      // level, the mode we configured it with, and whether a LEDC (PWM) channel
+      // is driving it (freq 0 = none) with its current frequency and duty.
+      uint8_t buf[10];
+      buf[0] = (uint8_t)digitalRead(pin);
+      buf[1] = pin_mode[pin];
+      wr32(buf + 2, ledcReadFreq(pin));  // 0 if no PWM channel on this pin
+      wr32(buf + 6, ledcRead(pin));      // current raw duty (0 if none)
+      proto_reply(seq, cmd, buf, 10);
+      break;
+    }
+
+    case 0x09: {  // DUMP: every active pin in one frame ->
+      //   count u8, then count * { pin u8|mode u8|level u8|pwm_freq u32|pwm_duty u32 }
+      // "active" = configured via the bridge (mode != 0xFF) or PWM-driven.
+      static uint8_t buf[SOC_GPIO_PIN_COUNT * 11 + 1];
+      uint16_t n = 1;
+      uint8_t count = 0;
+      for (uint8_t pin = 0; pin < SOC_GPIO_PIN_COUNT; pin++) {
+        if (!valid_pin(pin)) continue;
+        uint32_t freq = ledcReadFreq(pin);
+        if (pin_mode[pin] == 0xFF && freq == 0) continue;  // untouched: skip
+        buf[n++] = pin;
+        buf[n++] = pin_mode[pin];
+        buf[n++] = (uint8_t)digitalRead(pin);
+        wr32(buf + n, freq); n += 4;
+        wr32(buf + n, ledcRead(pin)); n += 4;
+        count++;
+      }
+      buf[0] = count;
+      proto_reply(seq, cmd, buf, n);
       break;
     }
 

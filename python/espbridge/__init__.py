@@ -4,7 +4,7 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
 
     from espbridge import Bridge
 
-    with Bridge() as esp:                # auto-detects the serial port
+    with Bridge() as esp:                # Bluetooth first, then USB serial
         esp.gpio.mode(2, "output")
         esp.gpio.write(2, 1)
         print(esp.adc.read(34))
@@ -40,7 +40,7 @@ def find_ble_devices(timeout: float = 5.0):
 
     return _scan(timeout)
 
-__version__ = "0.3.5"
+__version__ = "0.3.7"
 
 __all__ = [
     "Bridge",

@@ -5,7 +5,7 @@ description = "Runnable examples for python-esp-bridge"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "python-esp-bridge[oled,ble]",        # Pillow for displays/, bleak for Bluetooth
+    "python-esp-bridge[all,ble,oled]",        # Pillow for displays/, bleak for Bluetooth
     "gpiozero>=2",                        # gpiozero/
     "luma.oled>=3.12",                    # luma/
     "adafruit-circuitpython-bme280>=2",   # adafruit/ (driver imports work without the sensor)

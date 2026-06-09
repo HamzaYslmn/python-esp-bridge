@@ -43,7 +43,7 @@ are implemented in Python where they are easy to read, test and extend.
    ```python
    from espbridge import Bridge
 
-   with Bridge() as esp:                      # auto-detects the USB port
+   with Bridge() as esp:                      # Bluetooth first, then USB serial
        print(esp.info)                        # chip, MAC, capabilities
 
        esp.gpio.mode(2, "output")             # like RPi GPIO, but on the ESP32
@@ -172,6 +172,37 @@ with oled.draw() as d:          # d is a PIL ImageDraw
     d.text((0, 10), "Hello!", fill="white")
 ```
 
+## Drive it from an AI agent (MCP)
+
+Expose the whole bridge to an LLM as a [Model Context Protocol](https://modelcontextprotocol.io)
+server — 100+ tools covering every peripheral (GPIO, ADC/DAC, PWM, I2C, SPI,
+UART, Wi-Fi, NVS, filesystem, 1-Wire, ESP-NOW, CAN, MCPWM, Ethernet, camera,
+OTA). The agent can then read sensors, toggle pins, scan I2C and more in plain
+language.
+
+Install the server once, then plug in the board — the port auto-detects:
+
+```bash
+uv tool install "python-esp-bridge[mcp]"     # or: pip install "python-esp-bridge[mcp]"
+```
+
+Works with **Claude Code, Gemini CLI, Codex CLI, Antigravity, Cursor/Windsurf
+and Ollama** — all launch the same `espbridge-mcp` command. This repo ships
+ready configs for Claude Code (`.mcp.json`) and Gemini CLI
+(`.gemini/settings.json`): just open the assistant in the repo. Every other
+client uses the same one-line config (key `mcpServers`):
+
+```jsonc
+{ "mcpServers": {
+    "espbridge": { "command": "espbridge-mcp", "args": [] }
+} }
+```
+
+Tools are grouped by peripheral (`gpio_*`, `i2c_*`, `wifi_*`, …); raw byte
+payloads go in and out as hex strings. Embed it in your own server with
+`from espbridge.mcp import build_server`. **Per-assistant setup (incl. Codex,
+Antigravity, Ollama): [`docs/MCP.md`](docs/MCP.md).**
+
 ### Multiple ESP32s
 
 Give each board a persistent name once (`espbridge -p COM7 set-name relays` —
@@ -218,6 +249,7 @@ Library Manager); the Python package lives under `python/`.
 | [`src/`](src/) + [`examples/Bridge/`](examples/Bridge/) | Arduino library — the flash-once firmware (C/C++) + its example sketch (`EspBridge.begin()`) |
 | `library.properties`, `keywords.txt` | Arduino Library Manager metadata (at the repo root, as the registry requires) |
 | [`python/`](python/) | Python package `python-esp-bridge` (import `espbridge`) with its own `tests/` and grouped `examples/` (`basics/`, `devices/`, `system/`, `wireless/`, `network/`, `displays/`, `compat/`) |
+| [`docs/MCP.md`](docs/MCP.md) | MCP server (`espbridge-mcp`): drive the bridge from an AI agent |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | binary wire protocol spec (framing, transports, auth) |
 | [`docs/FIRMWARE.md`](docs/FIRMWARE.md) | firmware flashing, partition scheme & build-flag reference |
 

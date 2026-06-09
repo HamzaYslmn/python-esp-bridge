@@ -39,6 +39,10 @@ def _fake_farm(monkeypatch, fakes: dict[str, FakeFirmware]):
         return fakes[port].transport
 
     monkeypatch.setattr(bridge_mod, "SerialTransport", fake_serial)
+    # These tests exercise the serial path; the default now tries BLE first, so
+    # neutralize BLE discovery to keep them deterministic (and hardware-free).
+    monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates",
+                        staticmethod(lambda *a, **k: []))
 
 
 def test_select_by_name_probes_ports(monkeypatch):
@@ -79,6 +83,47 @@ def test_no_selector_with_multiple_ports_probes_and_picks_first(monkeypatch):
         assert b.info.mac == "aa:bb:cc:dd:ee:01"
     finally:
         b.close()
+
+
+def test_default_prefers_ble_over_serial(monkeypatch):
+    # With no port/ble given, BLE is tried first; a USB board is the fallback.
+    ble = FakeFirmware(mac="aabbccddee0b")
+    ble.boot()
+    serial = FakeFirmware(mac="aabbccddee0c")
+    monkeypatch.setattr(bridge_mod, "find_ports",
+                        lambda: [PortInfo("COM7", "cp210x", "")])
+
+    def fake_serial(port, baud=115200, usb_chip=None):
+        serial.boot()
+        return serial.transport
+
+    monkeypatch.setattr(bridge_mod, "SerialTransport", fake_serial)
+    monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates",
+                        staticmethod(lambda *a, **k: [(lambda: ble.transport,
+                                                       "BLE test", None)]))
+    b = Bridge(upgrade_baud=False, reset_on_open=False)
+    try:
+        assert b.info.mac == "aa:bb:cc:dd:ee:0b"  # the BLE candidate won
+    finally:
+        b.close()
+
+
+def test_falls_back_to_serial_when_no_ble(monkeypatch):
+    # _fake_farm neutralizes BLE -> the USB serial board is used.
+    _fake_farm(monkeypatch, {"COM7": FakeFirmware(mac="aabbccddee0c")})
+    b = Bridge(upgrade_baud=False, reset_on_open=False)
+    try:
+        assert b.info.mac == "aa:bb:cc:dd:ee:0c"
+    finally:
+        b.close()
+
+
+def test_no_device_over_ble_or_serial_errors(monkeypatch):
+    monkeypatch.setattr(bridge_mod, "find_ports", lambda: [])
+    monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates",
+                        staticmethod(lambda *a, **k: []))
+    with pytest.raises(NoDeviceError, match="Bluetooth or USB"):
+        Bridge(upgrade_baud=False, reset_on_open=False)
 
 
 def test_selector_no_match_lists_candidates(monkeypatch):

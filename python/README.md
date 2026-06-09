@@ -7,7 +7,7 @@ radio) and BLE. Flash the bridge firmware once, then it's all Python.
 ```python
 from espbridge import Bridge
 
-with Bridge() as esp:                      # auto-detects the USB port
+with Bridge() as esp:                      # Bluetooth first, then USB serial
     esp.gpio.mode(2, "output")
     esp.gpio.write(2, 1)
     print(esp.adc.read_mv(34), "mV")

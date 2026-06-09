@@ -215,6 +215,23 @@ class FakeFirmware:
         elif cmd == C.GPIO_UNWATCH:
             self.watching.pop(p[0], None)
             self._reply(seq, cmd)
+        elif cmd == C.GPIO_STATUS:  # level u8|mode u8|pwm_freq u32|pwm_duty u32
+            pin = p[0]
+            level = self.gpio_levels.get(pin, 0)
+            mode = self.gpio_modes.get(pin, 0xFF)
+            freq = self.pwm_attached.get(pin, (0, 0))[0]
+            duty = self.pwm_duty.get(pin, 0)
+            self._reply(seq, cmd, bytes([level, mode]) + struct.pack(">II", freq, duty))
+        elif cmd == C.GPIO_DUMP:  # count u8, then per active pin: pin|mode|level|freq u32|duty u32
+            active = sorted(set(self.gpio_modes) | set(self.pwm_attached))
+            out = bytes([len(active)])
+            for pin in active:
+                mode = self.gpio_modes.get(pin, 0xFF)
+                level = self.gpio_levels.get(pin, 0)
+                freq = self.pwm_attached.get(pin, (0, 0))[0]
+                duty = self.pwm_duty.get(pin, 0)
+                out += bytes([pin, mode, level]) + struct.pack(">II", freq, duty)
+            self._reply(seq, cmd, out)
 
         # ---- PWM ----
         elif cmd == C.PWM_ATTACH:

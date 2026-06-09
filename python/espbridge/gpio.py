@@ -5,7 +5,7 @@ import struct
 from dataclasses import dataclass
 
 from . import constants as C
-from .errors import BridgeError
+from .errors import BridgeError, RemoteError, UnsupportedError
 
 MODES = {
     "input": 0,
@@ -14,6 +14,8 @@ MODES = {
     "input_pulldown": 3,
     "output_open_drain": 4,
 }
+_MODE_NAMES = {v: k for k, v in MODES.items()}
+_OUTPUT_MODES = ("output", "output_open_drain")
 EDGES = {"rising": 1, "falling": 2, "change": 3}
 
 
@@ -22,6 +24,22 @@ class EdgeEvent:
     pin: int
     level: int
     millis: int  # firmware uptime ms
+
+
+@dataclass(frozen=True)
+class PinStatus:
+    """A pin's actual state, read from the chip (see Gpio.status)."""
+    pin: int
+    level: int               # live pad level (0/1), read back from hardware
+    mode: str | None         # mode it was set to via the bridge (None if unknown)
+    is_output: bool
+    pwm_freq: int            # LEDC frequency driving the pin, 0 = no PWM attached
+    pwm_duty: int            # LEDC raw duty (0 if no PWM)
+
+    @property
+    def pwm(self) -> bool:
+        """True when a PWM (LEDC) channel is driving this pin."""
+        return self.pwm_freq > 0
 
 
 class Gpio:
@@ -78,6 +96,44 @@ class Gpio:
         """Levels of all pins as a bitmask (bit N = GPIO N)."""
         (levels,) = struct.unpack(">Q", self._b.request(C.GPIO_READ_ALL))
         return levels
+
+    def status(self, pin: int) -> PinStatus:
+        """Full state of a pin straight from the chip — not just "command ran":
+        the live level, the mode it was configured with, and whether a PWM
+        (LEDC) channel is driving it (with its frequency and duty)."""
+        try:
+            r = self._b.request(C.GPIO_STATUS, bytes([pin]))
+        except RemoteError as e:
+            if e.status == C.Status.UNKNOWN_CMD:
+                raise UnsupportedError(
+                    "gpio.status() needs bridge firmware >= 0.3.6 — reflash"
+                ) from None
+            raise
+        level, mode = r[0], r[1]
+        freq, duty = struct.unpack_from(">II", r, 2)
+        name = _MODE_NAMES.get(mode)
+        return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty)
+
+    def dump(self) -> list[PinStatus]:
+        """Every active pin in one round-trip: each pin configured via the bridge
+        or currently driven by PWM, with its full status. The board's own view of
+        what's set up — handy for a complete picture without polling pin by pin."""
+        try:
+            r = self._b.request(C.GPIO_DUMP)
+        except RemoteError as e:
+            if e.status == C.Status.UNKNOWN_CMD:
+                raise UnsupportedError(
+                    "gpio.dump() needs bridge firmware >= 0.3.7 — reflash"
+                ) from None
+            raise
+        out, pos = [], 1
+        for _ in range(r[0]):
+            pin, mode, level = r[pos], r[pos + 1], r[pos + 2]
+            freq, duty = struct.unpack_from(">II", r, pos + 3)
+            pos += 11
+            name = _MODE_NAMES.get(mode)
+            out.append(PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty))
+        return out
 
     def watch(self, pin: int, edge: str = "change", debounce_ms: int = 0, callback=None) -> None:
         """Get `callback(EdgeEvent)` on pin edges (callback runs on the reader thread)."""
