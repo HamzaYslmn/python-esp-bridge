@@ -34,7 +34,8 @@ class I2C:
         if init:
             self._i2c.init(sda=sda, scl=scl, freq=frequency, bus=bus)
 
-    # -- locking protocol (drivers call these around every transaction) ------
+    # -- locking protocol (CircuitPython drivers acquire and release these
+    #    around every transaction to prevent concurrent access) ----------------
     def try_lock(self) -> bool:
         return self._lock.acquire(blocking=False)
 
@@ -87,7 +88,7 @@ class SPI:
         self._pins = (sck, miso, mosi)
         self._lock = threading.Lock()
         self._frequency = 100_000
-        self.configure()  # CircuitPython default: 100 kHz, mode 0
+        self.configure()  # apply CircuitPython's default configuration: 100 kHz, mode 0
 
     def try_lock(self) -> bool:
         return self._lock.acquire(blocking=False)

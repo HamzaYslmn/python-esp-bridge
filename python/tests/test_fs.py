@@ -18,7 +18,7 @@ def test_write_read_roundtrip(bridge):
 
 def test_large_file_chunks(bridge):
     vol = bridge.fs.mount("littlefs")
-    data = bytes(range(256)) * 40  # 10240 B > one 2040 B chunk
+    data = bytes(range(256)) * 40  # 10 240 bytes — larger than one FS_WRITE chunk (~2040 B), forces chunking
     vol.write_file("/big.bin", data)
     assert vol.read_file("/big.bin") == data
 

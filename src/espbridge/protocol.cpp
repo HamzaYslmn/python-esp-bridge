@@ -6,10 +6,11 @@
 #include <atomic>  // inter-task counters/flags: atomic is the correct primitive (volatile is not)
 
 // ---- CRC-16/CCITT-FALSE (table-driven) --------------------------------------
-// 256-entry table (512 B rodata) replaces the per-byte 8-iteration bit loop:
-// ~8x fewer ops on the hot path (every frame, both tx_task and rx). Values are
-// the standard poly=0x1021, init=0xFFFF, no-reflection table — bit-identical to
-// the old loop and to the host's binascii.crc_hqx(data, 0xFFFF).
+// A 256-entry lookup table (512 B in rodata) replaces the naive per-byte
+// 8-iteration bit loop, cutting the op count to roughly 1/8 on the hot path
+// (every tx frame and every received frame). The table uses the standard
+// parameters: poly=0x1021, init=0xFFFF, no input/output reflection — results
+// are bit-identical to Python's binascii.crc_hqx(data, 0xFFFF).
 static const uint16_t crc16_table[256] = {
   0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
   0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
@@ -52,8 +53,9 @@ uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
   return crc;
 }
 
-// ---- COBS ---------------------------------------------------------------------
-// Returns encoded length; out must hold len + len/254 + 1.
+// ---- COBS (Consistent Overhead Byte Stuffing) ---------------------------------
+// cobs_encode: encodes in-place to out; returns the encoded byte count.
+// out must be sized at least len + len/254 + 1 (worst-case overhead).
 static uint16_t cobs_encode(const uint8_t* in, uint16_t len, uint8_t* out) {
   uint16_t ri = 0, wi = 1, code_i = 0;
   uint8_t code = 1;
@@ -71,7 +73,7 @@ static uint16_t cobs_encode(const uint8_t* in, uint16_t len, uint8_t* out) {
   return wi;
 }
 
-// Returns decoded length, or 0 on malformed input.
+// cobs_decode: decodes in to out; returns decoded byte count, or 0 on malformed input.
 static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
   uint16_t ri = 0, wi = 0;
   while (ri < len) {
@@ -84,8 +86,9 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
 }
 
 // ---- outbound queue + tx task ---------------------------------------------------
-// dest: DEST_ALL broadcasts (serial always, BLE when authenticated);
-// LINK_BLE targets only the BLE client (pre-auth SYS_AUTH conversation).
+// dest controls where each frame is sent:
+//   DEST_ALL  — serial always; BLE as well when the client is authenticated.
+//   LINK_BLE  — BLE only; used for the pre-authentication SYS_AUTH exchange.
 #define DEST_ALL 0xFF
 
 struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t dest; uint8_t* buf; };
@@ -96,7 +99,7 @@ static std::atomic<uint32_t> dropped{0};       // frames dropped across all prod
 
 static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
                           const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
-  if (!txq) { dropped++; return; }  // log hook can fire before proto_init()
+  if (!txq) { dropped++; return; }  // proto_log_hook_install() may call this before proto_init()
   if (len > MAX_PAYLOAD) { dropped++; return; }
   Frame f = { flags, seq, cmd, len, dest, nullptr };
   if (len) {
@@ -104,8 +107,9 @@ static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
     if (!f.buf) { dropped++; return; }
     memcpy(f.buf, data, len);
   }
-  // Replies (seq != 0) briefly block when the queue is full — the host is
-  // waiting for them. Events are best-effort: drop and count.
+  // Replies (seq != 0): the host is blocking, waiting for the response, so
+  // allow a short wait if the queue is temporarily full.
+  // Events (seq == 0): best-effort — drop immediately if the queue is full.
   TickType_t wait = seq != 0 ? pdMS_TO_TICKS(250) : 0;
   if (xQueueSend(txq, &f, wait) != pdTRUE) {
     free(f.buf);
@@ -171,16 +175,19 @@ void proto_log_heap(const char* stage) {
 }
 
 // ---- IDF log capture ---------------------------------------------------------
-// The Wi-Fi/BT stacks log through esp_log; on UART links those bytes would land
-// in the middle of COBS frames and corrupt them. Redirect everything into
-// SYS_LOG events instead (ROM boot output and panics still hit UART0 raw).
+// The Wi-Fi/BT stacks emit log output via esp_log, which normally goes to
+// UART0 — the same port carrying the COBS frame stream. Those raw bytes would
+// land in the middle of frames and corrupt them. This hook redirects all IDF
+// log output into SYS_LOG events instead.
+// Note: ROM boot output and crash/panic text still go to UART0 as raw bytes;
+// they cannot be intercepted here.
 static int bridge_vprintf(const char* fmt, va_list ap) {
 #if BRIDGE_NATIVE_USB
   return vprintf(fmt, ap);  // UART0 is free on native-USB chips: keep IDF logs
 #else
   char line[160];
   int n = vsnprintf(line, sizeof(line), fmt, ap);
-  // Strip the trailing CR/LF esp_log appends; SYS_LOG is line-oriented.
+  // esp_log appends CR/LF; strip it since SYS_LOG delivers one line at a time.
   size_t L = n < 0 ? 0 : (n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
   while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
   if (L) proto_log(1, line);  // no-op before proto_init() (txq guard)
@@ -200,8 +207,9 @@ void proto_tx_flush() {
 uint32_t proto_dropped_events() { return dropped; }
 
 // ---- net-task request queue ------------------------------------------------------
-// WIFI/NET/BLE handlers may block for seconds (TCP connect, BLE connect) and
-// share state with socket polling — they all run on net_task only.
+// Handlers for WIFI, NET, BLE, and related modules can block for seconds
+// (e.g. TCP connect, BLE connect) and share state with socket polling.
+// To avoid blocking rx_task, all such handlers run exclusively on net_task.
 struct Req { uint16_t cmd; uint8_t seq; uint16_t len; uint8_t* buf; };
 static QueueHandle_t netq;
 
@@ -252,7 +260,8 @@ static void net_enqueue(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t le
 }
 
 // ---- RX & dispatch (rx_task) -------------------------------------------------------
-// One COBS accumulator per link: USB and BLE bytes may interleave arbitrarily.
+// Each link has its own COBS accumulator because bytes from USB and BLE
+// arrive independently and may interleave.
 struct RxState {
   uint8_t acc[ENC_BUF_SIZE];
   uint16_t len = 0;
@@ -325,9 +334,9 @@ static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
 
 static void handle_encoded(uint8_t origin, const uint8_t* enc, uint16_t enclen) {
   uint16_t n = cobs_decode(enc, enclen, rxframe);
-  if (n < 6) return;  // hdr(4) + crc(2) minimum; silently drop garbage
+  if (n < 6) return;  // minimum valid frame: 4-byte header + 2-byte CRC; drop shorter frames silently
   uint16_t crc = rd16(rxframe + n - 2);
-  if (crc16_ccitt(rxframe, n - 2) != crc) return;  // corrupted: drop, host retries on timeout
+  if (crc16_ccitt(rxframe, n - 2) != crc) return;  // CRC mismatch: frame is corrupted; drop it and let the host retry on timeout
   uint8_t seq = rxframe[1];
   uint16_t cmd = rd16(rxframe + 2);
   if (handle_auth(origin, seq, cmd, rxframe + 4, n - 6)) return;
@@ -344,19 +353,19 @@ static void pump_bytes(uint8_t origin, const uint8_t* chunk, int n) {
       rx.overflow = false;
     } else {
       if (rx.len < sizeof(rx.acc)) rx.acc[rx.len++] = b;
-      else rx.overflow = true;  // discard until next delimiter
+      else rx.overflow = true;  // accumulator full; discard bytes until the next 0x00 frame delimiter
     }
   }
 }
 
-// Returns true if any bytes were processed (rx_task idles briefly otherwise).
+// Returns true if any bytes were processed; rx_task yields briefly when false.
 static bool proto_pump_rx() {
   static uint8_t chunk[256];
   bool any = false;
   for (;;) {
-    // Drain the UART ring buffer in blocks, not byte-by-byte HAL calls.
-    // Asking read() only for what available() reports keeps the call
-    // non-blocking on both HardwareSerial and HWCDC.
+    // Read in blocks rather than one byte at a time. Reading only as many
+    // bytes as available() reports keeps the call non-blocking on both
+    // HardwareSerial (UART) and HWCDC (native USB).
     int avail = Serial.available();
     if (avail <= 0) break;
     if (avail > (int)sizeof(chunk)) avail = sizeof(chunk);
@@ -384,6 +393,9 @@ static void rx_task(void*) {
 }
 
 // ---- init / start -----------------------------------------------------------------
+// proto_init: create the TX and net-task queues. Must be called before any
+// proto_* function. proto_start: spawn the three bridge tasks; call at the
+// end of setup() after all other init is done.
 void proto_init() {
   txq = xQueueCreate(48, sizeof(Frame));
   netq = xQueueCreate(16, sizeof(Req));

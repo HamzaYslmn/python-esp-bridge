@@ -8,7 +8,7 @@
 
 #include <driver/mcpwm_prelude.h>
 
-#define MCPWM_RES_HZ 10000000UL  // 10 MHz -> 100 ns ticks, deadtime_ns/100
+#define MCPWM_RES_HZ 10000000UL  // 10 MHz base clock -> each tick is 100 ns, so deadtime_ns / 100 = tick count
 
 static mcpwm_timer_handle_t timer = nullptr;
 static mcpwm_oper_handle_t oper = nullptr;
@@ -65,7 +65,7 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       mcpwm_generator_set_action_on_compare_event(gen_a,
           MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, cmp,
                                          MCPWM_GEN_ACTION_LOW));
-      if ((int8_t)p[1] >= 0) {  // complementary output with deadtime
+      if ((int8_t)p[1] >= 0) {  // pin_b >= 0: set up the complementary (inverted + deadtime) output on pin_b
         mcpwm_generator_config_t gb = {};
         gb.gen_gpio_num = (int8_t)p[1];
         if (mcpwm_new_generator(oper, &gb, &gen_b) != ESP_OK) {

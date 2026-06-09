@@ -13,7 +13,8 @@ def test_nec_roundtrip_all_bits():
 
 
 def test_decode_tolerates_jitter_and_inverted_levels():
-    # TSOP receivers invert levels and add ~10% jitter
+    # Typical IR receiver modules (e.g. TSOP1738) invert the signal and
+    # introduce roughly 10% timing jitter.  The decoder must handle both.
     syms = [(1 - lv, round(dur * 1.1)) for lv, dur in nec_symbols(0x10, 0x2A)]
     assert decode_nec(syms) == (0x10, 0x2A)
 
@@ -30,7 +31,9 @@ def test_decode_rejects_garbage():
 
 
 def test_extended_nec_address():
-    # addr/~addr check fails -> 16-bit address returned
+    # In Extended NEC the address and its complement are different (the
+    # addr/~addr consistency check fails), so the decoder returns the full
+    # 16-bit address instead of the 8-bit one.
     syms = nec_symbols(0, 0x45)
     value = 0x12 | (0x34 << 8) | (0x45 << 16) | ((~0x45 & 0xFF) << 24)
     ext = [(1, 9000), (0, 4500)]

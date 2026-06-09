@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             rc = 0
             for p in ports:
                 try:
-                    # info only — skip the baud upgrade for a quicker probe
+                    # skip the baud upgrade so each port is probed faster
                     with Bridge(p.device, upgrade_baud=False) as esp:
                         info = esp.info
                         fw = ".".join(map(str, info.fw_version))

@@ -23,8 +23,8 @@ class I2s:
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.I2S, "I2S")
-        self._frame = 2  # bytes per sample-frame, for read(seconds=)
-        self._rate = 16_000
+        self._frame = 2  # bytes per sample-frame (bits/8 * channels); used by read(seconds=)
+        self._rate = 16_000  # sample rate in Hz; updated by begin_output/begin_input
 
     def _begin(self, dir_: int, bclk: int, ws: int, dout: int, din: int,
                rate: int, bits: int, stereo: bool) -> None:
@@ -58,7 +58,7 @@ class I2s:
             w = struct.unpack(">H", r)[0]
             written += w
             if w < len(chunk):
-                break
+                break  # firmware accepted fewer bytes than sent — DMA buffer is full, stop early
         return written
 
     def read(self, n: int | None = None, *, seconds: float | None = None) -> bytes:

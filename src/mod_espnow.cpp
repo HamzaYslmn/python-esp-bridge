@@ -1,11 +1,16 @@
-// ESP-NOW: connectionless 2.4 GHz messaging, coexisting with Wi-Fi STA/AP and BLE.
-// Callbacks only enqueue via proto_send_event (tx_task owns serial).
+// ESP-NOW module: connectionless 2.4 GHz peer-to-peer messaging.
+// Works alongside Wi-Fi STA/AP and BLE using the IDF software radio arbiter.
+// Callbacks never write to serial directly — they enqueue events via
+// proto_send_event so that tx_task remains the sole serial writer.
 //
-// Coexistence rules (ESP-IDF coex guide — do not "optimize"):
-//  - Never esp_wifi_set_ps(WIFI_PS_NONE) with BT active; default WIFI_PS_MIN_MODEM keeps the arbiter stable.
-//  - No manual esp_coex_*; the IDF SW arbiter slots the radio.
-//  - Channel: a connected STA / live AP owns the channel and ESP-NOW inherits it;
-//    only lock the requested channel when the radio is idle.
+// Coexistence rules — these come from the ESP-IDF coexistence guide.
+// Do NOT "optimize" them without fully understanding the arbiter:
+//  - Never call esp_wifi_set_ps(WIFI_PS_NONE) while Bluetooth is active.
+//    The default WIFI_PS_MIN_MODEM mode keeps the SW arbiter stable.
+//  - Do not call esp_coex_* manually; the IDF SW arbiter manages radio timeslots.
+//  - Channel ownership: a connected STA or an active AP owns the channel and
+//    ESP-NOW inherits it. Only lock a specific channel when the radio is idle
+//    (no STA association, no active AP).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -19,8 +24,12 @@
 
 static bool inited = false;
 
-// Send-completion plumbing. Sends are serialized; TX callbacks arrive in order, so
-// the counter drains fire-and-forget sends (emit SEND_EVT) before the blocking sync send (give sem).
+// Send-completion tracking.
+// ESP-NOW serializes sends: TX callbacks arrive in the same order as the calls.
+// The ff_outstanding counter counts fire-and-forget sends that are still in flight.
+// When a callback fires, if ff_outstanding > 0 it belongs to a fire-and-forget
+// send (emit ESPNOW_SEND_EVT and decrement). If ff_outstanding == 0, the callback
+// belongs to the currently blocking sync send (store result and give the semaphore).
 static SemaphoreHandle_t tx_done_sem;
 static std::atomic<uint8_t> ff_outstanding{0};       // fire-and-forget sends in flight
 static std::atomic<uint8_t> sync_status{1};          // last sync result (0 = ACKed)
@@ -76,14 +85,17 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
   if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
   uint8_t channel = p[0], flags = p[1];
 
-  // ESP-NOW rides the Wi-Fi driver; bring up STA if off.
+  // ESP-NOW requires the Wi-Fi driver to be running, even if not associated.
+  // Bring up STA mode if the radio is completely off.
   if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
 
   uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
   if (flags & 0x01) proto |= WIFI_PROTOCOL_LR;
   esp_wifi_set_protocol(WIFI_IF_STA, proto);
 
-  // Associated STA / live AP owns the channel; only lock requested channel when idle.
+  // If a STA is associated or an AP is active, they own the channel and ESP-NOW
+  // inherits it — we must not override it. Only set the channel when the radio
+  // is idle (no association, no AP).
   bool channel_owned = WiFi.status() == WL_CONNECTED || (WiFi.getMode() & WIFI_MODE_AP);
   if (!channel_owned) {
     esp_wifi_set_channel(channel ? channel : 1, WIFI_SECOND_CHAN_NONE);
@@ -124,9 +136,15 @@ static void handle_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_
   proto_reply_ok(seq, cmd);
 }
 
-// SEND: mac[6] | data (<= 250 bytes).
-// seq != 0: block on TX callback, reply delivered u8 (1 = peer MAC ACKed; broadcasts never ACK).
-// seq == 0: fire-and-forget; result arrives as ESPNOW_SEND_EVT.
+// SEND: mac[6] | data (up to 250 bytes).
+//
+// Two modes depending on the sequence number in the frame header:
+//   seq != 0 — synchronous: block until the TX callback fires, then reply with
+//              a "delivered" byte (1 = peer MAC-layer ACKed, 0 = not ACKed).
+//              Note: broadcast addresses never produce an ACK, so delivered will
+//              always be 0 for broadcasts.
+//   seq == 0 — fire-and-forget: send without waiting; the result arrives later
+//              as an ESPNOW_SEND_EVT unsolicited event.
 static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   if (len < 6 || len > 6 + ESPNOW_MAX_DATA) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
@@ -136,7 +154,7 @@ static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
     return;  // no reply for fire-and-forget
   }
 
-  while (xSemaphoreTake(tx_done_sem, 0) == pdTRUE) {}  // clear stale gives
+  while (xSemaphoreTake(tx_done_sem, 0) == pdTRUE) {}  // drain any leftover gives from a previous send
   esp_err_t e = esp_now_send(p, p + 6, len - 6);
   if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
   uint8_t delivered = 0;
@@ -153,7 +171,7 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       handle_init(seq, cmd, p, len);
       break;
 
-    case 0x02:  // DEINIT (leave the Wi-Fi mode alone — STA/AP may be in use)
+    case 0x02:  // DEINIT — shuts down ESP-NOW but leaves the Wi-Fi mode unchanged (STA or AP may still be in use)
       esp_now_deinit();
       inited = false;
       ff_outstanding = 0;

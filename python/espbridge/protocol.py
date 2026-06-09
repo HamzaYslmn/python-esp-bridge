@@ -16,10 +16,11 @@ from .errors import ProtocolError
 _HDR = struct.Struct(">BBH")
 
 # ---- CRC-16/CCITT-FALSE ------------------------------------------------------
-# binascii.crc_hqx is the CCITT algorithm (poly 0x1021, no reflection) in C;
-# seeded with 0xFFFF it is bit-identical to CRC-16/CCITT-FALSE (verified against
-# the old table loop and the firmware's crc16_ccitt). ~15x faster than a
-# pure-Python per-byte loop on the hot path. Accepts any buffer-protocol object.
+# binascii.crc_hqx implements the CCITT algorithm (poly 0x1021, no reflection)
+# in C. Seeded with 0xFFFF it is bit-identical to CRC-16/CCITT-FALSE — verified
+# against the old pure-Python table loop and the firmware's crc16_ccitt.
+# About 15x faster than a pure-Python per-byte loop on the hot path.
+# Accepts any buffer-protocol object (bytes, bytearray, memoryview).
 
 
 def crc16_ccitt(data) -> int:
@@ -30,9 +31,10 @@ def crc16_ccitt(data) -> int:
 
 
 def cobs_encode(data) -> bytes:
-    # Pre-size the output to its worst case (n + one code byte per started
-    # 254-run + the leading code byte) and write by index — avoids the chain of
-    # bytearray reallocations a per-byte .append() incurs on large frames.
+    # Pre-size the output to its worst-case length (n + one code byte per
+    # 254-byte run + the leading code byte), then fill it by index — avoids
+    # the repeated bytearray reallocations that per-byte .append() causes on
+    # large frames.
     n = len(data)
     out = bytearray(n + n // 254 + 2)
     write_idx = 1  # out[0] is the first code byte (left as a placeholder)
@@ -59,7 +61,7 @@ def cobs_encode(data) -> bytes:
 
 def cobs_decode(data) -> bytes:
     out = bytearray()
-    mv = memoryview(data)  # zero-copy block slices; bytearray.extend does the copy
+    mv = memoryview(data)  # zero-copy slicing; bytearray += mv[...] copies only at the extend
     i = 0
     n = len(data)
     while i < n:
@@ -101,8 +103,8 @@ def encode_frame(flags: int, seq: int, cmd: int, payload: bytes = b"") -> bytes:
     plen = len(payload)
     if plen > MAX_PAYLOAD:
         raise ProtocolError(f"payload too large: {plen} > {MAX_PAYLOAD}")
-    # Assemble header + payload + CRC in one buffer instead of chaining
-    # bytes concatenations (3 intermediate copies -> 0).
+    # Assemble header + payload + CRC into a single buffer instead of chaining
+    # bytes concatenations — reduces three intermediate copies to zero.
     logical = bytearray(4 + plen + 2)
     _HDR.pack_into(logical, 0, flags, seq, cmd)
     logical[4:4 + plen] = payload
@@ -160,20 +162,21 @@ class FrameSplitter:
 
     def __init__(self) -> None:
         self._buf = bytearray()
-        self._pos = 0  # search/read cursor: avoids an O(n) left-shift per frame
+        self._pos = 0  # index of the first unconsumed byte — avoids an O(n) left-shift after every frame
 
     def feed(self, data: bytes) -> list[bytes]:
         chunks: list[bytes] = []
         buf = self._buf
         buf += data
         while True:
-            i = buf.find(0, self._pos)  # scan only the unconsumed tail
+            i = buf.find(0, self._pos)  # only search from the unconsumed tail
             if i < 0:
                 break
             if i > self._pos:
                 chunks.append(bytes(buf[self._pos:i]))
             self._pos = i + 1
-        # Reclaim consumed bytes in amortised batches, not on every frame.
+        # Reclaim consumed bytes in amortized batches rather than after every frame,
+        # so the left-shift cost is O(1) amortized instead of O(n) per frame.
         if self._pos > 4096:
             del buf[: self._pos]
             self._pos = 0

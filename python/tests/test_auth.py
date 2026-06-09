@@ -23,7 +23,8 @@ def _drain_frames(fw):
 
 def test_ble_auth_ok():
     fw = FakeFirmware(password="espbridge", name="relays")
-    # No boot(): like the real BLE link, READY only follows successful auth.
+    # boot() is intentionally skipped here: on a real BLE link the READY banner
+    # is only sent after the host authenticates successfully, not at startup.
     with Bridge(transport=fw.transport, password="espbridge",
                 reset_on_open=False) as esp:
         assert esp.info is not None
@@ -46,7 +47,8 @@ def test_ble_default_password_used_when_omitted():
 
 def test_commands_denied_before_auth():
     fw = FakeFirmware(password="espbridge")
-    # Bypass Bridge: write a GPIO request straight to the link, pre-auth.
+    # Bypass the Bridge class and write a raw GPIO request directly, before
+    # any SYS_AUTH exchange, to verify the firmware rejects it.
     fw._on_host_bytes(encode_frame(0, 1, C.GPIO_READ, bytes([2])))
     frames = _drain_frames(fw)
     assert len(frames) == 1
@@ -60,7 +62,7 @@ def test_usb_path_needs_no_password():
     with Bridge(transport=fw.transport, upgrade_baud=False,
                 reset_on_open=False) as esp:
         esp.ping()
-        # SYS_AUTH is accepted over USB regardless of payload.
+        # Over USB, SYS_AUTH succeeds regardless of the payload (no password enforcement).
         esp.request(C.SYS_AUTH, b"anything")
 
 
@@ -69,4 +71,4 @@ def test_ble_skips_baud_upgrade():
     with Bridge(transport=fw.transport, password="espbridge",
                 reset_on_open=False, upgrade_baud=True):
         pass
-    assert fw.baud_requests == []  # has_baud=False suppressed SYS_SET_BAUD
+    assert fw.baud_requests == []  # BLE transport sets has_baud=False, so the baud-upgrade handshake is skipped

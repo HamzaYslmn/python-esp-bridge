@@ -15,8 +15,9 @@ from . import constants as C
 from .errors import BridgeError, BridgeTimeoutError
 from .protocol import ip_str, lp
 
-# Per-request send chunk: bounds single-request size (and how long the
-# firmware's synchronous socket write can run). Well under MAX_PAYLOAD.
+# Maximum bytes sent in a single NET_SEND request. This caps how long the
+# firmware's synchronous socket write can block, and keeps each request
+# comfortably under MAX_PAYLOAD.
 _SEND_CHUNK = 1024
 
 
@@ -41,7 +42,8 @@ class TcpSocket:
     def gettimeout(self) -> float | None:
         return self._timeout
 
-    # internal: called from the reader thread
+    # Called from the reader thread to append incoming data and wake any
+    # waiting recv() call.
     def _feed(self, data: bytes) -> None:
         with self._cond:
             self._buf += data
@@ -73,7 +75,8 @@ class TcpSocket:
             n = min(maxbytes, len(self._buf))
             data = bytes(self._buf[:n])
             del self._buf[:n]
-        # Replenish the firmware's send window (fire-and-forget).
+        # Tell the firmware how many bytes we just consumed so it can open its
+        # send window by the same amount (credit-based flow control, fire-and-forget).
         self._b.send(C.NET_WINDOW_ACK, struct.pack(">BH", self.handle, n))
         return data
 
@@ -163,7 +166,7 @@ class UdpSocket:
         try:
             self._packets.put_nowait((data, addr))
         except queue.Full:
-            pass  # UDP: drop on overflow
+            pass  # UDP is connectionless: silently drop when the queue is full
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
         ip = bytes(int(x) for x in addr[0].split("."))
@@ -203,7 +206,7 @@ class Net:
         bridge.on_event(C.NET_ACCEPT_EVT, self._on_accept)
         bridge.on_event(C.NET_CLOSED_EVT, self._on_closed)
 
-    # ---- events (reader thread) ------------------------------------------------
+    # ---- event handlers — all called on the reader thread ---------------------
 
     def _on_data(self, p: bytes) -> None:
         s = self._sockets.get(p[0]) if p else None

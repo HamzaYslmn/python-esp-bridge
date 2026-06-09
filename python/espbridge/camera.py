@@ -28,7 +28,7 @@ _PROPS = {"framesize": 0, "quality": 1, "brightness": 2, "contrast": 3,
           "whitebal": 8, "exposure_ctrl": 9, "aec_value": 10,
           "gain_ctrl": 11, "agc_gain": 12}
 
-# pin maps: pwdn, reset, xclk, siod, sioc, d7..d0, vsync, href, pclk
+# Pin order for each preset (16 entries): pwdn, reset, xclk, siod, sioc, d7..d0, vsync, href, pclk
 PRESETS: dict[str, list[int]] = {
     "ai-thinker":    [32, -1, 0, 26, 27, 35, 34, 39, 36, 21, 19, 18, 5, 25, 23, 22],
     "esp-eye":       [-1, -1, 4, 18, 23, 36, 37, 38, 39, 35, 14, 13, 34, 5, 27, 25],
@@ -61,7 +61,7 @@ class Camera:
         """Grab one frame and pull it across the link (JPEG bytes)."""
         r = self._b.request(C.CAM_CAPTURE, timeout=10.0)
         total = struct.unpack(">I", r[:4])[0]
-        out = bytearray(total)  # size known up front: fill by slice, no O(n^2) growth
+        out = bytearray(total)  # pre-allocate the full frame; fill by slice to avoid O(n²) growth
         pos = 0
         while pos < total:
             chunk = self._b.request(

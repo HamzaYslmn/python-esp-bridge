@@ -50,12 +50,13 @@ def test_callbacks_bypass_queue(bridge, fw):
     can = bridge.can
     can.on_message(got.append)
     emit_can(fw, 0x42, b"\x05", flags=1)
-    for _ in range(200):  # event lands on the reader thread
+    # The event is dispatched on the reader thread, so poll briefly for it.
+    for _ in range(200):
         if got:
             break
         time.sleep(0.005)
     assert got and got[0].id == 0x42 and got[0].extended
-    assert can._rx.empty()
+    assert can._rx.empty()  # callback-routed messages must not also appear in the polled queue
 
 
 def test_status(bridge, fw):

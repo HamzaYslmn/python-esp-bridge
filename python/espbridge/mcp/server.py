@@ -277,11 +277,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             esp = mgr.connect()
             info = esp.info
-            # stderr only: stdout is reserved for the MCP protocol over stdio
+            # Always write to stderr: stdout is the MCP protocol stream.
             print(f"[espbridge-mcp] connected: {info.chip.name} "
                   f"{info.mac} fw v{'.'.join(map(str, info.fw_version))}",
                   file=sys.stderr)
         except BridgeError as e:
+            # Non-fatal: the manager will reconnect automatically on the
+            # first tool call using the same startup settings.
             print(f"[espbridge-mcp] startup connect failed: {e} "
                   f"(will retry on the first tool call)", file=sys.stderr)
 

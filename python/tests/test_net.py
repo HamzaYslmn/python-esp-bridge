@@ -16,7 +16,7 @@ def wifi_up(bridge):
 
 def test_wifi_scan_collects_events(bridge):
     nets = bridge.wifi.scan(timeout=5.0)
-    assert [n.ssid for n in nets] == ["HomeWifi", "Neighbor"]  # sorted by RSSI
+    assert [n.ssid for n in nets] == ["HomeWifi", "Neighbor"]  # fake firmware emits them strongest-first
     assert nets[0].rssi == -40 and nets[0].auth == "wpa2_psk"
 
 
@@ -42,7 +42,8 @@ def test_tcp_send_recv_window_ack(wifi_up, fw):
     fw.emit(C.NET_DATA_EVT, bytes([sock.handle]) + b"HTTP/1.0 200 OK\r\n")
     data = sock.recv(timeout=2.0)
     assert data == b"HTTP/1.0 200 OK\r\n"
-    # consuming data must replenish the firmware's credit window
+    # After the application consumes data the bridge must send a NET_WINDOW_ACK
+    # to restore the firmware's receive credit so the ESP can keep forwarding bytes.
     deadline_acks = [(sock.handle, len(data))]
     for _ in range(100):
         if fw.window_acks == deadline_acks:
@@ -59,8 +60,8 @@ def test_tcp_recv_returns_empty_after_remote_close(wifi_up, fw):
     sock = wifi_up.net.tcp_connect("example.com", 80)
     fw.emit(C.NET_DATA_EVT, bytes([sock.handle]) + b"tail")
     fw.emit(C.NET_CLOSED_EVT, bytes([sock.handle, 0]))
-    assert sock.recv(timeout=2.0) == b"tail"   # buffered data still readable
-    assert sock.recv(timeout=2.0) == b""       # then EOF
+    assert sock.recv(timeout=2.0) == b"tail"   # buffered data already queued before close is still readable
+    assert sock.recv(timeout=2.0) == b""       # subsequent read returns empty bytes to signal EOF
     assert not sock.connected
 
 
@@ -72,7 +73,7 @@ def test_tcp_recv_timeout(wifi_up):
 
 def test_tcp_server_accept(wifi_up, fw):
     srv = wifi_up.net.tcp_listen(8080)
-    fw.tcp_sent[9] = b""  # firmware allocates handle 9 for the accepted client
+    fw.tcp_sent[9] = b""  # pre-register handle 9 so the fake firmware can track data sent to it
     fw.emit(C.NET_ACCEPT_EVT,
             bytes([srv.handle, 9]) + bytes([10, 0, 0, 7]) + struct.pack(">H", 51234))
     conn = srv.accept(timeout=2.0)

@@ -9,7 +9,7 @@ from . import constants as C
 class Pwm:
     def __init__(self, bridge):
         self._b = bridge
-        self._attached: dict[int, tuple[int, int]] = {}  # pin -> (freq, res_bits)
+        self._attached: dict[int, tuple[int, int]] = {}  # pin -> (freq_hz, resolution_bits)
 
     def attach(self, pin: int, freq: int = 1000, resolution_bits: int = 10) -> None:
         self._b.request(C.PWM_ATTACH, struct.pack(">BIB", pin, freq, resolution_bits))
@@ -35,7 +35,7 @@ class Pwm:
 
     def servo(self, pin: int, angle: float, *, min_us: int = 500, max_us: int = 2500) -> None:
         """Drive a hobby servo: 50 Hz, angle 0..180 mapped to min_us..max_us."""
-        if self._attached.get(pin) != (50, 14):
+        if self._attached.get(pin) != (50, 14):  # servo needs 50 Hz, 14-bit resolution
             self.attach(pin, 50, 14)
         us = min_us + (max_us - min_us) * max(0.0, min(180.0, angle)) / 180.0
         self.write(pin, round(us / 20000.0 * (2**14 - 1)))

@@ -10,7 +10,7 @@ from .errors import BridgeTimeoutError
 from .protocol import ip_str as _ip
 from .protocol import lp, mac_to_str
 
-WL_CONNECTED = 3  # wl_status_t
+WL_CONNECTED = 3  # wl_status_t value meaning "connected" (matches Arduino WiFi.h)
 
 AUTH_MODES = {0: "open", 1: "wep", 2: "wpa_psk", 3: "wpa2_psk", 4: "wpa_wpa2_psk",
               5: "wpa2_enterprise", 6: "wpa3_psk", 7: "wpa2_wpa3_psk", 8: "wapi_psk"}
@@ -50,7 +50,7 @@ class Wifi:
         bridge.on_event(C.WIFI_SCAN_DONE, self._on_scan_done)
         bridge.on_event(C.WIFI_STATE_EVT, self._on_state)
 
-    # ---- events ---------------------------------------------------------------
+    # ---- event handlers — all called on the reader thread --------------------
 
     def _on_scan_res(self, p: bytes) -> None:
         if len(p) < 12:
@@ -77,7 +77,7 @@ class Wifi:
         """callback(event: str, ip: str) on connect/got_ip/disconnect."""
         self._state_callbacks.append(callback)
 
-    # ---- commands ----------------------------------------------------------------
+    # ---- commands — all block until the firmware responds --------------------
 
     def scan(self, timeout: float = 15.0) -> list[Network]:
         self._scan_results = []

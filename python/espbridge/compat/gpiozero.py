@@ -189,7 +189,7 @@ class EspBridgePin(Pin):
                 self._frequency = None
             self._gpio.mode(self._n, "input")
         except Exception:
-            pass  # bridge may already be closed (e.g. at interpreter exit)
+            pass  # ignore errors: the bridge may already be closed, e.g. during interpreter shutdown
         self._function = "input"
 
 

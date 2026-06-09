@@ -59,7 +59,7 @@ class Rmt:
     def tx(self, pin: int, symbols: list[Symbol]) -> None:
         """Play a pulse train; blocks until it is on the wire."""
         payload = pack_symbols(symbols)
-        secs = sum(t for _, t in symbols) / self._tick_hz.get(pin, 1_000_000)
+        secs = sum(t for _, t in symbols) / self._tick_hz.get(pin, 1_000_000)  # estimated wire time in seconds
         self._b.request(C.RMT_TX, bytes([pin]) + payload,
                         timeout=secs + self._b.timeout)
 
@@ -72,14 +72,16 @@ class Rmt:
         """
         if len(data) > C.MAX_PAYLOAD - 16:
             raise ValueError(f"at most {C.MAX_PAYLOAD - 16} bytes per tx_bytes call")
-        bit_ticks = max(sum(t for _, t in bit0), sum(t for _, t in bit1))
+        bit_ticks = max(sum(t for _, t in bit0), sum(t for _, t in bit1))  # worst-case ticks per bit
         secs = len(data) * 8 * bit_ticks / self._tick_hz.get(pin, 1_000_000)
         self._b.request(C.RMT_TX_BYTES,
                         struct.pack(">BII", pin, _bit_sym(bit0), _bit_sym(bit1)) + data,
                         timeout=secs + self._b.timeout)
 
     def tx_loop(self, pin: int, symbols: list[Symbol]) -> None:
-        """Repeat a short pulse train until tx_stop (stepper run, clocks)."""
+        """Continuously repeat the pulse train in hardware until tx_stop() is called.
+        Useful for signals that must run indefinitely without host involvement,
+        such as a stepper motor step clock or a continuous carrier."""
         self._b.request(C.RMT_TX_LOOP, bytes([pin]) + pack_symbols(symbols))
 
     def tx_stop(self, pin: int) -> None:

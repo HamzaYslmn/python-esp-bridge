@@ -1,5 +1,5 @@
-"""MCP server smoke tests: build the server over the fake firmware and drive a
-few tools end-to-end through an in-memory FastMCP client."""
+"""MCP server smoke tests: build the server over the fake firmware and drive
+several tools end-to-end through an in-memory FastMCP client."""
 import asyncio
 
 import pytest
@@ -27,7 +27,7 @@ def test_build_server_registers_tools(fw):
     finally:
         mgr.disconnect()
 
-    # a representative slice across the peripheral groups
+    # Check a representative tool from each peripheral group rather than the full list.
     expected = {
         "bridge_connect", "bridge_status", "system_info", "system_ping",
         "gpio_mode", "gpio_write", "gpio_read", "adc_read", "pwm_servo",
@@ -70,8 +70,8 @@ def test_tools_drive_the_bridge(fw):
 
 
 def _collect_feedback(server, fw, calls):
-    """Run `calls` (list of (tool, params)) and return the feedback messages the
-    client received as MCP log notifications."""
+    """Run a list of (tool, params) calls and return the MCP log notification
+    messages that the client received as feedback."""
     msgs = []
 
     async def handler(m):
@@ -100,7 +100,7 @@ def test_feedback_on_by_default(fw):
     finally:
         mgr.disconnect()
 
-    # the gpio_mode confirmation and the gpio_write read-back both surfaced
+    # Both the gpio_mode confirmation and the gpio_write read-back must produce feedback messages.
     assert any("GPIO2" in (m or "") and "output" in (m or "") for m in msgs)
     assert any("gpio_write" in (m or "") and "level" in (m or "") for m in msgs)
 
@@ -126,7 +126,7 @@ def test_feedback_can_be_disabled(fw):
     try:
         asyncio.run(run())
     finally:
-        FEEDBACK.enabled = True  # restore the module-level default
+        FEEDBACK.enabled = True  # restore the module-level default so other tests are unaffected
         mgr.disconnect()
 
     assert msgs == []
@@ -153,7 +153,7 @@ def test_gpio_status_and_write_ok(fw):
 
 
 def test_board_status_sees_pins_and_i2c_devices(fw):
-    fw.i2c_devices[0x3C] = b"\x00"          # pretend an SSD1306 OLED is wired up
+    fw.i2c_devices[0x3C] = b"\x00"          # simulate an SSD1306 OLED at address 0x3C
     mgr = _manager(fw)
     server = build_server(mgr)
 
@@ -175,8 +175,8 @@ def test_board_status_sees_pins_and_i2c_devices(fw):
     assert pins[5]["pwm"] is True
     bus0 = next(b for b in status["i2c"] if b["bus"] == 0)
     addrs = {d["addr"] for d in bus0["devices"]}
-    assert 0x3C in addrs                     # the device on the bus is surfaced
-    assert all("guess" not in d for d in bus0["devices"])  # no presumptive naming
+    assert 0x3C in addrs                     # the device registered in the fake firmware must appear
+    assert all("guess" not in d for d in bus0["devices"])  # board_status must not guess device names
 
 
 def test_fs_tree(fw):
@@ -200,7 +200,8 @@ def test_fs_tree(fw):
 
 
 def test_feedback_on_failure(fw):
-    """A failed action is reported too (warning), so every action is visible."""
+    """A failed tool call must also produce a feedback message (at warning level),
+    so the MCP client always sees what happened regardless of success or failure."""
     from fastmcp.exceptions import ToolError as ClientToolError
 
     from espbridge.mcp.common import FEEDBACK
@@ -218,7 +219,7 @@ def test_feedback_on_failure(fw):
     async def run():
         async with Client(server, log_handler=handler) as client:
             with pytest.raises(ClientToolError):
-                # GPIO_WRITE on a pin never set to output -> BAD_PIN error
+                # gpio_write on a pin never configured as output → firmware returns BAD_PIN
                 await client.call_tool("gpio_write", {"pin": 5, "value": 1})
 
     try:
@@ -227,12 +228,12 @@ def test_feedback_on_failure(fw):
         mgr.disconnect()
 
     assert any(lvl == "warning" and "gpio_write" in (m or "") and "FAILED" in (m or "")
-               for lvl, m in seen)
+               for lvl, m in seen)  # the feedback message must be a warning and mention the failure
 
 
 def test_tool_error_is_clean(fw):
-    """A peripheral failure (writing an un-configured pin) surfaces as a tool
-    error rather than crashing the server."""
+    """A peripheral failure must surface as a ToolError to the MCP client, not
+    as an unhandled exception that would crash the server."""
     from fastmcp.exceptions import ToolError as ClientToolError
 
     mgr = _manager(fw)
@@ -241,7 +242,7 @@ def test_tool_error_is_clean(fw):
     async def run():
         async with Client(server) as client:
             with pytest.raises(ClientToolError):
-                # GPIO_WRITE on a pin never put in output mode -> BAD_PIN
+                # gpio_write on a pin never put in output mode → firmware returns BAD_PIN
                 await client.call_tool("gpio_write", {"pin": 5, "value": 1})
 
     try:

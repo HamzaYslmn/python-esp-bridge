@@ -45,7 +45,7 @@ def _b() -> Bridge:
     return _bridge
 
 
-def setmode(mode) -> None:  # numbering is always ESP32 GPIO numbers
+def setmode(mode) -> None:  # accepted for API compatibility; ESP32 GPIO numbers are always used
     pass
 
 

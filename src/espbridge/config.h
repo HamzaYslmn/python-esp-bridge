@@ -68,14 +68,16 @@
 #endif
 
 // ---- v0.3.0 modules ----------------------------------------------------------
-// Generic primitives present on every supported chip; SOC_* macros (soc_caps.h
-// via Arduino.h) gate the chip-dependent peripherals.
+// The primitives below are present on every supported chip.
+// Chip-specific peripherals are gated by SOC_* macros from soc_caps.h
+// (pulled in transitively by Arduino.h).
 #define BRIDGE_HAS_RMT     1   // pulse-train play/capture
 #define BRIDGE_HAS_ONEWIRE 1   // bit-banged 1-Wire timing primitives
 #define BRIDGE_HAS_FS      1   // LittleFS always; SD depends on IRAM (below)
-// Classic ESP32 with Wi-Fi + Bluedroid leaves ~zero spare IRAM; the SD-SPI
-// and SDMMC drivers add IRAM-resident ISRs that overflow iram0_0_seg there.
-// Set BRIDGE_ENABLE_BLE 0 (frees BT IRAM) to get SD support on classic.
+// Classic ESP32 with Wi-Fi + Bluedroid leaves almost no spare IRAM. The SD-SPI
+// and SDMMC drivers each add IRAM-resident ISRs that overflow the iram0_0_seg
+// segment on that chip. Setting BRIDGE_ENABLE_BLE 0 frees BT IRAM and
+// allows SD to build on classic ESP32.
 #if defined(CONFIG_IDF_TARGET_ESP32) && BRIDGE_ENABLE_BLE
   #define BRIDGE_HAS_SD    0
 #else
@@ -86,10 +88,11 @@
 #else
   #define BRIDGE_HAS_SDMMC 0
 #endif
-// The IDF sleep API (sleep_modes.c) is IRAM-resident — even deep sleep + wake
-// cause overflow classic ESP32's last ~436 B of IRAM once Wi-Fi + Bluedroid
-// are in (measured). Same trade as SD: build BRIDGE_ENABLE_BLE 0 (USB-only) to
-// get sleep on classic. S2/S3/C3/C6 have it in every build.
+// The IDF sleep driver (sleep_modes.c) is also IRAM-resident. Even just
+// arming deep-sleep overflows the ~436 B of IRAM still available on classic
+// ESP32 once Wi-Fi + Bluedroid are loaded (measured). Same trade-off as SD:
+// set BRIDGE_ENABLE_BLE 0 to recover that IRAM and enable sleep on classic.
+// S2/S3/C3/C6 have no such constraint — sleep is always available there.
 #if defined(CONFIG_IDF_TARGET_ESP32) && BRIDGE_ENABLE_BLE
   #define BRIDGE_HAS_SLEEP 0
 #else
@@ -113,9 +116,10 @@
   #define BRIDGE_HAS_MCPWM 0
 #endif
 
-// Heavy opt-ins (default OFF; enable with -DBRIDGE_ENABLE_ETH=1). ETH needs a PHY chip
-// (RMII on classic ESP32, or W5500/DM9051 over SPI on any chip); CAM needs an
-// OV-series sensor + PSRAM and exists on esp32/s2/s3 only.
+// Heavy optional modules, off by default. Enable with -DBRIDGE_ENABLE_ETH=1 or
+// -DBRIDGE_ENABLE_CAM=1 at build time.
+//   ETH requires a PHY chip: RMII on classic ESP32, or W5500/DM9051 over SPI on any chip.
+//   CAM requires an OV-series sensor + PSRAM; supported on esp32/s2/s3 only.
 #ifndef BRIDGE_ENABLE_ETH
 #define BRIDGE_ENABLE_ETH 0
 #endif
@@ -133,9 +137,10 @@
   #define BRIDGE_CAM 0
 #endif
 
-// BLE additionally needs the Bluedroid host stack: arduino-esp32 3.3.x moved
-// S3/C3/C6 to NimBLE, which link_ble.cpp / mod_ble.cpp don't speak (yet) —
-// those chips build USB-only (ESP-NOW and everything else still works).
+// BLE also requires the Bluedroid host stack. arduino-esp32 3.3.x switched
+// S3/C3/C6 to NimBLE, which link_ble.cpp and mod_ble.cpp do not yet support,
+// so those chips fall back to USB-only. ESP-NOW and all other modules still
+// work on them.
 #if BRIDGE_ENABLE_BLE && BRIDGE_HAS_BLE && defined(SOC_BLE_SUPPORTED) && defined(CONFIG_BT_BLUEDROID_ENABLED)
   #define BRIDGE_BLE 1
 #else
@@ -156,9 +161,10 @@
   #define BRIDGE_CORE 1
 #endif
 
-// Frame buffers: logical frame = 4 hdr + MAX_PAYLOAD + 2 crc.
+// Logical frame layout: 4-byte header + payload (up to MAX_PAYLOAD) + 2-byte CRC.
 #define MAX_FRAME      (4 + MAX_PAYLOAD + 2)
-// COBS overhead: 1 byte per started 254-byte block.
+// COBS worst-case overhead: 1 extra byte per started 254-byte block, plus the
+// 0x00 frame delimiter appended by tx_task.
 #define ENC_BUF_SIZE   (MAX_FRAME + (MAX_FRAME / 254) + 2)
 
 #define SERIAL_RX_BUF  4096

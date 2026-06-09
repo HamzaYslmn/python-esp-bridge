@@ -3,14 +3,14 @@ from espbridge.compat.blinka import I2C, SPI, DigitalInOut, Direction, Pull
 
 
 def test_i2c_protocol(bridge, fw):
-    fw.i2c_devices[0x76] = bytes([0x60, 0x11, 0x22, 0x33])  # e.g. a BME280
+    fw.i2c_devices[0x76] = bytes([0x60, 0x11, 0x22, 0x33])  # simulates a sensor at 0x76 (e.g. a BME280)
 
     i2c = I2C(bridge)
     assert fw.i2c_inited
     assert i2c.scan() == [0x76]
 
     assert i2c.try_lock()
-    assert not i2c.try_lock()  # busio semantics: non-blocking, exclusive
+    assert not i2c.try_lock()  # busio contract: try_lock() is non-blocking and fails if already held
 
     i2c.writeto(0x76, bytearray([0xF4, 0x27]))
     assert fw.i2c_writes[-1] == (0x76, bytes([0xF4, 0x27]))
@@ -22,7 +22,7 @@ def test_i2c_protocol(bridge, fw):
     out, in_ = bytearray([0xD0]), bytearray(1)
     i2c.writeto_then_readfrom(0x76, out, in_)
     assert fw.i2c_writes[-1] == (0x76, b"\xd0")
-    assert in_[0] == 0x60  # chip-id style register read
+    assert in_[0] == 0x60  # the first byte of the device data (chip-id register in this scenario)
 
     i2c.unlock()
     assert i2c.try_lock()
@@ -48,7 +48,7 @@ def test_spi_protocol(bridge, fw):
     assert fw.spi_transfers[-1] == bytes([0x9F])
 
     buf = bytearray(3)
-    spi.readinto(buf, write_value=0xAB)   # loopback fake echoes tx
+    spi.readinto(buf, write_value=0xAB)   # fake firmware is a loopback: it echoes the transmitted byte back as received data
     assert bytes(buf) == b"\xab\xab\xab"
 
     out, in_ = bytearray(b"hello"), bytearray(5)
@@ -59,15 +59,15 @@ def test_spi_protocol(bridge, fw):
 
 def test_digitalinout(bridge, fw):
     cs = DigitalInOut(bridge, 5)
-    assert cs.direction == Direction.INPUT  # CircuitPython default
+    assert cs.direction == Direction.INPUT  # CircuitPython creates pins as INPUT by default
 
-    cs.switch_to_output(value=True)         # what SPIDevice does with CS
+    cs.switch_to_output(value=True)         # mirrors what adafruit_bus_device.SPIDevice does when asserting a CS pin
     assert cs.direction == Direction.OUTPUT
     assert fw.gpio_modes[5] == 1 and fw.gpio_levels[5] == 1
     cs.value = False
     assert fw.gpio_levels[5] == 0
 
     cs.switch_to_input(pull=Pull.UP)
-    assert fw.gpio_modes[5] == 2            # input_pullup
+    assert fw.gpio_modes[5] == 2            # mode value 2 means input_pullup in the firmware's enum
     fw.gpio_levels[5] = 1
     assert cs.value is True

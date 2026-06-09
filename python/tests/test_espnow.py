@@ -90,7 +90,7 @@ def test_send_returns_delivery_status(bridge, fw):
     bridge.espnow.add_peer(PEER)
     assert bridge.espnow.send(PEER, b"hello") is True
     assert fw.espnow_sent == [(PEER6, b"hello")]
-    fw.espnow_deliver = False  # peer stopped ACKing
+    fw.espnow_deliver = False  # simulate the peer not ACKing (e.g. out of range)
     assert bridge.espnow.send(PEER, b"again") is False
 
 
@@ -105,8 +105,8 @@ def test_send_rejects_oversized_payload(bridge, fw):
     bridge.espnow.add_peer(PEER)
     with pytest.raises(ValueError):
         bridge.espnow.send(PEER, b"x" * 251)
-    assert fw.espnow_sent == []  # rejected before any bytes hit the wire
-    bridge.espnow.send(PEER, b"x" * 250)  # exactly at the limit is fine
+    assert fw.espnow_sent == []  # oversized payload must be rejected host-side, before anything is sent
+    bridge.espnow.send(PEER, b"x" * 250)  # 250 bytes is exactly the ESP-NOW limit and must succeed
 
 
 def test_send_nowait_fires_send_result_event(bridge, fw):

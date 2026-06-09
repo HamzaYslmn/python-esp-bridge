@@ -115,21 +115,25 @@ class OLED:
             image = self._Image.new("1", (self.width, self.height))
         if image.mode != "1":  # any nonzero pixel lights up (no dithering)
             image = image.convert("L").point(lambda v: 255 if v else 0, mode="1")
-        # Transposing makes each image row a display column, so tobytes()
-        # yields the 8-pixel vertical slices pages are made of (MSB-first;
-        # the panel wants the top pixel in bit 0, hence the bit reversal).
+        # Transposing the image rotates it 90°, turning each image row into a
+        # display column. tobytes() then produces 8-pixel vertical slices that
+        # map directly to display pages. PIL packs those bytes MSB-first, but
+        # the panel stores the top pixel of each slice in bit 0, so every byte
+        # must be bit-reversed (handled by the _BITREV lookup table).
         raw = image.transpose(self._Image.Transpose.TRANSPOSE).tobytes()
         bpr = self.height // 8  # transposed row = bpr bytes, one per page
         pages = self.height // 8
         chunk = self._chunk
         for page in range(pages):
             data = raw[page::bpr].translate(_BITREV)
-            # Pipelined: fire-and-forget except the final write, which syncs
-            # the frame (firmware runs in order). A page splits into several
-            # writes only when the Wire buffer is small (old firmware, or a
-            # tight active-coexistence heap). Re-address page+column before
-            # every chunk: clones disagree on whether the column pointer
-            # survives a transaction boundary; explicit addressing is safe.
+            # All writes except the very last are fire-and-forget (pipelined).
+            # The final write uses wait=True, which flushes the pipeline and
+            # ensures the full frame is committed before show() returns.
+            # A page only splits across multiple writes when the Wire buffer is
+            # small (old firmware builds, or boards with a constrained heap).
+            # We re-send the page+column address before every chunk because
+            # some SH1106 clones do not preserve the column pointer across I2C
+            # transaction boundaries; re-addressing is always safe.
             for off in range(0, len(data), chunk):
                 col = self.colstart + off
                 self.command(0xB0 + page, 0x00 | (col & 0x0F),

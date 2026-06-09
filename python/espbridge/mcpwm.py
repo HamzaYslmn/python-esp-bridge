@@ -20,8 +20,9 @@ class Mcpwm:
 
     def begin(self, pin_a: int, pin_b: int | None = None, *,
               freq: int = 20_000, deadtime_ns: int = 500) -> None:
-        """Start the pair at `freq` Hz. pin_b None = single output, no
-        deadtime. deadtime_ns resolves in 100 ns steps (max 6553 ns)."""
+        """Start the PWM generator at `freq` Hz. If pin_b is None, only
+        pin_a is driven (no complementary output, no deadtime insertion).
+        deadtime_ns is resolved in 100 ns steps; maximum value is 6553 ns."""
         self._b.request(C.MCPWM_INIT,
                         struct.pack(">BbIH", pin_a,
                                     -1 if pin_b is None else pin_b,
@@ -29,7 +30,7 @@ class Mcpwm:
 
     def duty(self, percent: float) -> None:
         """0..100% on pin_a (pin_b runs the complement minus deadtime)."""
-        pm = round(max(0.0, min(100.0, percent)) * 10)
+        pm = round(max(0.0, min(100.0, percent)) * 10)  # firmware expects tenths of a percent (0..1000)
         self._b.request(C.MCPWM_DUTY, struct.pack(">H", pm))
 
     def stop(self) -> None:

@@ -5,8 +5,8 @@ import pytest
 def test_subapi_lazy_and_cached(bridge):
     g1 = bridge.gpio
     g2 = bridge.gpio
-    assert g1 is g2  # cached after first access
-    assert "gpio" in bridge.__dict__  # __getattr__ bypassed from now on
+    assert g1 is g2  # same object: sub-API is cached on the instance after first access
+    assert "gpio" in bridge.__dict__  # once cached, __getattr__ is no longer called for it
 
 
 def test_every_subapi_constructs(bridge):

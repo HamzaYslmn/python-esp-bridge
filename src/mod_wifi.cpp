@@ -1,4 +1,6 @@
-// Wi-Fi: STA + AP management, async scan. Callbacks only enqueue via proto_send_event (tx_task owns serial).
+// Wi-Fi module: STA + AP management and async network scanning.
+// Callbacks never write to serial directly — they enqueue events via
+// proto_send_event so that tx_task remains the sole serial writer.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include <WiFi.h>
@@ -7,8 +9,12 @@ static bool scanning = false;
 static bool ap_active = false;
 static bool sta_started = false;
 
-// Lazy bring-up: radio off until first command (BLE-only board pays no driver heap).
-// Leave coex/power-save at IDF defaults — never WIFI_PS_NONE with BT.
+// Radio stays off until the host sends its first Wi-Fi command.
+// This matters on BLE-only boards: the Wi-Fi driver costs several KB of heap,
+// and we only pay that cost if Wi-Fi is actually used.
+// Power-save and coex settings are left at IDF defaults.
+// IMPORTANT: never set WIFI_PS_NONE while Bluetooth is active — the SW radio
+// arbiter becomes unstable and packet loss increases dramatically.
 bool wifi_is_active() { return WiFi.getMode() != WIFI_MODE_NULL; }
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -20,7 +26,7 @@ static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
     case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
       buf[0] = 2;
       uint32_t ip = (uint32_t)WiFi.localIP();
-      memcpy(buf + 1, &ip, 4);  // network byte order
+      memcpy(buf + 1, &ip, 4);  // IP in network byte order (big-endian, as received)
       break;
     }
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
@@ -33,7 +39,7 @@ static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 void wifi_init() {
-  WiFi.persistent(false);  // don't wear flash with credentials
+  WiFi.persistent(false);  // never write credentials to flash — avoid flash wear and leftover secrets
   WiFi.onEvent(on_wifi_event);
 }
 
@@ -67,7 +73,9 @@ void wifi_poll() {
   WiFi.scanDelete();
 }
 
-// take a length-prefixed string from the payload cursor
+// Read a length-prefixed string from the payload at position *p.
+// Advances *p and decrements *left by the amount consumed.
+// Returns false if the payload is too short or the string would overflow `out`.
 static bool take_str(const uint8_t*& p, uint16_t& left, char* out, uint8_t cap) {
   if (left < 1) return false;
   uint8_t n = *p++; left--;
@@ -82,7 +90,8 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WIFI, op);
   switch (op) {
     case 0x01: {  // SCAN (async)
-      // Scan hops channels → ESP-NOW packets drop while it runs (see PROTOCOL.md).
+      // Channel-hopping during a scan disrupts ESP-NOW: peers on other channels
+      // cannot be reached while the radio sweeps. See PROTOCOL.md for details.
       if (scanning) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
@@ -94,7 +103,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
-    case 0x02: {  // CONNECT: ssid, pass (async; poll STATUS or wait STATE_EVT)
+    case 0x02: {  // CONNECT: ssid, pass — begins async association; poll STATUS or wait for STATE_EVT
       char ssid[33], pass[65];
       const uint8_t* q = p; uint16_t left = len;
       if (!take_str(q, left, ssid, sizeof(ssid)) || !take_str(q, left, pass, sizeof(pass))) {
@@ -111,7 +120,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03:  // DISCONNECT
       WiFi.disconnect(true /*wifioff if no AP*/, false);
       sta_started = false;
-      // Drop radio (frees heap) unless AP or ESP-NOW still needs it.
+      // Turn the radio off entirely to reclaim heap, unless another user (AP or ESP-NOW) still needs it.
       if (!ap_active && !espnow_is_active()) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;

@@ -1,7 +1,10 @@
-// BLE: scan, advertise, GATT server, basic GATT client (one connection).
-// Uses the bundled Bluedroid BLE library (arduino-esp32 core 3.x).
-// Handlers run on net_task; Bluedroid callbacks run on BT tasks — both just
-// enqueue frames via proto_send_event (tx_task owns the serial port).
+// BLE module: advertising/scanning, a GATT server (multiple services), and a
+// basic GATT client supporting a single simultaneous connection.
+// Uses the Bluedroid BLE library bundled with arduino-esp32 core 3.x.
+//
+// Command handlers run on net_task. Bluedroid internal callbacks (scan results,
+// GATT writes, connect/disconnect) run on BT stack tasks. Both paths only
+// enqueue data via proto_send_event — tx_task is the sole serial writer.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
@@ -24,12 +27,16 @@ static BLEClient* client_obj = nullptr;
 
 static void ble_lazy_init() {
   if (ble_ready) return;
-  bt_prepare_ble_only();  // classic ESP32: BLE-only controller (see link.h)
+  bt_prepare_ble_only();  // on classic ESP32: release Classic BT memory and restart the controller in BLE-only mode (see link_ble.cpp)
   BLEDevice::init(BRIDGE_NAME);
   ble_ready = true;
 }
 
-// ---- UUID helpers: wire format is always 16 bytes, MSB-first ----------------
+// ---- UUID helpers -----------------------------------------------------------
+// All UUIDs on the wire are 16 bytes, big-endian (MSB first).
+// Bluedroid stores 128-bit UUIDs in little-endian order internally, so
+// uuid_to_wire() reverses the byte order when converting to the wire format.
+// Short (16- or 32-bit) UUIDs are expanded into the standard Bluetooth base UUID.
 static const uint8_t BASE_UUID_MSB[16] = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
   0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB,
@@ -54,7 +61,8 @@ static BLEUUID wire_to_uuid(const uint8_t* w) {
 class AdvCb : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
     uint8_t buf[8 + 62];
-    // getNative() returns the raw 6-byte address (uint8_t* on current cores).
+    // getNative() returns a pointer to the raw 6-byte address array.
+    // The type changed across arduino-esp32 versions; uint8_t* is correct on core 3.x.
     memcpy(buf, dev.getAddress().getNative(), 6);
     buf[6] = (uint8_t)dev.getAddressType();
     buf[7] = (uint8_t)(int8_t)dev.getRSSI();
@@ -74,7 +82,7 @@ class SrvCb : public BLEServerCallbacks {
   void onDisconnect(BLEServer* s) override {
     uint8_t v = 0;
     proto_send_event(BLE_GATTS_CONN_EVT, &v, 1);
-    s->startAdvertising();  // stay discoverable
+    s->startAdvertising();  // restart advertising so new clients can find the device
   }
 };
 static SrvCb srv_cb;
@@ -157,7 +165,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (nlen) data.setName(name);
       if (mlen) data.setManufacturerData(mfg);
       if (uuid16) data.setCompleteServices(BLEUUID(uuid16));
-      data.setFlags(0x06);  // general discoverable, no BR/EDR
+      data.setFlags(0x06);  // AD flags: LE general discoverable, BR/EDR (Classic BT) not supported
       adv->setAdvertisementData(data);
       adv->start();
       proto_reply_ok(seq, cmd);
@@ -175,8 +183,10 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (n == 0 || char_count + n > BLE_MAX_CHARS ||
           len < (uint16_t)(17 + n * 17)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (!server_obj) {
-        // Share the BLE link's GATT server when it exists (one server per
-        // device); its connect/disconnect callbacks stay in charge then.
+        // Bluedroid allows only one GATT server per device. If link_ble.cpp
+        // has already created one for the bridge link, reuse it here instead
+        // of creating a second one. In that case link_ble.cpp's connection
+        // callbacks remain in charge of connect/disconnect events.
         server_obj = (BLEServer*)link_ble_server();
         if (!server_obj) {
           server_obj = BLEDevice::createServer();

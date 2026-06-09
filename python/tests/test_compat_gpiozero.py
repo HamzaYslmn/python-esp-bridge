@@ -30,16 +30,16 @@ def test_led_on_off_toggle(factory, fw):
 
 
 def test_button_when_pressed_via_edge_event(factory, fw):
-    fw.gpio_levels[4] = 1  # pulled up, not pressed
+    fw.gpio_levels[4] = 1  # high = not pressed (active-low button with pull-up)
     btn = Button(4, pin_factory=factory)
-    assert fw.gpio_modes[4] == 2          # input_pullup
-    assert 4 in fw.watching               # edge watch armed
+    assert fw.gpio_modes[4] == 2          # mode 2 = input_pullup
+    assert 4 in fw.watching               # pin 4 must have an edge-change watch registered
     assert not btn.is_pressed
 
     pressed = threading.Event()
     btn.when_pressed = lambda: pressed.set()
 
-    fw.gpio_levels[4] = 0                 # firmware reports the new level too
+    fw.gpio_levels[4] = 0                 # update the fake hardware level so is_pressed is correct after the event fires
     fw.emit(C.GPIO_EDGE_EVT, bytes([4, 0]) + struct.pack(">I", 1234))
     assert pressed.wait(2.0)
     assert btn.is_pressed

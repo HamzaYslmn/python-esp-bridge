@@ -20,7 +20,7 @@
 #define NET_CHUNK   512   // max bytes per NET data event
 #define UART_CHUNK  256   // max bytes per UART rx event
 
-// seq 0 = fire-and-forget (no response expected); host uses 1..255.
+// seq 0 = fire-and-forget: the firmware sends no reply. The host uses 1..255.
 
 // ---- status codes -----------------------------------------------------------
 enum Status : uint8_t {
@@ -72,7 +72,8 @@ enum ChipModel : uint8_t {
 };
 
 // ---- command ids: cmd = (MODULE << 8) | OP ----------------------------------
-// ops 0x00..0x7F: host->fw requests; ops 0x80..0xFF: fw->host events.
+// Op range 0x00..0x7F: request from host to firmware.
+// Op range 0x80..0xFF: asynchronous event from firmware to host.
 #define MOD_SYS   0x00
 #define MOD_GPIO  0x10
 #define MOD_ADC   0x20
@@ -192,15 +193,16 @@ enum ChipModel : uint8_t {
 #define UART_DEINIT     CMD(MOD_UART, 0x03) // port u8
 #define UART_RX_EVT     CMD(MOD_UART, 0x80) // port u8|data..
 
-// ONEWIRE — 1-Wire bit-timing primitives only. ROM search, CRC8 and device
-// drivers (DS18B20, ...) live on the host.
+// ONEWIRE — low-level 1-Wire bit-timing primitives only. ROM search, CRC8,
+// and all device-specific drivers (DS18B20, etc.) are implemented on the host.
 #define OW_RESET        CMD(MOD_ONEWIRE, 0x01) // pin u8 -> present u8
 #define OW_WRITE        CMD(MOD_ONEWIRE, 0x02) // pin u8|power u8|data.. (power=1: drive bus high after, parasite supply)
 #define OW_READ         CMD(MOD_ONEWIRE, 0x03) // pin u8|n u8 -> data[n]
 #define OW_TRIPLET      CMD(MOD_ONEWIRE, 0x04) // pin u8|dir u8 -> id_bit u8|cmp_bit u8|taken u8 (search step)
 
-// TWAI (CAN bus; needs an external transceiver). Filter is part of INIT
-// because the IDF driver only accepts it at install time.
+// TWAI (CAN bus; requires an external transceiver). The acceptance filter is
+// part of TWAI_INIT because the IDF driver only accepts filter configuration
+// at install time — it cannot be changed while the driver is running.
 #define TWAI_INIT       CMD(MOD_TWAI, 0x01) // tx u8|rx u8|mode u8 (0 normal,1 listen,2 no_ack)|baud u8|
                                             // [code u32|mask u32|single u8] (acceptance filter, optional)
                                             // baud: 0:25k 1:50k 2:100k 3:125k 4:250k 5:500k 6:800k 7:1M
@@ -211,8 +213,9 @@ enum ChipModel : uint8_t {
 #define TWAI_DEINIT     CMD(MOD_TWAI, 0x05)
 #define TWAI_RX_EVT     CMD(MOD_TWAI, 0x80) // flags u8|id u32|data 0..8
 
-// I2S (std mode). Link bandwidth caps usable rates: ~92 KB/s at 921600 baud
-// covers 16-bit/16 kHz mono (32 KB/s); 44.1 kHz stereo does NOT fit.
+// I2S (standard mode). The serial link is the bottleneck: at 921600 baud the
+// usable throughput is ~92 KB/s, which comfortably fits 16-bit 16 kHz mono
+// (32 KB/s) but is far too slow for 44.1 kHz stereo (176 KB/s).
 #define I2S_INIT        CMD(MOD_I2S, 0x01)  // dir u8 (bit0 tx, bit1 rx)|bclk i8|ws i8|dout i8|din i8|
                                             // rate u32|bits u8 (8/16/24/32)|stereo u8
 #define I2S_WRITE       CMD(MOD_I2S, 0x02)  // pcm.. -> written u16 (blocking into DMA)
@@ -231,7 +234,7 @@ enum ChipModel : uint8_t {
 #define WIFI_SCAN_RES   CMD(MOD_WIFI, 0x81) // idx u8|total u8|rssi i8|auth u8|channel u8|bssid[6]|ssid_len u8|ssid
 #define WIFI_SCAN_DONE  CMD(MOD_WIFI, 0x82) // count u8
 
-// NET (sockets proxied through the ESP32 radio)
+// NET — TCP/UDP sockets proxied through the ESP32's Wi-Fi or Ethernet radio.
 #define NET_TCP_CONNECT CMD(MOD_NET, 0x01)  // port u16|host str -> handle u8
 #define NET_TCP_LISTEN  CMD(MOD_NET, 0x02)  // port u16 -> handle u8
 #define NET_UDP_OPEN    CMD(MOD_NET, 0x03)  // local_port u16 -> handle u8
@@ -244,10 +247,11 @@ enum ChipModel : uint8_t {
 #define NET_CLOSED_EVT  CMD(MOD_NET, 0x82)  // handle u8|reason u8
 #define NET_UDP_EVT     CMD(MOD_NET, 0x83)  // handle u8|ip[4]|port u16|data..
 
-// ESP-NOW (connectionless 2.4 GHz messaging; coexists with Wi-Fi STA/AP + BLE).
-// ESPNOW_INIT brings the Wi-Fi driver up lazily (STA) if it's still off.
-// Channel rule: when Wi-Fi STA is connected ESP-NOW inherits its channel and
-// the requested channel is ignored (changing it would drop the AP).
+// ESP-NOW — connectionless 2.4 GHz messaging; coexists with Wi-Fi STA/AP and BLE.
+// ESPNOW_INIT starts the Wi-Fi driver in STA mode if it has not been started yet.
+// Channel rule: when Wi-Fi STA is connected, ESP-NOW inherits that channel and
+// the channel argument to ESPNOW_INIT is silently ignored (overriding it would
+// cause the AP association to drop).
 #define ESPNOW_INIT     CMD(MOD_ESPNOW, 0x01) // channel u8 (0=auto/inherit)|flags u8 (bit0=long range) -> mac[6]
 #define ESPNOW_DEINIT   CMD(MOD_ESPNOW, 0x02)
 #define ESPNOW_SET_PMK  CMD(MOD_ESPNOW, 0x03) // pmk[16] (global key for encrypted peers)
@@ -260,19 +264,22 @@ enum ChipModel : uint8_t {
 
 #define ESPNOW_MAX_DATA 250  // ESP_NOW_MAX_DATA_LEN
 
-// ETH (compile-time opt-in: BRIDGE_ENABLE_ETH). Once link+IP are up the
-// existing NET sockets route over Ethernet automatically (unified Network).
-// phy u8 is a STABLE wire id (the core's eth_phy_type_t values shift with
-// chip config): 0 generic, 1 LAN8720, 2 TLK110/IP101, 3 RTL8201, 4 DP83848,
-// 5 KSZ8041, 6 KSZ8081 (RMII) | 16 DM9051, 17 W5500, 18 KSZ8851 (SPI).
-// Board presets live in Python (espbridge.eth.PRESETS).
+// ETH (compile-time opt-in: BRIDGE_ENABLE_ETH). Once link and IP are up,
+// existing NET sockets automatically route over Ethernet (unified stack).
+// phy u8 is a STABLE wire id — do not use eth_phy_type_t directly, as those
+// enum values shift across chip configs. Mapping:
+//   0 generic, 1 LAN8720, 2 TLK110/IP101, 3 RTL8201, 4 DP83848,
+//   5 KSZ8041, 6 KSZ8081 (all RMII)
+//   16 DM9051, 17 W5500, 18 KSZ8851 (SPI)
+// Board presets live in Python: espbridge.eth.PRESETS.
 #define ETH_BEGIN_RMII  CMD(MOD_ETH, 0x01)  // phy u8|addr i8|mdc i8|mdio i8|power i8|clk u8 (classic ESP32 only)
 #define ETH_BEGIN_SPI   CMD(MOD_ETH, 0x02)  // phy u8|addr i8|cs i8|irq i8|rst i8|sck i8|miso i8|mosi i8|freq_mhz u8
 #define ETH_STOP        CMD(MOD_ETH, 0x03)
 #define ETH_STATUS      CMD(MOD_ETH, 0x04)  // -> link u8|ip[4]|gw[4]|mask[4]|mac[6]
 #define ETH_STATE_EVT   CMD(MOD_ETH, 0x80)  // event u8 (1 connected,2 got_ip,3 disconnected)|ip[4]
 
-// BLE (UUIDs always 16 bytes / 128-bit on the wire; Python expands 16-bit UUIDs)
+// BLE — UUIDs are always 16 bytes (128-bit) on the wire; the Python layer
+// expands short 16-bit UUIDs to the full 128-bit Bluetooth base UUID form.
 #define BLE_SCAN_START  CMD(MOD_BLE, 0x01)  // duration_s u8 (0=forever)|active u8
 #define BLE_SCAN_STOP   CMD(MOD_BLE, 0x02)
 #define BLE_ADV_START   CMD(MOD_BLE, 0x03)  // name_len u8|name|mfg_len u8|mfg|svc_uuid16 u16 (0=none)
@@ -297,8 +304,9 @@ enum ChipModel : uint8_t {
 #define GATT_PROP_NOTIFY 0x04
 #define GATT_PROP_WRITE_NR 0x08
 
-// FS — LittleFS (internal flash) + SD card. All path ops take the filesystem
-// id first: 0 = littlefs, 1 = sd_spi, 2 = sd_mmc. Paths are absolute ("/x").
+// FS — LittleFS (internal flash) and SD card. Every path command starts with a
+// filesystem id byte: 0 = littlefs, 1 = sd_spi, 2 = sd_mmc.
+// All paths are absolute (must start with "/").
 #define FS_MOUNT        CMD(MOD_FS, 0x01)  // fs u8|[sd_spi: cs u8|sck i8|miso i8|mosi i8|freq_mhz u8]
                                            // -> total_kb u32|used_kb u32
 #define FS_UMOUNT       CMD(MOD_FS, 0x02)  // fs u8
@@ -315,8 +323,10 @@ enum ChipModel : uint8_t {
 #define FS_DF           CMD(MOD_FS, 0x0D)  // fs u8 -> total_kb u32|used_kb u32
 #define FS_LIST_EVT     CMD(MOD_FS, 0x80)  // isdir u8|size u32|name..
 
-// NVS — persistent key/value bytes in the "user" namespace (separate from the
-// bridge's own settings). Typed encode/decode is the host's job. Key <= 15 chars.
+// NVS — persistent key/value store, using the "user" NVS namespace (separate
+// from the bridge's own settings namespace). The firmware stores raw bytes;
+// all typed encoding and decoding is handled on the host side.
+// Keys are NVS-limited to 15 characters maximum.
 #define NVS_SET         CMD(MOD_NVS, 0x01) // klen u8|key|data..
 #define NVS_GET         CMD(MOD_NVS, 0x02) // key str -> data (ST_NOT_FOUND if absent)
 #define NVS_DEL         CMD(MOD_NVS, 0x03) // key str
@@ -324,8 +334,9 @@ enum ChipModel : uint8_t {
 #define NVS_CLEAR       CMD(MOD_NVS, 0x05)
 
 // OTA — reflash the firmware over any transport (USB serial or BLE).
-// Requires a partition table with two app slots (e.g. "Minimal SPIFFS";
-// the default "Huge APP" has no OTA slot and OTA_BEGIN replies ST_UNSUPPORTED).
+// Requires a partition table with two app slots (e.g. "Minimal SPIFFS").
+// The default "Huge APP" partition table has no OTA slot; on such a build
+// OTA_BEGIN will reply with ST_UNSUPPORTED.
 #define OTA_BEGIN       CMD(MOD_OTA, 0x01) // size u32 (0xFFFFFFFF = unknown)
 #define OTA_WRITE       CMD(MOD_OTA, 0x02) // data.. -> total_written u32
 #define OTA_END         CMD(MOD_OTA, 0x03) // commit u8; commit=1 -> reply, flush, reboot into new fw
@@ -333,8 +344,9 @@ enum ChipModel : uint8_t {
 
 #define OTA_CHUNK 1024  // recommended bytes per OTA_WRITE
 
-// CAM (compile-time opt-in: BRIDGE_ENABLE_CAM; esp32/s2/s3 + PSRAM).
-// Pin maps and property ids live in Python (espbridge.camera board presets).
+// CAM (compile-time opt-in: BRIDGE_ENABLE_CAM; supported on esp32/s2/s3 with PSRAM).
+// Pin assignments and sensor property ids are defined in Python:
+// see espbridge.camera board presets.
 #define CAM_INIT        CMD(MOD_CAM, 0x01) // pwdn i8|reset i8|xclk i8|siod i8|sioc i8|d7..d0 i8[8]|
                                            // vsync i8|href i8|pclk i8|xclk_mhz u8|framesize u8|jpeg_q u8|fb_count u8
 #define CAM_CAPTURE     CMD(MOD_CAM, 0x02) // -> len u32|w u16|h u16|format u8 (frame held for CAM_READ)

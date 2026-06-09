@@ -12,7 +12,7 @@
 #include <Arduino.h>
 #include "config.h"
 
-// Frame origins / destinations (protocol.cpp routing).
+// Link origin / destination constants used by protocol.cpp for routing frames.
 #define LINK_USB 0
 #define LINK_BLE 1
 
@@ -26,10 +26,11 @@
 // No-op on chips without BLE or when BRIDGE_ENABLE_BLE is 0.
 void link_ble_init(const char* password);
 
-// Classic ESP32 only: release the unused Classic-BT radio memory back to the
-// heap and bring the controller up BLE-only. MUST run before any other BT
-// init — Wi-Fi (coex) + dual-mode Bluedroid don't fit in RAM together, and a
-// failed Bluedroid init crashes on core 0. No-op on other chips / repeats.
+// Classic ESP32 only: releases Classic BT memory back to the heap and starts
+// the controller in BLE-only mode. MUST be called before any other BT
+// initialization — Wi-Fi coexistence plus dual-mode Bluedroid do not fit in
+// RAM together, and a failed Bluedroid init causes a crash on core 0.
+// Safe to call repeatedly; no-op on chips other than classic ESP32.
 void bt_prepare_ble_only();
 
 bool link_ble_enabled();    // link_ble_init() succeeded
@@ -45,6 +46,7 @@ void link_ble_write(const uint8_t* data, uint16_t len);
 // RX: drain bytes written by the BLE client into buf; returns bytes copied.
 uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen);
 
-// The GATT server the link created (BLEServer*), so mod_ble can share it
-// instead of creating a second one. nullptr when the link is disabled.
+// Returns the BLEServer* created by the link layer, so mod_ble.cpp can
+// reuse it rather than creating a second GATT server. Returns nullptr
+// when BLE is disabled or link_ble_init() has not been called.
 void* link_ble_server();

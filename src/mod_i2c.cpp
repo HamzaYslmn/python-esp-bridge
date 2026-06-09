@@ -26,7 +26,9 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x01: {  // INIT: bus, sda, scl, freq u32 -> wire_buf u16
       if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (i2c_inited[bus]) w->end();
-      // Grow TX buffer (default 128B truncates); begin() needs 2x heap, fall back smaller, report size that stuck.
+      // The default 128 B Wire TX buffer silently truncates larger writes.
+      // setBufferSize() requires ~2× the requested size in free heap, so try
+      // progressively smaller sizes and report whichever one actually succeeded.
       uint16_t got = 0;
       for (uint16_t sz : {MAX_PAYLOAD, 512, 128}) {
         if (sz > 128 && ESP.getFreeHeap() < 2u * sz + 8192) continue;
@@ -55,7 +57,8 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03: {  // WRITE: bus, addr, data..
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       w->beginTransmission(p[1]);
-      // write() short return = TX buffer overflow (drops tail bytes).
+      // write() returns the number of bytes accepted. A short return means the
+      // TX buffer overflowed and the trailing bytes were silently dropped.
       uint8_t st = ST_OK;
       if (len > 2 && w->write(p + 2, len - 2) != (size_t)(len - 2)) {
         w->endTransmission();
@@ -64,7 +67,9 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         st = ST_IO;
       }
       if (st != ST_OK) {
-        // seq 0 gets no error reply; warn (rate-limited) so burst-write failures aren't silent.
+        // seq 0 means the host sent a fire-and-forget write that carries no sequence
+        // number, so there is no error reply channel. Log a rate-limited warning
+        // instead so burst-write failures don't disappear completely.
         if (seq == 0) {
           static uint32_t last_warn = 0;
           uint32_t now = millis();

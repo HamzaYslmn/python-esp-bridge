@@ -295,7 +295,7 @@ def register_i2c(mcp, mgr) -> None:
     def i2c_init(sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> str:
         """Initialize an I2C master bus (0 or 1) on the given SDA/SCL pins."""
         mgr.bridge().i2c.init(sda=sda, scl=scl, freq=freq, bus=bus)
-        mgr.note_i2c(bus, sda, scl, freq)  # so board_status can scan it
+        mgr.note_i2c(bus, sda, scl, freq)  # remember bus config so board_status can scan it
         return f"I2C bus {bus} ready (SDA={sda}, SCL={scl}, {freq} Hz)"
 
     @mcp.tool

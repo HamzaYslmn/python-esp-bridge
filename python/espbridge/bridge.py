@@ -44,7 +44,7 @@ class Info:
         (caps,) = struct.unpack_from(">I", payload, 12)
         gpio_count, flash_mb = payload[16], payload[17]
         name = ""
-        if len(payload) > 18:  # optional name tail: len u8 | bytes
+        if len(payload) > 18:  # optional trailing name field: len u8 | name bytes
             nlen = payload[18]
             name = payload[19 : 19 + nlen].decode("utf-8", "replace")
         try:
@@ -106,9 +106,10 @@ class Bridge:
         transport=None,
     ):
         self.timeout = timeout
-        # How often request() re-sends after a response timeout. Only commands
-        # that are safe to re-execute are retried (see constants.NON_IDEMPOTENT);
-        # a lost frame on a busy/lossy link then heals invisibly.
+        # How many times request() re-sends after a response timeout.
+        # Only commands that are safe to execute more than once are retried
+        # (see constants.NON_IDEMPOTENT for the exceptions); this lets a lost
+        # frame on a busy or lossy link heal without the caller noticing.
         self.retries = retries
         self.reset_on_exit = False  # set for real only once connected (see below)
         self.info: Info | None = None
@@ -124,10 +125,10 @@ class Bridge:
             candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
                            port, chip)]
         else:
-            # Default: prefer a wireless (BLE) bridge, then fall back to USB
-            # serial. BLE is skipped cleanly when the [ble] extra isn't installed
-            # or nothing is advertising, so a USB-only setup still just works.
-            # Pin a transport with port=, ble=True/'name', name= or mac=.
+            # Default: try BLE first, then fall back to USB serial.
+            # If the [ble] extra is not installed, or nothing is advertising,
+            # BLE is skipped silently and a USB-only setup still works.
+            # To pin a specific transport use port=, ble=True/'name', name=, or mac=.
             candidates = []
             try:
                 candidates += self._ble_candidates(True, name, mac)
@@ -136,9 +137,9 @@ class Bridge:
             except ImportError:
                 log.debug("Bluetooth unavailable (pip install "
                           "'python-esp-bridge[ble]'); using USB serial")
-            # Then every ESP32-like serial port, probed in order; the first that
-            # answers the handshake (and matches name=/mac= if given) wins —
-            # non-bridge boards just time out and are skipped.
+            # Then probe every ESP32-like serial port in order; the first one
+            # that responds to the handshake (and matches name=/mac= if given)
+            # wins — non-bridge boards simply time out and are skipped.
             candidates += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
                             p.device, p.usb_chip) for p in find_ports()]
             if not candidates:
@@ -221,14 +222,15 @@ class Bridge:
                 return False
             return True
 
-        # Fast path: stop scanning shortly after the first matching bridge
-        # shows up, instead of waiting the full discover() window — the common
-        # single-board connect then completes in well under a second.
+        # Fast path: stop scanning as soon as the first matching bridge appears,
+        # rather than waiting for the full discover() window to expire —
+        # the common single-board case then connects in well under a second.
         devs = find_ble_devices_fast(_strict_match)
         if not devs:
-            # Nothing matched the fast filter — fall back to a full scan and the
-            # lenient name/mac filtering below. Advertised names can be stale or
-            # truncated; the post-connect _matches() check stays authoritative.
+            # Nothing matched the fast filter. Fall back to a full scan and
+            # apply the looser name/mac filtering below. Advertised names can
+            # be stale or truncated by the OS; the post-connect _matches()
+            # check is the authoritative comparison.
             devs = find_ble_devices()
             if target is not None:
                 tmac = _norm_mac(target)
@@ -245,8 +247,9 @@ class Bridge:
                 f"no bridge{what} found over Bluetooth — is the board powered, "
                 f"in range, and flashed with BRIDGE_BLE_LINK enabled?"
             )
-        # Several bridges advertising: probe in adv order, first auth +
-        # handshake wins (the caller prints which one was auto-selected).
+        # If several bridges are advertising, probe them in advertisement order;
+        # the first one that passes auth + handshake wins. The caller logs
+        # which device was auto-selected.
         return [(lambda d=d: BleTransport(d.address),
                  f"BLE {d.name or d.address}", None) for d in devs]
 
@@ -269,11 +272,12 @@ class Bridge:
         self._pending_lock = threading.Lock()
         self._seq = 0
         self._write_lock = threading.Lock()
-        # In-flight bytes written but not yet known-drained by the firmware.
-        # Any reply proves the firmware consumed everything before it (requests
-        # run in arrival order), so a reply resets this to 0. _flow gates writes
-        # against the transport's window so pipelined traffic can't overflow the
-        # firmware's link RX buffer (the BLE rx-overflow / frame-loss path).
+        # Bytes written to the transport but not yet known to have been
+        # consumed by the firmware. Because the firmware processes requests in
+        # arrival order, any reply proves it has drained everything sent before
+        # it, so a reply resets this counter to zero. _flow gates concurrent
+        # writes against the transport's window to prevent the firmware's link
+        # RX buffer from overflowing (the BLE rx-overflow / frame-loss path).
         self._unacked = 0
         self._flow = threading.Condition()
         self._handlers: dict[int | None, list] = {}
@@ -302,9 +306,10 @@ class Bridge:
         self._ready.set()
 
     def _handshake(self, reset_on_open: bool) -> None:
-        # Opening the port usually auto-resets the board (DTR/RTS): wait for the
-        # SYS_READY banner, force a reset if it doesn't come, then fall back to
-        # polling SYS_INFO (covers boards with auto-reset disabled).
+        # Opening the serial port usually auto-resets the board via DTR/RTS.
+        # Wait for the SYS_READY banner; if it doesn't arrive, pulse a manual
+        # reset, then fall back to polling SYS_INFO (handles boards where
+        # the auto-reset circuit is disabled or absent).
         if self._ready.wait(3.0 if not reset_on_open else 1.5):
             pass
         elif reset_on_open:
@@ -341,7 +346,7 @@ class Bridge:
         if not target or target == current:
             return
         self.request(C.SYS_SET_BAUD, struct.pack(">I", target))
-        time.sleep(0.05)  # firmware flushes, then switches
+        time.sleep(0.05)  # give the firmware time to flush its TX buffer before it switches baud
         self._t.set_baudrate(target)
         for _ in range(3):
             try:
@@ -356,9 +361,10 @@ class Bridge:
         try:
             self.ping(b"fallback")
         except BridgeTimeoutError:
-            # The firmware already switched to `target` and can't hear us.
-            # Reopen the port: the open-time DTR/RTS toggle resets the board
-            # (reliable even where a manual reset pulse is not).
+            # The firmware already switched to `target` and can no longer hear
+            # us at the original baud. Reopen the port so the open-time
+            # DTR/RTS toggle resets the board — this is reliable even on
+            # boards where a direct reset pulse is not.
             self._reconnect(current)
 
     def _reconnect(self, baud: int) -> None:
@@ -370,7 +376,7 @@ class Bridge:
         log.warning(f"link lost; reopening {port} at {baud} baud")
         self._t.close()
         self._reader.join(timeout=1.0)
-        time.sleep(0.3)  # let the device reboot from the close-time reset
+        time.sleep(0.3)  # wait for the device to reboot after the close-time reset
         self._reset_state()
         self._t = SerialTransport(port, baud, usb_chip=chip)
         self._reader = threading.Thread(target=self._read_loop, daemon=True,
@@ -382,7 +388,7 @@ class Bridge:
         if self._closing:
             return
         self._closing = True
-        self._notify_writers()  # release any writer blocked on the window
+        self._notify_writers()  # unblock any writer waiting on the in-flight window
         if self.reset_on_exit and self._ready.is_set():
             try:
                 self.request(C.SYS_RESET, timeout=1.0)
@@ -419,13 +425,13 @@ class Bridge:
                     frame = decode_frame(chunk)
                 except ProtocolError as e:
                     log.debug(f"dropping corrupted frame: {e}")
-                    continue  # requester times out & retries
+                    continue  # corrupted frame: the requester will time out and retry
                 self._handle_frame(frame)
-        # Wake up anyone still waiting.
+        # Wake any pending requests so they can surface a "connection closed" error.
         with self._pending_lock:
             for p in self._pending.values():
                 p.event.set()
-        self._notify_writers()  # release writers blocked on the window
+        self._notify_writers()  # unblock any writers waiting on the in-flight window
 
     def _handle_frame(self, frame: Frame) -> None:
         if frame.is_event:
@@ -438,8 +444,8 @@ class Bridge:
             p.event.set()
 
     def _on_sys_log(self, payload: bytes) -> None:
-        # Firmware log line (incl. redirected ESP-IDF Wi-Fi/BT logs):
-        # level u8 | message. Surface via the espbridge logger.
+        # SYS_LOG payload: level u8 | message bytes (includes redirected
+        # ESP-IDF Wi-Fi/BT log output). Forward through the espbridge logger.
         if payload:
             msg = payload[1:].decode("utf-8", "replace")
             (log.warning if payload[0] >= 2 else log.info)(f"[fw] {msg}")
@@ -451,7 +457,7 @@ class Bridge:
         for cb in specific:
             try:
                 cb(frame.payload)
-            except Exception:  # user callbacks must not kill the reader
+            except Exception:  # never let a user callback kill the reader thread
                 log.exception(f"event callback {cb!r} raised")
         for cb in wildcard:
             try:
@@ -478,7 +484,7 @@ class Bridge:
     def _alloc_seq(self) -> int:
         with self._pending_lock:
             for _ in range(255):
-                self._seq = self._seq % 255 + 1  # cycles 1..255, 0 is reserved
+                self._seq = self._seq % 255 + 1  # wraps through 1..255; seq=0 means fire-and-forget
                 if self._seq not in self._pending:
                     self._pending[self._seq] = _Pending()
                     return self._seq
@@ -489,15 +495,16 @@ class Bridge:
         """Send a request and return the response payload (raises RemoteError on error status).
 
         After a response timeout the request is re-sent up to `retries` times
-        (default: Bridge(retries=...)) — but only for commands that are safe
-        to execute twice (constants.NON_IDEMPOTENT lists the exceptions).
-        The final timeout pings the firmware to tell a lost frame ("link
-        alive") apart from a dead link/board in the error message.
+        (default: Bridge(retries=...)), but only for commands that are safe to
+        execute more than once (constants.NON_IDEMPOTENT lists the exceptions).
+        If all retries are exhausted, a final ping distinguishes a lost frame
+        ("link alive, packet dropped") from a dead link or unresponsive board,
+        and the distinction is included in the error message.
         """
         if retries is None:
             retries = 0 if cmd in C.NON_IDEMPOTENT else self.retries
         if not self._ready.is_set():
-            retries = 0  # probing/handshake: fail fast, callers retry themselves
+            retries = 0  # during probing / handshake: fail fast; the caller manages its own retries
         for attempt in range(retries + 1):
             try:
                 return self._request_once(cmd, payload, timeout)
@@ -508,14 +515,17 @@ class Bridge:
                             f"retrying ({attempt + 1}/{retries})")
 
     def _reserve_window(self, size: int) -> None:
-        """Atomically wait for room in the firmware's RX window, then reserve
-        `size` bytes — gating pipelined/concurrent requests so they can't
-        overflow its link buffer. Wait and reserve happen under one lock, or
-        every caller would pass the check before any increments the counter
-        (then all write at once → overflow). Only transports that set
-        `max_inflight` (BLE) wait; serial just accounts the bytes (for send()'s
-        fence) and never blocks. Falls through after a wait rather than
-        deadlocking a quiet link — the buffer holds one extra frame."""
+        """Wait for room in the firmware's RX window, then reserve `size` bytes.
+
+        The wait and the reservation happen under the same lock so that
+        concurrent callers can't all pass the capacity check before any of
+        them has incremented the counter (which would let them all write at
+        once and overflow the buffer).
+
+        Only transports that expose `max_inflight` (BLE) ever block here;
+        serial transports only account the bytes so that send()'s fence
+        works correctly. After a wait timeout the method falls through rather
+        than deadlocking — the firmware buffer can absorb one extra frame."""
         with self._flow:
             window = getattr(self._t, "max_inflight", None)
             if window and self._ready.is_set():
@@ -551,9 +561,9 @@ class Bridge:
             if p.frame is None:
                 raise BridgeTimeoutError("connection closed while waiting for response")
             replied = True
-            # Any reply proves the firmware consumed every byte sent before it
-            # (requests are executed in arrival order): the link RX buffer is
-            # empty again, so the in-flight window restarts from zero.
+            # Any reply proves the firmware has consumed every byte sent before
+            # it, because requests are processed in arrival order. The link RX
+            # buffer is now empty, so the in-flight byte count resets to zero.
             with self._flow:
                 self._unacked = 0
                 self._flow.notify_all()
@@ -566,7 +576,7 @@ class Bridge:
                 raise RemoteError(status, cmd)
             return p.frame.payload
         finally:
-            if not replied:  # write failed / timed out: free the reserved window
+            if not replied:  # write failed or timed out — release the reserved window bytes
                 self._release_window(len(data))
             with self._pending_lock:
                 self._pending.pop(seq, None)
@@ -590,14 +600,14 @@ class Bridge:
         return BridgeTimeoutError(msg)
 
     def send(self, cmd: int, payload: bytes = b"") -> None:
-        """Fire-and-forget (seq=0): the firmware will not reply.
+        """Fire-and-forget (seq=0): the firmware does not send a reply.
 
-        Unwaited frames get no acknowledgment, so nothing naturally paces
-        them — a long pipelined burst (e.g. an OLED frame push) can overrun
+        Because there is no reply, nothing naturally paces these frames — a
+        long pipelined burst (e.g. pushing an OLED framebuffer) can overrun
         the firmware's link RX buffer, which drops bytes and corrupts frames
         (the classic symptom: a BridgeTimeoutError on the final waited write).
-        Once more than the transport's `burst_window` bytes are in flight, a
-        ping round-trip drains the pipe before this frame is sent.
+        Once more than the transport's `burst_window` bytes are in flight,
+        a ping round-trip is used to drain the pipe before this frame is sent.
         """
         data = encode_frame(0, 0, cmd, payload)
         window = getattr(self._t, "burst_window", None)
@@ -616,8 +626,8 @@ class Bridge:
     def ping(self, payload: bytes = b"ping") -> float:
         """Round-trip a payload; returns latency in seconds."""
         t0 = time.perf_counter()
-        # retries=0: a retried ping would report 2x latency, and the
-        # baud-upgrade/probe paths run their own retry loops around this.
+        # retries=0: retrying a ping would double the reported latency, and
+        # the baud-upgrade and probe paths manage their own retry loops.
         echoed = self.request(C.SYS_PING, payload, retries=0)
         if echoed != payload:
             raise ProtocolError("ping payload mismatch")
@@ -637,7 +647,7 @@ class Bridge:
         free, min_free, largest, dropped = struct.unpack_from(">4I", v)
         out = {"free": free, "min_free": min_free, "largest_block": largest,
                "dropped_events": dropped}
-        if len(v) >= 20:  # firmware >= 0.3.2: bytes the BLE link RX buffer dropped
+        if len(v) >= 20:  # firmware >= 0.3.2 adds this field: bytes dropped by the BLE link RX buffer
             out["link_rx_dropped"] = struct.unpack_from(">I", v, 16)[0]
         return out
 

@@ -1,5 +1,11 @@
-// Ethernet (opt-in BRIDGE_ENABLE_ETH). Bridge over ETH.h; host sends PHY params (presets in espbridge.eth.PRESETS).
-// Once up, NET sockets route over it automatically (ETHClass is a NetworkInterface in core-3.x Network stack).
+// Ethernet module (opt-in: define BRIDGE_ENABLE_ETH to include it).
+// Wraps the arduino-esp32 ETH.h library. The host sends PHY parameters at
+// runtime (pin numbers, clock mode, etc.); common boards have presets in
+// the Python package under espbridge.eth.PRESETS.
+//
+// Once the interface is up, NET module sockets route over it automatically
+// because ETHClass registers as a NetworkInterface in the arduino-esp32
+// core-3.x Network stack — no special handling needed in mod_net.cpp.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -9,7 +15,10 @@
 
 static bool eth_started = false;
 
-// Wire phy id -> eth_phy_type_t (core enum shifts with chip config, so protocol uses stable ids; see commands.h).
+// Map the protocol's stable PHY id to the arduino-esp32 eth_phy_type_t enum.
+// The enum values can shift between SDK configurations (chips compiled without
+// a given PHY drop its enumerator), so the protocol defines its own fixed ids
+// (documented in commands.h) and we translate here.
 static bool phy_of(uint8_t id, eth_phy_type_t* out) {
   switch (id) {
 #if defined(CONFIG_ETH_USE_ESP32_EMAC)
@@ -72,7 +81,7 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       eth_started = true;
       proto_reply_ok(seq, cmd);
 #else
-      proto_reply_err(seq, cmd, ST_UNSUPPORTED);  // no EMAC on this chip
+      proto_reply_err(seq, cmd, ST_UNSUPPORTED);  // RMII/EMAC is only available on the classic ESP32; this chip lacks it
 #endif
       break;
     }

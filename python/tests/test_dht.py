@@ -5,8 +5,14 @@ from espbridge.dht import DHT, convert, decode
 
 
 def dht_pulses(data: bytes) -> list[tuple[int, int]]:
-    """Build a realistic capture: trigger low, release, 80/80 response,
-    40 bits (50 us low + 26/70 us high), stop low."""
+    """Build a synthetic RMT capture that looks like a real DHT response.
+
+    The sequence matches the DHT protocol:
+      - host trigger: pull low for 18 ms, then release high for 30 µs
+      - sensor response: 80 µs low + 80 µs high
+      - 40 data bits, each as: 50 µs low + (26 µs = "0", 70 µs = "1") high
+      - trailing low to end the last bit
+    """
     syms = [(0, 18_000), (1, 30), (0, 80), (1, 80)]
     for byte in data:
         for bit in range(7, -1, -1):
@@ -29,14 +35,14 @@ def test_decode_dht22():
 
 
 def test_decode_negative_temp():
-    raw = bytes([0x02, 0x8C, 0x80, 0x65])  # -10.1 C, 65.2 %RH
+    raw = bytes([0x02, 0x8C, 0x80, 0x65])  # humidity bytes: 0x028C = 652 → 65.2 %RH; temperature bytes: 0x8065 → sign bit set, value 101 → -10.1 °C
     data = raw + bytes([sum(raw) & 0xFF])
     temp, hum = convert(decode(dht_pulses(data)), 22)
     assert temp == -10.1 and hum == 65.2
 
 
 def test_decode_dht11():
-    data = bytes([45, 0, 21, 5, 71])  # checksum 45+21+5=71
+    data = bytes([45, 0, 21, 5, 71])  # DHT11 raw: humidity=45 %RH, temperature integer=21, decimal=5 → 21.5 °C; checksum = 45+0+21+5 = 71
     temp, hum = convert(decode(dht_pulses(data)), 11)
     assert temp == 21.5 and hum == 45.0
 
@@ -57,5 +63,6 @@ def test_read_via_bridge(bridge, fw):
     fw.rmt_capture = dht_pulses(payload(421, 305))
     temp, hum = sensor.read()
     assert (temp, hum) == (30.5, 42.1)
-    # the same-pin open-drain trigger was used
+    # DHT uses a single-wire bus: the same pin (4) drives both the trigger pulse
+    # and the data capture.  The trigger tuple is (pin=4, level=0, duration_µs=18000).
     assert fw.rmt_recv_args[0][4] == (4, 0, 18_000)

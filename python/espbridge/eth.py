@@ -17,14 +17,15 @@ import threading
 from . import constants as C
 from .protocol import ip_str as _ip, mac_to_str
 
-# Stable wire phy ids (mirrors firmware mod_eth.cpp)
+# PHY driver IDs used by the firmware (mod_eth.cpp). SPI-based PHYs start at 16.
 PHY = {"generic": 0, "lan8720": 1, "tlk110": 2, "ip101": 2, "rtl8201": 3,
        "dp83848": 4, "ksz8041": 5, "ksz8081": 6,
        "dm9051": 16, "w5500": 17, "ksz8851": 18}
 
 CLK_GPIO0_IN, CLK_GPIO0_OUT, CLK_GPIO16_OUT, CLK_GPIO17_OUT = range(4)
 
-# RMII board presets: phy, addr, mdc, mdio, power, clk  (classic ESP32 only)
+# Built-in RMII board presets (classic ESP32 only). Each entry maps a board
+# name to the phy driver, MDIO/MDC pins, power pin, and RMII clock config.
 PRESETS: dict[str, dict] = {
     "wt32-eth01":     dict(phy="lan8720", addr=1, mdc=23, mdio=18, power=16,
                            clk=CLK_GPIO0_IN),
@@ -48,10 +49,10 @@ class Eth:
         bridge.on_event(C.ETH_STATE_EVT, self._on_state)
 
     def _on_state(self, payload: bytes) -> None:
-        if payload[0] == 2:  # got IP
+        if payload[0] == 2:  # state 2 = got IP from DHCP
             self._ip = _ip(payload[1:5])
             self._got_ip.set()
-        elif payload[0] == 3:
+        elif payload[0] == 3:  # state 3 = link lost / disconnected
             self._got_ip.clear()
             self._ip = None
 
@@ -64,7 +65,7 @@ class Eth:
         """
         cfg = dict(PRESETS.get(preset_or_phy, {"phy": preset_or_phy}), **kw)
         phy = PHY[cfg["phy"]]
-        if phy >= 16:  # SPI PHY
+        if phy >= 16:  # IDs 16+ are SPI-attached PHYs (e.g. W5500, DM9051)
             self._b.request(C.ETH_BEGIN_SPI, struct.pack(
                 ">BbbbbbbbB", phy, cfg.get("addr", 1),
                 cfg["cs"], cfg.get("irq", -1), cfg.get("rst", -1),

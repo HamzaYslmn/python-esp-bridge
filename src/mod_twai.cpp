@@ -19,7 +19,7 @@ static const twai_timing_config_t TIMINGS[] = {
 void twai_poll() {
   if (!twai_up) return;
   twai_message_t msg;
-  // Drain a few per pass; rest wait in driver RX queue.
+  // Process up to 8 frames per poll call; any remaining frames stay in the driver's RX queue for the next pass.
   for (int i = 0; i < 8 && twai_receive(&msg, 0) == ESP_OK; i++) {
     uint8_t evt[5 + TWAI_FRAME_MAX_DLC];
     evt[0] = (msg.extd ? 1 : 0) | (msg.rtr ? 2 : 0);

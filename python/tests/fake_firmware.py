@@ -1,8 +1,11 @@
-"""A minimal in-process stand-in for the ESP32 firmware, for hardware-free tests.
+"""A minimal in-process stand-in for real ESP32 firmware, enabling fully hardware-free tests.
 
-Implements just enough of the protocol: SYS (ping/info/set_baud/free_heap),
-GPIO state, and the WIFI/NET behaviors the tests exercise. Responses are
-produced synchronously inside MockTransport.write().
+Implements the subset of the bridge protocol used by the test suite: SYS commands
+(ping, info, set_baud, free_heap), GPIO, PWM, I2C, SPI, Wi-Fi, NET sockets,
+ESP-NOW, RMT, 1-Wire, NVS, FS, sleep, OTA, TWAI, I2S, MCPWM, ETH, and camera.
+
+All responses are produced synchronously inside MockTransport.write(), so tests
+don't need threads or timing to get replies.
 """
 from __future__ import annotations
 
@@ -25,11 +28,11 @@ class FakeFirmware:
         self.proto_version = proto_version
         self.name = name
         self.mac = mac
-        # password set = behave like the BLE link: reject everything except
-        # SYS_AUTH with ST_DENIED until the right password arrives.
+        # When a password is given the fake behaves like a BLE link: it rejects
+        # every command except SYS_AUTH with ST_DENIED until authentication succeeds.
         self.password = password
-        self.authed = password is None
-        if password is not None:  # make the mock look like a BLE transport
+        self.authed = password is None  # USB (no password) is considered pre-authenticated
+        if password is not None:        # mark the mock transport as a BLE link
             self.transport.needs_auth = True
             self.transport.has_baud = False
         self._splitter = FrameSplitter()
@@ -45,11 +48,11 @@ class FakeFirmware:
         self.pwm_duty: dict[int, int] = {}
 
         self.i2c_inited = False
-        self.i2c_devices: dict[int, bytes] = {}  # addr -> data served on reads
+        self.i2c_devices: dict[int, bytes] = {}  # address -> bytes returned by I2C_READ
         self.i2c_writes: list[tuple[int, bytes]] = []
 
         self.spi_inited = False
-        self.spi_transfers: list[bytes] = []  # SPI_TRANSFER echoes tx back as rx
+        self.spi_transfers: list[bytes] = []  # record of bytes sent; the fake loopbacks rx = tx
 
         self.next_handle = 1
         self.tcp_sent: dict[int, bytes] = {}
@@ -59,31 +62,31 @@ class FakeFirmware:
 
         self.espnow_inited = False
         self.espnow_pmk: bytes | None = None
-        self.espnow_peers: dict[bytes, bytes | None] = {}  # mac -> lmk
-        self.espnow_sent: list[tuple[bytes, bytes]] = []   # (mac, data)
-        self.espnow_deliver = True  # delivered flag returned by ESPNOW_SEND
+        self.espnow_peers: dict[bytes, bytes | None] = {}  # peer MAC -> LMK (None = unencrypted)
+        self.espnow_sent: list[tuple[bytes, bytes]] = []   # list of (dest_mac, payload) tuples
+        self.espnow_deliver = True  # controls the delivery-ACK flag returned in ESPNOW_SEND replies
 
-        self.rmt_pins: dict[int, tuple[int, int]] = {}  # pin -> (dir, tick_hz)
-        self.rmt_tx: list[tuple[int, list[tuple[int, int]]]] = []  # (pin, symbols)
-        self.rmt_tx_bytes: list[tuple[int, int, int, bytes]] = []  # (pin, bit0, bit1, data)
-        self.rmt_loops: dict[int, list[tuple[int, int]]] = {}  # pin -> looping symbols
-        self.rmt_carrier: dict[int, tuple[int, int, int]] = {}  # pin -> (freq, duty, en)
-        self.rmt_capture: list[tuple[int, int]] = []  # served by RMT_RECV
-        self.rmt_recv_args: list[tuple] = []  # (pin, idle, timeout, max, trig)
+        self.rmt_pins: dict[int, tuple[int, int]] = {}  # pin -> (direction, tick_hz)
+        self.rmt_tx: list[tuple[int, list[tuple[int, int]]]] = []  # (pin, symbol_list) for each RMT_TX call
+        self.rmt_tx_bytes: list[tuple[int, int, int, bytes]] = []  # (pin, bit0_word, bit1_word, data) for RMT_TX_BYTES
+        self.rmt_loops: dict[int, list[tuple[int, int]]] = {}  # pin -> symbols currently looping
+        self.rmt_carrier: dict[int, tuple[int, int, int]] = {}  # pin -> (freq_hz, duty_pct, enabled)
+        self.rmt_capture: list[tuple[int, int]] = []  # symbols returned by the next RMT_RECV call
+        self.rmt_recv_args: list[tuple] = []  # recorded args per RMT_RECV: (pin, idle, timeout, max_syms, trigger)
 
-        self.ow_devices: list[bytes] = []  # 8-byte ROMs on the fake bus
-        self.ow_writes: list[bytes] = []   # bytes written (per OW_WRITE call)
-        self.ow_read_data = b""            # served by OW_READ
-        self._ow_search: list[bytes] = []  # candidates during a ROM search
-        self._ow_bit = 0
+        self.ow_devices: list[bytes] = []  # 8-byte ROM codes present on the simulated 1-Wire bus
+        self.ow_writes: list[bytes] = []   # data bytes from each OW_WRITE call, in order
+        self.ow_read_data = b""            # bytes consumed sequentially by OW_READ replies
+        self._ow_search: list[bytes] = []  # devices still in contention during a ROM-search walk
+        self._ow_bit = 0                   # current bit position in the ROM-search algorithm
 
         self.nvs: dict[str, bytes] = {}
 
         self.fs_mounted: set[int] = set()
-        self.fs_files: dict[tuple[int, str], bytearray] = {}  # (fs, path) -> data
-        self._fds: dict[int, tuple[int, str, int]] = {}  # fd -> (fs, path, pos)
+        self.fs_files: dict[tuple[int, str], bytearray] = {}  # (fs_id, path) -> file contents
+        self._fds: dict[int, tuple[int, str, int]] = {}  # fd -> (fs_id, path, current_position)
 
-        self.sleeps: list[tuple[int, int, int, int]] = []  # (mode, us, pin, level)
+        self.sleeps: list[tuple[int, int, int, int]] = []  # (mode, duration_us, wake_pin, wake_level)
         self.wake_cause = 0
 
         self.ota_size: int | None = None
@@ -91,26 +94,26 @@ class FakeFirmware:
         self.ota_committed: bool | None = None
         self.ota_has_partition = True
 
-        self.twai_config: tuple | None = None  # (tx, rx, mode, baud, filter)
-        self.twai_sent: list[tuple[int, int, bytes]] = []  # (flags, id, data)
+        self.twai_config: tuple | None = None  # (tx_pin, rx_pin, mode, baud_preset, accept_filter)
+        self.twai_sent: list[tuple[int, int, bytes]] = []  # (flags, message_id, data) per TWAI_SEND
 
-        self.i2s_config: tuple | None = None  # (dir, bclk, ws, dout, din, rate, bits, stereo)
+        self.i2s_config: tuple | None = None  # (direction, bclk_pin, ws_pin, dout_pin, din_pin, sample_rate, bits, stereo)
         self.i2s_written = bytearray()
         self.i2s_capture = b""  # served by I2S_READ
 
-        self.mcpwm_config: tuple | None = None  # (pin_a, pin_b, freq, deadtime_ns)
-        self.mcpwm_duty: int | None = None  # permille
+        self.mcpwm_config: tuple | None = None  # (pin_a, pin_b, freq_hz, deadtime_ns)
+        self.mcpwm_duty: int | None = None  # duty cycle in permille (0–1000)
 
-        self.eth_config: tuple | None = None  # ("rmii"|"spi", *params)
-        self.cam_config: bytes | None = None
-        self.cam_frame = b""  # JPEG served by CAM_CAPTURE/CAM_READ
+        self.eth_config: tuple | None = None  # ("rmii" or "spi", *interface-specific params)
+        self.cam_config: bytes | None = None   # raw init payload from CAM_INIT
+        self.cam_frame = b""  # JPEG bytes served by CAM_CAPTURE + CAM_READ
         self.cam_props: dict[int, int] = {}
         self.cam_released = False
 
         self.baud_requests: list[int] = []
-        self.blackhole_cmds: set[int] = set()  # commands we never answer
-        self.drop_once_cmds: set[int] = set()  # swallow the next such frame (lossy link)
-        self.handled: list[int] = []           # every cmd that reached _handle
+        self.blackhole_cmds: set[int] = set()  # commands silently ignored forever (simulate a stuck firmware)
+        self.drop_once_cmds: set[int] = set()  # swallow the next matching frame once, then clear (simulate packet loss)
+        self.handled: list[int] = []           # command codes received by _handle, in order (used to count retries)
 
     # ---- helpers -------------------------------------------------------------
 
@@ -148,12 +151,12 @@ class FakeFirmware:
 
     def _on_host_bytes(self, data: bytes) -> None:
         for chunk in self._splitter.feed(data):
-            frame = decode_frame(chunk)  # tests should never send corrupt frames
+            frame = decode_frame(chunk)  # corrupt frames from tests indicate a bug in the encoder
             self._handle(frame.seq, frame.cmd, frame.payload)
 
     def _handle(self, seq: int, cmd: int, p: bytes) -> None:
         self.handled.append(cmd)
-        if cmd in self.drop_once_cmds:  # emulate a frame lost on a lossy link
+        if cmd in self.drop_once_cmds:  # emulate a single lost frame (lossy link simulation)
             self.drop_once_cmds.discard(cmd)
             return
         if cmd in self.blackhole_cmds:
@@ -181,7 +184,7 @@ class FakeFirmware:
         elif cmd == C.SYS_SET_BAUD:
             self.baud_requests.append(struct.unpack(">I", p)[0])
             self._reply(seq, cmd)
-        elif cmd == C.SYS_FREE_HEAP:  # fw >= 0.3.2: 5th u32 = link rx drops
+        elif cmd == C.SYS_FREE_HEAP:  # firmware >= 0.3.2 added a 5th u32 for link-layer RX drop count
             self._reply(seq, cmd, struct.pack(">5I", 200_000, 150_000, 100_000, 0, 0))
         elif cmd == C.SYS_SET_NAME:
             if len(p) > C.BRIDGE_NAME_MAX:
@@ -199,7 +202,7 @@ class FakeFirmware:
                 self._reply_err(seq, cmd, C.Status.BAD_PIN)
             else:
                 self.gpio_levels[p[0]] = p[1]
-                self._reply(seq, cmd, bytes([p[1]]))  # echo level back (read-back ACK)
+                self._reply(seq, cmd, bytes([p[1]]))  # reply payload is the confirmed level (read-back ACK)
         elif cmd == C.GPIO_READ:
             self._reply(seq, cmd, bytes([self.gpio_levels.get(p[0], 0)]))
         elif cmd == C.GPIO_WRITE_MASK:
@@ -215,14 +218,14 @@ class FakeFirmware:
         elif cmd == C.GPIO_UNWATCH:
             self.watching.pop(p[0], None)
             self._reply(seq, cmd)
-        elif cmd == C.GPIO_STATUS:  # level u8|mode u8|pwm_freq u32|pwm_duty u32
+        elif cmd == C.GPIO_STATUS:  # response layout: level u8 | mode u8 | pwm_freq u32 | pwm_duty u32
             pin = p[0]
             level = self.gpio_levels.get(pin, 0)
             mode = self.gpio_modes.get(pin, 0xFF)
             freq = self.pwm_attached.get(pin, (0, 0))[0]
             duty = self.pwm_duty.get(pin, 0)
             self._reply(seq, cmd, bytes([level, mode]) + struct.pack(">II", freq, duty))
-        elif cmd == C.GPIO_DUMP:  # count u8, then per active pin: pin|mode|level|freq u32|duty u32
+        elif cmd == C.GPIO_DUMP:  # response: count u8, then per active pin: pin u8 | mode u8 | level u8 | freq u32 | duty u32
             active = sorted(set(self.gpio_modes) | set(self.pwm_attached))
             out = bytes([len(active)])
             for pin in active:
@@ -277,7 +280,7 @@ class FakeFirmware:
                 rlen = p[3 + wlen]
                 self._reply(seq, cmd, self.i2c_devices[addr][:rlen])
 
-        # ---- SPI (loopback: rx echoes tx) ----
+        # ---- SPI (loopback: the fake always echoes tx bytes back as rx) ----
         elif cmd == C.SPI_INIT:
             self.spi_inited = True
             self._reply(seq, cmd)
@@ -345,7 +348,7 @@ class FakeFirmware:
         elif cmd == C.NET_WINDOW_ACK:
             (h, n) = struct.unpack(">BH", p)
             self.window_acks.append((h, n))
-            # fire-and-forget: no reply
+            # NET_WINDOW_ACK is fire-and-forget: the firmware never sends a reply
 
         # ---- ESP-NOW ----
         elif cmd == C.ESPNOW_INIT:
@@ -377,9 +380,9 @@ class FakeFirmware:
                 self._reply_err(seq, cmd, C.Status.BAD_ARGS)
             else:
                 self.espnow_sent.append((p[:6], p[6:]))
-                if seq:  # sync: reply with the delivery flag
+                if seq:  # synchronous send: reply immediately with the delivery status byte
                     self._reply(seq, cmd, bytes([1 if self.espnow_deliver else 0]))
-                else:  # fire-and-forget: result arrives as an event
+                else:  # fire-and-forget (wait=False): delivery result arrives as an async event
                     self.emit(C.ESPNOW_SEND_EVT,
                               p[:6] + bytes([0 if self.espnow_deliver else 1]))
 
@@ -434,7 +437,7 @@ class FakeFirmware:
         elif cmd == C.OW_WRITE:
             data = p[2:]
             self.ow_writes.append(data)
-            if data[:1] == b"\xf0":  # SEARCH_ROM: arm the triplet walk
+            if data[:1] == b"\xf0":  # 0xF0 = SEARCH_ROM: reset the triplet walk state
                 self._ow_search = list(self.ow_devices)
                 self._ow_bit = 0
             self._reply(seq, cmd)
@@ -444,12 +447,12 @@ class FakeFirmware:
         elif cmd == C.OW_TRIPLET:
             bit = self._ow_bit
             bits = {dev[bit // 8] >> (bit % 8) & 1 for dev in self._ow_search}
-            if not bits:  # nobody on the bus / branch
+            if not bits:  # no devices on this branch of the search tree
                 self._reply(seq, cmd, bytes([1, 1, 1]))
                 return
-            id_bit = 0 if 0 in bits else 1     # wired-AND
-            cmp_bit = 0 if 1 in bits else 1
-            taken = id_bit if id_bit != cmp_bit else p[1]
+            id_bit = 0 if 0 in bits else 1     # wired-AND across all devices: 0 if any device has a 0
+            cmp_bit = 0 if 1 in bits else 1     # complement: 0 if any device has a 1
+            taken = id_bit if id_bit != cmp_bit else p[1]  # unambiguous bit, or use the direction the host chose
             self._ow_search = [d for d in self._ow_search
                                if d[bit // 8] >> (bit % 8) & 1 == taken]
             self._ow_bit += 1
@@ -460,8 +463,9 @@ class FakeFirmware:
             mode, us, pin, level = struct.unpack(">BQbB", p)
             self.sleeps.append((mode, us, pin, level))
             if mode == 0:
-                self._reply(seq, cmd)  # deep: ok now, board "reboots"
+                self._reply(seq, cmd)  # deep sleep: reply OK immediately; the real board would reboot after this
             else:
+                # Light sleep returns a wake cause: 4 = timer expired, 7 = GPIO edge
                 self.wake_cause = 4 if us else 7
                 self._reply(seq, cmd, bytes([self.wake_cause]))
         elif cmd == C.SYS_WAKE_CAUSE:

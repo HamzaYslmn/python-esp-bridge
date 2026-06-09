@@ -23,11 +23,11 @@ class I2c:
         info = self._b.info
         if info is not None and info.fw_version < (0, 0, 2):
             return 128
-        return C.MAX_PAYLOAD - 2  # frame carries bus + addr first
+        return C.MAX_PAYLOAD - 2  # 2 bytes of header (bus index + device address) come before the data
 
     def init(self, *, sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> None:
         r = self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
-        if len(r) >= 2:  # wire_buf u16 (firmware >= 0.3.0)
+        if len(r) >= 2:  # firmware >= 0.3.0 replies with the Wire TX buffer size as a u16
             self._max_write = struct.unpack(">H", r[:2])[0] - 2
 
     def scan(self, bus: int = 0) -> list[int]:

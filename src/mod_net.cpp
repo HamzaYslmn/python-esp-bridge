@@ -1,4 +1,6 @@
-// NET: TCP/UDP sockets proxied over serial; per-socket credit windows backpressure TCP instead of dropping.
+// Network module: TCP and UDP sockets proxied over the serial bridge.
+// Each socket has a credit window so that incoming TCP data is held back
+// (backpressured) rather than dropped when the host cannot consume it fast enough.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include <NetworkClient.h>
@@ -17,7 +19,8 @@ struct Sock {
 
 static Sock socks[NET_MAX_SOCKETS];
 
-// handle = index + 1 (0 is invalid on the wire)
+// Sockets are referenced by a 1-based handle on the wire (handle = index + 1).
+// A handle of 0 is reserved to mean "invalid / no socket".
 static int8_t alloc_sock() {
   for (uint8_t i = 0; i < NET_MAX_SOCKETS; i++)
     if (socks[i].type == SK_FREE) return i;
@@ -47,8 +50,10 @@ static void closed_event(uint8_t handle, uint8_t reason) {
 }
 
 void net_poll() {
-  // Stack local, not static BSS: net_task has an 8 KB stack and 519 B here is
-  // well within it, freeing that RAM for the heap-constrained Wi-Fi+BLE coex.
+  // This buffer lives on the stack (not in static BSS) deliberately.
+  // net_task has an 8 KB stack, so 519 bytes here is comfortably within budget,
+  // and keeping it off the BSS leaves that RAM available for the heap —
+  // Wi-Fi + BLE coexistence leaves very little heap to spare.
   uint8_t buf[1 + 6 + NET_CHUNK];  // worst case: UDP header + chunk
   for (uint8_t i = 0; i < NET_MAX_SOCKETS; i++) {
     Sock* s = &socks[i];
@@ -100,7 +105,9 @@ void net_poll() {
         wr16(buf + 5, s->udp.remotePort());
         int rd = s->udp.read(buf + 7, n > NET_CHUNK ? NET_CHUNK : n);
         if (rd > 0) proto_send_event(NET_UDP_EVT, buf, 7 + rd);
-        s->udp.clear();  // drop tail beyond NET_CHUNK (3.x: flush() no longer discards RX)
+        s->udp.clear();  // discard any bytes beyond NET_CHUNK from this datagram.
+                         // Note: flush() no longer discards RX data in Arduino core 3.x,
+                         // so clear() is the correct call here.
       }
     }
   }
@@ -120,7 +127,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       host[hlen] = 0;
       int8_t i = alloc_sock();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
-      if (!socks[i].tcp.connect(host, port, 5000)) {  // blocking, up to 5 s
+      if (!socks[i].tcp.connect(host, port, 5000)) {  // synchronous connect; blocks this command handler up to 5 s
         proto_reply_err(seq, cmd, ST_SOCKET);
         return;
       }
@@ -181,11 +188,12 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       Sock* s = sock_of(p[0]);
       if (s) free_sock(s);
-      proto_reply_ok(seq, cmd);  // closing a closed socket is fine
+      proto_reply_ok(seq, cmd);  // idempotent — closing an already-closed socket is not an error
       break;
     }
 
-    case 0x07: {  // WINDOW_ACK: handle, bytes u16 (fire-and-forget)
+    case 0x07: {  // WINDOW_ACK: handle, bytes u16 — host reports how many bytes it has consumed.
+                  // Fire-and-forget: no reply is sent.
       if (len < 3) return;
       Sock* s = sock_of(p[0]);
       if (!s) return;

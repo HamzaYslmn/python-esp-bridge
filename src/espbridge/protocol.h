@@ -18,13 +18,14 @@ void proto_start();   // spawn tx/rx/net tasks (end of setup())
 // protocol link — into SYS_LOG events. Install first thing in setup().
 void proto_log_hook_install();
 
-// Thread-safe: enqueue outbound frames (tx_task writes them).
+// All functions below are thread-safe: they enqueue frames for tx_task to write.
+// They may be called from any task or interrupt callback.
 void proto_reply(uint8_t seq, uint16_t cmd, const uint8_t* data, uint16_t len);
 void proto_reply_ok(uint8_t seq, uint16_t cmd);
 void proto_reply_err(uint8_t seq, uint16_t cmd, uint8_t status);
 void proto_send_event(uint16_t cmd, const uint8_t* data, uint16_t len);
 void proto_log(uint8_t level, const char* msg);
-void proto_log_heap(const char* stage);  // "<stage>, N B free heap" at level 1
+void proto_log_heap(const char* stage);  // sends a SYS_LOG event: "<stage>, N B free heap"
 
 // Block until every queued frame is on the wire (baud switch / reset).
 void proto_tx_flush();
@@ -33,7 +34,7 @@ uint32_t proto_dropped_events();
 
 uint16_t crc16_ccitt(const uint8_t* data, uint16_t len);
 
-// Big-endian helpers.
+// Big-endian read/write helpers used throughout the protocol layer.
 static inline uint16_t rd16(const uint8_t* p) { return ((uint16_t)p[0] << 8) | p[1]; }
 static inline uint32_t rd32(const uint8_t* p) {
   return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];

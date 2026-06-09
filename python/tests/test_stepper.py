@@ -18,10 +18,11 @@ def test_ramp_constant_speed():
 
 
 def test_ramp_trapezoid_symmetric():
-    p = ramp_periods(100, 800, 12_800)  # ramp dist v^2/2a = 25 steps
-    assert p[0] > p[50] and p[-1] > p[50]  # slow ends, fast middle
-    assert min(p) == round(1e6 / 800)  # reaches cruise speed
-    assert p[0] == p[-1]  # symmetric accel/decel
+    # accel=12800 steps/s², cruise=800 steps/s → ramp distance = v²/(2a) = 25 steps
+    p = ramp_periods(100, 800, 12_800)
+    assert p[0] > p[50] and p[-1] > p[50]  # ends are slow (long period), middle is fast
+    assert min(p) == round(1e6 / 800)       # period at cruise speed (µs per step)
+    assert p[0] == p[-1]                    # acceleration and deceleration ramps are mirror images
 
 
 def test_move_counts_steps_and_sets_dir(bridge, fw):
@@ -39,7 +40,7 @@ def test_move_counts_steps_and_sets_dir(bridge, fw):
 def test_long_move_chunks(bridge, fw):
     m = Stepper(bridge, step_pin=12)
     m.move(1200, speed=2000)
-    assert len(fw.rmt_tx) > 1  # split across requests
+    assert len(fw.rmt_tx) > 1  # 1200 steps exceeds one RMT_TX payload, so it must be split across multiple requests
     pulses = sum(1 for _, syms in fw.rmt_tx for lv, _ in syms if lv == 1)
     assert pulses == 1200
 

@@ -1,21 +1,28 @@
-// python esp bridge — flash-once firmware that exposes every ESP32 peripheral
+// python-esp-bridge — flash-once firmware that exposes every ESP32 peripheral
 // to the Python `python-esp-bridge` package over USB serial or Bluetooth.
 //
+// Minimal sketch:
 //   #include <PythonEspBridge.h>
-//   void setup() { EspBridge.begin(); }   // BLE password "espbridge", Bluetooth on
-//   void loop()  {}                        // never runs — begin() owns the board
+//   void setup() { EspBridge.begin(); }  // BLE password "espbridge", BLE enabled
+//   void loop()  {}                       // never called — begin() does not return
 //
-// begin() spins up the FreeRTOS task model (TX / RX / network tasks) and does
-// NOT return: it deletes the Arduino loop task to hand its stack back to the
-// heap (a classic ESP32 running Wi-Fi + Bluedroid needs it). Heavy peripherals
-// (Ethernet, camera) and a BLE-free build are compile-time opt-ins — see README.
+// begin() starts the FreeRTOS bridge tasks (TX / RX / network) and then deletes
+// the Arduino loop task so its 8 KB stack is returned to the heap. This is
+// required on a classic ESP32 running Wi-Fi + Bluedroid: free heap that low
+// causes Bluedroid to stop delivering notifications and break the BLE link.
+//
+// Optional features (heavy peripherals such as Ethernet or camera, and
+// BLE-free builds) are compile-time opt-ins — see the README for flags.
 #pragma once
 #include <Arduino.h>
 
 class EspBridgeClass {
  public:
-  // password: Bluetooth auth secret a client must present ("" = open; USB never asks).
-  // ble:      start the Bluetooth link (ignored on USB-only builds).
+  // password  — Bluetooth authentication secret the host must present before
+  //             commands are accepted. Pass "" for an open (unauthenticated)
+  //             link. USB serial never requires authentication.
+  // ble       — set false to leave Bluetooth off entirely (saves heap).
+  //             Ignored on builds compiled without BRIDGE_BLE.
   void begin(const char* password = "espbridge", bool ble = true);
 };
 

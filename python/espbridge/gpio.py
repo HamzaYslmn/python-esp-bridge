@@ -30,11 +30,11 @@ class EdgeEvent:
 class PinStatus:
     """A pin's actual state, read from the chip (see Gpio.status)."""
     pin: int
-    level: int               # live pad level (0/1), read back from hardware
-    mode: str | None         # mode it was set to via the bridge (None if unknown)
+    level: int               # actual pad level (0 or 1) read back from hardware
+    mode: str | None         # mode last set via the bridge; None if never configured
     is_output: bool
-    pwm_freq: int            # LEDC frequency driving the pin, 0 = no PWM attached
-    pwm_duty: int            # LEDC raw duty (0 if no PWM)
+    pwm_freq: int            # LEDC carrier frequency in Hz; 0 means no PWM on this pin
+    pwm_duty: int            # LEDC raw duty count; 0 if no PWM
 
     @property
     def pwm(self) -> bool:
@@ -72,7 +72,7 @@ class Gpio:
         """
         want = 1 if value else 0
         r = self._b.request(C.GPIO_WRITE, bytes([pin, want]))
-        level = r[0] if r else want  # r is empty only on pre-read-back firmware
+        level = r[0] if r else want  # older firmware returns an empty ACK; fall back to what we wrote
         if verify and level != want:
             raise BridgeError(
                 f"GPIO{pin} read back {level} after writing {want}: pin not in "
@@ -115,9 +115,9 @@ class Gpio:
         return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty)
 
     def dump(self) -> list[PinStatus]:
-        """Every active pin in one round-trip: each pin configured via the bridge
-        or currently driven by PWM, with its full status. The board's own view of
-        what's set up — handy for a complete picture without polling pin by pin."""
+        """Return the full status of every active pin in a single round-trip.
+        Covers all pins that were configured via the bridge or are currently
+        driven by PWM — useful for a complete snapshot without polling pin by pin."""
         try:
             r = self._b.request(C.GPIO_DUMP)
         except RemoteError as e:

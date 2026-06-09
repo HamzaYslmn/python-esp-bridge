@@ -27,8 +27,10 @@ class LumaI2C:
         self._i2c = i2c
         self._addr = addr
         self._bus = bus
-        # largest data write minus the control byte (128 on old firmware,
-        # whose Wire TX buffer silently truncates longer transmissions)
+        # Maximum bytes of display data per I2C write, leaving one byte for
+        # the control byte prefix. Old firmware had a 128-byte Wire TX buffer
+        # that silently truncated longer writes, so we respect max_write when
+        # available and fall back to 2046 (a safe limit on current firmware).
         self._chunk = getattr(i2c, "max_write", 2046) - 1
 
     def command(self, *cmd: int) -> None:
@@ -72,9 +74,10 @@ class LumaSPI:
             time.sleep(0.01)
 
     def _send(self, data: bytes) -> None:
-        # CS is asserted per chunk; display controllers latch per byte, so
-        # chunk boundaries are harmless.
-        max_chunk = 2046  # MAX_PAYLOAD minus the transfer header
+        # Split large payloads into chunks that fit within the bridge's max
+        # transfer size. CS is toggled around each chunk, but display
+        # controllers latch data per byte, so mid-transfer CS gaps are fine.
+        max_chunk = 2046  # bridge MAX_PAYLOAD minus the per-transfer header
         for off in range(0, len(data), max_chunk):
             self._spi.transfer(data[off : off + max_chunk], cs=self._cs, host=self._host)
 
@@ -87,4 +90,4 @@ class LumaSPI:
         self._send(bytes(bytearray(data)))
 
     def cleanup(self) -> None:
-        pass
+        pass  # nothing to release; the Bridge owns the SPI bus and GPIO pins

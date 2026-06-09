@@ -5,7 +5,7 @@ import struct
 
 from . import constants as C
 
-# Max data per TRANSFER frame: payload cap minus host(1) + cs(1) header bytes.
+# Maximum data bytes per TRANSFER request: total payload cap minus the 2-byte header (host index + CS pin).
 _CHUNK = C.MAX_PAYLOAD - 2
 
 
@@ -26,7 +26,7 @@ class Spi:
         one frame (≤ 2046 bytes). Without `cs`, any length (chunked).
         """
         tx = bytes(tx)
-        cs_b = 255 if cs is None else cs  # i8 -1 == 255 unsigned
+        cs_b = 255 if cs is None else cs  # firmware treats 255 (0xFF) as "no CS"; equivalent to signed -1
         if cs is not None and len(tx) > _CHUNK:
             raise ValueError(
                 f"transfers with CS are limited to {_CHUNK} bytes per call "

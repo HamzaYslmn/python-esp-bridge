@@ -1,4 +1,5 @@
-// NVS: persistent key/value bytes in "user" namespace (apart from bridge's own); host owns typed encoding.
+// NVS: persistent key/value storage in the "user" namespace (separate from the bridge's own namespace).
+// Values are stored as raw bytes; the host is responsible for encoding/decoding typed data.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -10,7 +11,7 @@
 #define NVS_NS "user"
 #define NVS_KEY_MAX 15  // NVS limit
 
-// Key bytes -> NUL-terminated buffer.
+// Copies key bytes into out[] and NUL-terminates it. Returns false if the key is empty or exceeds the NVS 15-byte limit.
 static bool take_key(const uint8_t* p, uint16_t len, char* out) {
   if (len == 0 || len > NVS_KEY_MAX) return false;
   memcpy(out, p, len);

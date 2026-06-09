@@ -73,7 +73,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
-    case 0x02: {  // WRITE: pin, value -> level read back (confirmation ACK)
+    case 0x02: {  // WRITE: pin, value -> level read back
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (!valid_pin(p[0])) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       digitalWrite(p[0], p[1] ? HIGH : LOW);
@@ -141,9 +141,9 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       uint8_t pin = p[0];
       if (!valid_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
-      // Full picture from the chip, not just "command accepted": the live pad
-      // level, the mode we configured it with, and whether a LEDC (PWM) channel
-      // is driving it (freq 0 = none) with its current frequency and duty.
+      // Returns a full snapshot from the chip: the live pad level, the mode last
+      // set via SET_MODE, and the LEDC (PWM) channel state (freq 0 = no PWM on
+      // this pin).
       uint8_t buf[10];
       buf[0] = (uint8_t)digitalRead(pin);
       buf[1] = pin_mode[pin];

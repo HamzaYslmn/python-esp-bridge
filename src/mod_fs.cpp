@@ -1,5 +1,5 @@
-// FS: LittleFS + SD file/dir ops, streamed in <=2 KB chunks. net_task (blocking I/O).
-// fs ids: 0=littlefs, 1=sd_spi (own bus BRIDGE_SPI_HOST1, don't share mod_spi host 1), 2=sd_mmc.
+// FS: LittleFS + SD file/dir operations, data streamed in <=2 KB chunks. Runs on net_task (blocking I/O).
+// Filesystem IDs: 0 = LittleFS, 1 = SD over SPI (uses its own bus BRIDGE_SPI_HOST1 — do NOT share with mod_spi host 1), 2 = SD_MMC.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -49,7 +49,7 @@ static void df_of(uint8_t id, uint32_t* total_kb, uint32_t* used_kb) {
   *used_kb = u / 1024;
 }
 
-// Payload -> NUL-terminated absolute path.
+// Copies a payload byte-range into out[] and NUL-terminates it. Returns false if the path is empty, too long, or doesn't start with '/'.
 static bool take_path(const uint8_t* p, uint16_t len, char* out) {
   if (len == 0 || len >= FS_PATH_MAX || p[0] != '/') return false;
   memcpy(out, p, len);
@@ -57,7 +57,8 @@ static bool take_path(const uint8_t* p, uint16_t len, char* out) {
   return true;
 }
 
-// fs|...|path ops: resolve the fs and parse the path at offset `off`. nullptr = bad args.
+// Convenience for ops whose payload is [fs_id | ... | path]: resolves the filesystem from byte 0
+// and parses the path starting at byte `off`. Returns nullptr if either step fails.
 static fs::FS* take_fs_path(const uint8_t* p, uint16_t len, uint8_t off, char* out) {
   if (len < (uint16_t)off + 1) return nullptr;
   fs::FS* fs = fs_of(p[0]);

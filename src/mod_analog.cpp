@@ -100,7 +100,7 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
     case 0x01:  // WRITE: pin, value
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 #if BRIDGE_DAC_COSINE
-      cos_stop(pin);  // cosine generator owns the channel while running
+      cos_stop(pin);  // the cosine generator holds exclusive ownership of the DAC channel while active, so stop it before doing a plain write
 #endif
       dacWrite(pin, p[1]);
       proto_reply_ok(seq, cmd);

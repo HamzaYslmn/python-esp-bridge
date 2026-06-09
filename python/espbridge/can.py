@@ -52,7 +52,7 @@ class Can:
             try:
                 self._rx.put_nowait(msg)
             except queue.Full:
-                pass  # oldest-first backpressure: drop newest
+                pass  # queue full: drop this (newest) frame so the oldest frames are preserved
 
     def begin(self, tx: int, rx: int, bitrate: int = 500_000, *,
               mode: str = "normal",
@@ -93,7 +93,7 @@ class Can:
     def status(self) -> dict:
         r = self._b.request(C.TWAI_STATUS)
         state, tx_err, rx_err = r[0], r[1], r[2]
-        return {"state": ("stopped", "running", "recovering", "bus_off")[state],
+        return {"state": ("stopped", "running", "recovering", "bus_off")[state],  # matches TWAI_STATE_* enum order
                 "tx_errors": tx_err, "rx_errors": rx_err,
                 "rx_missed": struct.unpack_from(">I", r, 3)[0]}
 

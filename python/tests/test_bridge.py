@@ -21,7 +21,8 @@ def test_handshake_parses_ready_banner(bridge):
 
 
 def test_handshake_falls_back_to_info_poll():
-    fw = FakeFirmware()  # no boot(): banner never arrives, host polls SYS_INFO
+    fw = FakeFirmware()  # boot() is not called, so the READY banner never arrives;
+                         # the host must fall back to polling SYS_INFO instead
     b = Bridge(transport=fw.transport, upgrade_baud=False, reset_on_open=False)
     try:
         assert b.info is not None and b.info.chip is ChipModel.ESP32
@@ -85,7 +86,8 @@ def test_timeout_when_firmware_silent(bridge, fw):
     fw.blackhole_cmds.add(C.SYS_FREE_HEAP)
     with pytest.raises(BridgeTimeoutError):
         bridge.request(C.SYS_FREE_HEAP, timeout=0.2)
-    # seq slot must be reclaimed and the link must still work afterwards
+    # The timed-out sequence slot must be reclaimed so the bridge can keep
+    # sending new commands on the same link without waiting for the dead slot.
     fw.blackhole_cmds.clear()
     assert bridge.free_heap()["free"] == 200_000
 
@@ -93,8 +95,9 @@ def test_timeout_when_firmware_silent(bridge, fw):
 def test_cmd_name_lookup():
     assert C.cmd_name(C.I2C_WRITE) == "I2C_WRITE (0x4003)"
     assert C.cmd_name(C.GPIO_WRITE) == "GPIO_WRITE (0x1002)"
-    assert C.cmd_name(0x7F01) == "0x7F01"  # unknown stays hex
-    # same-prefix scalars (UART_CHUNK=256, NET_CHUNK=512) must not leak in
+    assert C.cmd_name(0x7F01) == "0x7F01"  # completely unknown opcodes fall back to hex notation
+    # UART_CHUNK and NET_CHUNK share a numeric prefix with valid command codes but
+    # are chunk-size constants, not commands.  They must not be returned as command names.
     assert C.cmd_name(C.UART_CHUNK) == "0x0100"
     assert C.cmd_name(C.NET_CHUNK) == "0x0200"
 
@@ -124,14 +127,19 @@ def test_timeout_error_diagnoses_dead_link(bridge, fw):
 
 
 def test_send_burst_is_fenced(bridge, fw):
-    """Pipelined fire-and-forget writes must be throttled to burst_window."""
+    """Pipelined fire-and-forget writes must be throttled to burst_window.
+
+    When many wait=False writes are pipelined the bridge periodically inserts a
+    SYS_PING "fence" to prevent the ESP32's receive buffer from overflowing.
+    Once a normal (waited) write completes, the unacked counter must reset to zero.
+    """
     fw.i2c_devices[0x3C] = b""
-    bridge._t.burst_window = 150  # tiny window: a couple of frames
+    bridge._t.burst_window = 150  # force a tiny window so fences fire quickly (normally much larger)
     for _ in range(10):
         bridge.i2c.write(0x3C, b"\x40" + b"\xff" * 40, wait=False)
-    assert len(fw.i2c_writes) == 10            # nothing lost
-    assert fw.handled.count(C.SYS_PING) >= 2   # fences were inserted
-    bridge.i2c.write(0x3C, b"\x00\xaf")        # waited write resets the window
+    assert len(fw.i2c_writes) == 10            # all writes were delivered despite the throttling
+    assert fw.handled.count(C.SYS_PING) >= 2   # at least two SYS_PING fences were inserted
+    bridge.i2c.write(0x3C, b"\x00\xaf")        # a synchronous write drains the pipeline
     assert bridge._unacked == 0
 
 
@@ -164,7 +172,12 @@ def test_wildcard_event_handler(bridge, fw):
 
 
 def test_concurrent_requests_correlate_by_seq(bridge):
-    """Hammer the bridge from several threads; every echo must match its payload."""
+    """Verify that responses are matched to the correct request under concurrency.
+
+    Eight threads each fire 25 SYS_PING commands in parallel.  Because each
+    request carries a unique sequence number, the bridge must never mix up a
+    reply from one thread with a pending request from another.
+    """
     errors = []
 
     def worker(tag: int):

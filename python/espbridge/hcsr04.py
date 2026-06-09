@@ -13,7 +13,7 @@ from __future__ import annotations
 def echo_to_cm(symbols: list[tuple[int, int]]) -> float | None:
     """Pure decoder: first high pulse (1 us ticks) -> centimeters."""
     for level, dur in symbols:
-        if level == 1 and dur >= 60:  # >=1 cm; skips trigger crosstalk blips
+        if level == 1 and dur >= 60:  # 60 us ~ 1 cm; rejects short crosstalk spikes from the trigger pulse
             return dur / 58.0
     return None
 
@@ -27,8 +27,9 @@ class HCSR04:
 
     def distance_cm(self) -> float | None:
         """One ping -> distance in cm, or None when out of range (>~4 m)."""
-        # Echo high lasts up to ~25 ms in range (38 ms = no echo); the idle
-        # threshold must exceed the longest echo so the capture spans it.
+        # Echo pulse can be up to ~25 ms for a valid return (38 ms means no
+        # object detected). The idle threshold must be larger than the longest
+        # possible echo so the RMT capture waits for the full pulse to finish.
         syms = self._rmt.recv(self._echo, idle_ticks=30_000, timeout_ms=100,
                               max_symbols=16, trigger=(self._trig, 1, 10))
         return echo_to_cm(syms)

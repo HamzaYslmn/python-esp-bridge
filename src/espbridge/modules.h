@@ -2,8 +2,10 @@
 #pragma once
 #include <Arduino.h>
 
-// handle(op, seq, payload, len) — fast handlers run on rx_task;
-// wifi/net/ble handlers run on net_task (may block).
+// All handlers share the same signature: handle(op, seq, payload, len).
+// Fast handlers (GPIO, I2C, SPI, etc.) run inline on rx_task.
+// Slow or stateful handlers (Wi-Fi, NET, BLE, etc.) run on net_task, where
+// they may block for extended periods without stalling frame reception.
 void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void analog_handle(uint8_t mod, uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);  // ADC+DAC+TOUCH
@@ -27,8 +29,10 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 
-// Stub body for a module compiled out on this chip: every op -> ST_UNSUPPORTED.
-// Use in the module's #else branch, e.g. UNSUPPORTED_STUB(i2s_handle, MOD_I2S).
+// Generates a handler body that returns ST_UNSUPPORTED for every op.
+// Use in the #else branch of a chip-capability guard so that all declared
+// handler symbols still link. Example:
+//   UNSUPPORTED_STUB(i2s_handle, MOD_I2S)
 #define UNSUPPORTED_STUB(handler, mod) \
   void handler(uint8_t op, uint8_t seq, const uint8_t*, uint16_t) { \
     proto_reply_err(seq, CMD(mod, op), ST_UNSUPPORTED); \
@@ -37,7 +41,8 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void gpio_init();
 void wifi_init();
 
-// Pollers: gpio/uart run on rx_task, wifi/net on net_task; must not block.
+// Pollers are called in a tight loop and must never block.
+// gpio_poll/uart_poll run on rx_task; wifi_poll/net_poll run on net_task.
 void gpio_poll();
 void uart_poll();
 void wifi_poll();
@@ -46,7 +51,8 @@ void net_poll();
 bool wifi_is_active();    // used by ADC2-conflict guard
 bool espnow_is_active();  // keeps mod_wifi from dropping to WIFI_MODE_NULL
 
-// SYS_INFO payload builder (also used for the SYS_READY boot banner).
+// Fills out[] with the SYS_INFO payload and returns the byte count written.
+// Used for both the SYS_INFO response and the SYS_READY boot-banner event.
 uint16_t sys_build_info(uint8_t* out);
 
 // NVS-persisted device name ("" when unset); appended to the BLE adv name.

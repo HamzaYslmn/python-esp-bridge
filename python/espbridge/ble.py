@@ -38,7 +38,7 @@ class Advertisement:
             if length == 0 or i + 1 + length > len(d) + 1:
                 break
             ad_type = d[i + 1]
-            if ad_type in (0x08, 0x09):  # shortened / complete local name
+            if ad_type in (0x08, 0x09):  # AD type 0x08 = Shortened Local Name, 0x09 = Complete Local Name
                 return d[i + 2 : i + 1 + length].decode("utf-8", "replace")
             i += 1 + length
         return None
@@ -114,7 +114,7 @@ class Ble:
         bridge.on_event(C.BLE_GATTS_CONN_EVT, self._on_gatts_conn)
         bridge.on_event(C.BLE_GATTC_NTFY_EVT, self._on_notify)
 
-    # ---- events (reader thread) ---------------------------------------------------
+    # ---- event handlers — all called on the reader thread -----------------------
 
     def _on_adv(self, p: bytes) -> None:
         if len(p) < 8:
@@ -163,7 +163,7 @@ class Ble:
         """
         if callback is not None:
             self._adv_callbacks.append(callback)
-        while not self._adv_queue.empty():  # drop stale results
+        while not self._adv_queue.empty():  # discard any packets buffered before this scan
             self._adv_queue.get_nowait()
         self._b.request(C.BLE_SCAN_START, bytes([min(255, int(duration) + 1), 1 if active else 0]),
                         timeout=10.0)

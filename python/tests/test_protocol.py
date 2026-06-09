@@ -35,7 +35,7 @@ def test_crc16_known_vector():
 )
 def test_cobs_roundtrip(data):
     encoded = cobs_encode(data)
-    assert 0 not in encoded, "COBS output must not contain the delimiter"
+    assert 0 not in encoded, "COBS output must not contain any zero byte (the frame delimiter)"
     assert cobs_decode(encoded) == data
 
 
@@ -90,8 +90,10 @@ def test_splitter_multiple_frames_and_garbage_resync():
     f1 = encode_frame(0, 1, 0x0001, b"one")
     f2 = encode_frame(0, 2, 0x0002, b"two")
     s = FrameSplitter()
-    # Garbage prefix (e.g. boot log) ends at the first delimiter and is
-    # rejected by decode, but the following frames parse fine.
+    # A garbage prefix (e.g. the ESP32 boot log before the firmware takes over)
+    # is terminated by its own 0x00 byte and handed to decode_frame, which
+    # correctly rejects it.  The two valid frames that follow still parse fine,
+    # so the splitter re-syncs without any special handling.
     chunks = s.feed(b"\x07garbage\x00" + f1 + f2)
     assert len(chunks) == 3
     with pytest.raises(ProtocolError):

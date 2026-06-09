@@ -1,6 +1,10 @@
-// 1-Wire bit-timing primitives (ROM search/CRC/drivers live host-side).
-// Slots run with IRQs masked (<=70us/bit); handlers on net_task.
-// Wiring: 4.7k pull-up to 3V3. power=1 on OW_WRITE drives line high push-pull (parasite power).
+// 1-Wire bit-timing primitives. Higher-level logic (ROM search, CRC, device
+// drivers) runs host-side to keep firmware simple.
+// Each bit slot masks IRQs for up to 70 µs, so these run on net_task to avoid
+// starving time-critical tasks.
+// Wiring: 4.7 kΩ pull-up to 3V3 required.
+// power=1 on OW_WRITE drives the line high push-pull after the last byte,
+// supplying parasite power to bus-powered devices.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
@@ -67,7 +71,7 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x02: {  // WRITE: pin|power|data..
       if (len < 3) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       for (uint16_t i = 2; i < len; i++) ow_write_byte(pin, p[i]);
-      if (p[1]) { pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); }  // strong pull-up
+      if (p[1]) { pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); }  // hold line high (strong pull-up) for parasite-powered devices
       proto_reply_ok(seq, cmd);
       break;
     }

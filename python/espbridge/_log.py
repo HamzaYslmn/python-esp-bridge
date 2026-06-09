@@ -27,8 +27,9 @@ def _supports_color(stream) -> bool:
     if not getattr(stream, "isatty", lambda: False)():
         return False
     if sys.platform == "win32":
-        # Windows Terminal/VS Code have VT processing on already; flip it on
-        # for the classic console. Failure means no ANSI support.
+        # Windows Terminal and VS Code already have VT processing enabled.
+        # For the classic Windows console, try to enable it here.
+        # If the call fails, ANSI escape sequences are not supported.
         import ctypes
 
         kernel32 = ctypes.windll.kernel32
@@ -48,7 +49,7 @@ class _Formatter(logging.Formatter):
         self.use_colors = use_colors
 
     def format(self, record: logging.LogRecord) -> str:
-        pad = " " * max(0, 8 - len(record.levelname))  # align like uvicorn
+        pad = " " * max(0, 8 - len(record.levelname))  # right-pad level name to 8 chars, matching uvicorn's alignment
         if self.use_colors:
             color = _LEVEL_COLORS.get(record.levelno, 0)
             record.levelprefix = (
@@ -61,8 +62,8 @@ class _Formatter(logging.Formatter):
 log = logging.getLogger("espbridge")
 if not log.handlers:
     if os.environ.get("ESPBRIDGE_DEBUG"):
-        # Frame-level tracing (every request/response with command names)
-        # without touching the script: ESPBRIDGE_DEBUG=1 python app.py
+        # Enable frame-level tracing (every request and response with command
+        # names) without modifying the script: ESPBRIDGE_DEBUG=1 python app.py
         log.setLevel(logging.DEBUG)
     elif log.level == logging.NOTSET:  # respect a level the app set first
         log.setLevel(logging.INFO)

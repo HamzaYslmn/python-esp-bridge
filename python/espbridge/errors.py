@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from .constants import Status, cmd_name
 
-# What each firmware status usually means in practice — surfaced in the
-# RemoteError message so failures are actionable without the protocol docs.
+# Human-readable hints for each firmware status code. These are appended to
+# RemoteError messages so failures are actionable without consulting the
+# protocol documentation.
 _STATUS_HINTS = {
     Status.UNKNOWN_CMD: "firmware too old for this command — reflash the firmware",
     Status.BAD_ARGS: "invalid arguments (pin/bus/length out of range for this chip?)",

@@ -8,14 +8,14 @@
 #include <driver/gpio.h>
 #include <Preferences.h>
 
-// NVS-persisted device name so hosts can address boards by name, not port path.
+// Device name persisted in NVS so hosts can identify boards by name rather than serial port path.
 static char bridge_name[BRIDGE_NAME_MAX + 1];
 static bool name_loaded = false;
 
 static void load_name() {
   if (name_loaded) return;
   Preferences prefs;
-  if (prefs.begin("bridge", true)) {  // read-only; fails if namespace absent
+  if (prefs.begin("bridge", true)) {  // open read-only; silently absent on first boot (bridge_name stays empty)
     String n = prefs.getString("name", "");
     strlcpy(bridge_name, n.c_str(), sizeof(bridge_name));
     prefs.end();
@@ -96,8 +96,8 @@ uint16_t sys_build_info(uint8_t* out) {
 #if BRIDGE_CAM
   if (psramFound()) caps |= CAP_CAM;  // frame buffers need PSRAM
 #endif
-  if (psramFound()) caps |= CAP_PSRAM;
-  if (link_ble_enabled()) caps |= CAP_BLE_LINK;
+  if (psramFound())        caps |= CAP_PSRAM;
+  if (link_ble_enabled()) caps |= CAP_BLE_LINK;  // runtime check — BLE transport may be enabled or disabled per build
   wr32(p, caps); p += 4;
 
   *p++ = SOC_GPIO_PIN_COUNT;
@@ -128,12 +128,12 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       uint32_t baud = rd32(p);
 #if BRIDGE_NATIVE_USB
       (void)baud;
-      proto_reply_ok(seq, cmd);  // USB CDC: baud is a no-op
+      proto_reply_ok(seq, cmd);  // Native USB CDC ignores the baud rate entirely — acknowledge without acting
 #else
       if (baud < 9600 || baud > 3000000) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
-      proto_reply_ok(seq, cmd);  // reply at OLD baud...
-      proto_tx_flush();          // ...ensure it's on the wire
-      delay(20);                 // let host UART drain
+      proto_reply_ok(seq, cmd);  // send the ACK at the current (old) baud rate...
+      proto_tx_flush();          // ...and make sure it's fully transmitted before we switch
+      delay(20);                 // give the host's UART time to drain and re-lock at the new rate
       Serial.updateBaudRate(baud);
 #endif
       break;
@@ -160,21 +160,21 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
 #if BRIDGE_HAS_SLEEP
-    case 0x08: {  // SLEEP: mode u8 (0 deep,1 light)|us u64|wake_pin i8|wake_level u8
+    case 0x08: {  // SLEEP: mode u8 (0=deep, 1=light) | us u64 | wake_pin i8 | wake_level u8
       if (len < 11) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       uint8_t mode = p[0];
       uint64_t us = ((uint64_t)rd32(p + 1) << 32) | rd32(p + 5);
       int8_t wpin = (int8_t)p[9];
       uint8_t wlevel = p[10] ? 1 : 0;
-      if (mode > 1 || (us == 0 && wpin < 0)) {  // would never wake
+      if (mode > 1 || (us == 0 && wpin < 0)) {  // reject: no wakeup source means the device would sleep forever
         proto_reply_err(seq, cmd, ST_BAD_ARGS);
         return;
       }
       if (us) esp_sleep_enable_timer_wakeup(us);
       if (wpin >= 0) {
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
-        esp_sleep_enable_ext0_wakeup((gpio_num_t)wpin, wlevel);  // RTC pins only
-#else  // C3/C6: GPIO wake differs for deep vs light sleep
+        esp_sleep_enable_ext0_wakeup((gpio_num_t)wpin, wlevel);  // EXT0 wakeup requires an RTC-capable GPIO
+#else  // C3/C6 lack EXT0; they use a different GPIO wakeup API that also differs between deep and light sleep
         if (mode == 0) {
           esp_deep_sleep_enable_gpio_wakeup(1ULL << wpin,
               wlevel ? ESP_GPIO_WAKEUP_GPIO_HIGH : ESP_GPIO_WAKEUP_GPIO_LOW);
@@ -185,12 +185,12 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         }
 #endif
       }
-      if (mode == 0) {  // deep: reply, flush, sleep — reboots on wake
+      if (mode == 0) {  // deep sleep: send ACK, flush, then sleep — device reboots on wake (no resume)
         proto_reply_ok(seq, cmd);
         proto_tx_flush();
         delay(50);
         esp_deep_sleep_start();
-      } else {  // light: chip pauses here; reply lands after wake
+      } else {  // light sleep: execution pauses here and resumes on wake; reply is sent after waking
         esp_light_sleep_start();
         uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
         proto_reply(seq, cmd, &cause, 1);
@@ -198,13 +198,14 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 #else
-    case 0x08:  // sleep entry is IRAM-resident; gated off on classic+BLE
+    case 0x08:  // SLEEP disabled: sleep entry code must be IRAM-resident, which conflicts with classic BT + BLE builds
       proto_reply_err(seq, cmd, ST_UNSUPPORTED);
       break;
 #endif
 
-    // WAKE_CAUSE is always available: reading the cause is a cheap RTC-register
-    // read with no IRAM-resident sleep code, so it works even on classic+BLE.
+    // WAKE_CAUSE is always available regardless of the BRIDGE_HAS_SLEEP gate.
+    // Reading the wakeup cause is a cheap RTC register read that requires no IRAM-resident sleep code,
+    // so it is safe even in classic BT + BLE builds where sleep entry is disabled.
     case 0x09: {  // WAKE_CAUSE -> cause u8 (0 = normal power-on/reset)
       uint8_t cause = (uint8_t)esp_sleep_get_wakeup_cause();
       proto_reply(seq, cmd, &cause, 1);
@@ -217,7 +218,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       wr32(buf + 4, ESP.getMinFreeHeap());
       wr32(buf + 8, heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       wr32(buf + 12, proto_dropped_events());
-      wr32(buf + 16, link_ble_rx_dropped());  // fw >= 0.3.2 (host len-checks)
+      wr32(buf + 16, link_ble_rx_dropped());  // BLE RX drop counter added in fw 0.3.2 (host added length checks at the same time)
       proto_reply(seq, cmd, buf, 20);
       break;
     }

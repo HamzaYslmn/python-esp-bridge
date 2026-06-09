@@ -6,8 +6,8 @@ import threading
 
 from . import constants as C
 
-# Per-request write chunk: bounds single-request size (and how long the
-# firmware's synchronous UART write can stall on slow baud rates).
+# Maximum bytes sent in a single UART_WRITE request. Keeping this bounded
+# limits how long the firmware's synchronous write can block on a slow baud rate.
 _WRITE_CHUNK = 1024
 
 

@@ -40,10 +40,14 @@ class EspNow:
         mac = mac_to_str(p[:6])
         rssi = int.from_bytes(p[6:7], "big", signed=True)
         data = p[7:]
-        if self._rx_callbacks:  # callback mode: don't also fill the queue forever
+        if self._rx_callbacks:
+            # Callback mode: deliver directly and skip the queue.
+            # If we also queued, the queue would grow unbounded because
+            # nothing would drain it.
             for cb in list(self._rx_callbacks):
                 cb(mac, data, rssi)
-        else:  # polled mode: queue for available()/read()
+        else:
+            # Polled mode: buffer the packet so available()/read() can retrieve it.
             self._rx_queue.put_nowait((mac, data, rssi))
 
     def _on_send_result(self, p: bytes) -> None:
@@ -135,7 +139,7 @@ class EspNow:
 
     def broadcast(self, data: bytes, *, wait: bool = False) -> None:
         """Send up to 250 bytes to every listening board in range (never ACKed)."""
-        if not self._bcast_added:  # add_peer is idempotent; a dup is harmless
+        if not self._bcast_added:  # auto-register the broadcast address on first use
             self.add_peer(BROADCAST)
             self._bcast_added = True
         self.send(BROADCAST, data, wait=wait)

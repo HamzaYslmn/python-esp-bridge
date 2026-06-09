@@ -8,7 +8,8 @@ def rom(family: int, serial: int) -> bytes:
 
 
 def test_crc8_known_vector():
-    # Maxim app-note example ROM: family 0x02, serial 1B4735 0A00 00, crc 0xA2
+    # Maxim/Dallas app-note example: a valid 8-byte ROM with a known CRC.
+    # Appending the correct CRC byte and re-running crc8 over all 8 bytes must yield 0.
     r = bytes.fromhex("02 1c b8 01 00 00 00".replace(" ", ""))
     assert crc8(r + bytes([crc8(r)])) == 0
 
@@ -38,10 +39,10 @@ def test_select_match_rom(bridge, fw):
     fw.ow_devices = [rom(0x28, 5)]
     r = rom(0x28, 5).hex()
     bridge.onewire.select(4, r)
-    assert fw.ow_writes[-1] == bytes([0x55]) + rom(0x28, 5)
+    assert fw.ow_writes[-1] == bytes([0x55]) + rom(0x28, 5)  # 0x55 = MATCH_ROM command
 
 
 def test_select_skip_rom(bridge, fw):
     fw.ow_devices = [rom(0x28, 5)]
     bridge.onewire.select(4, None)
-    assert fw.ow_writes[-1] == bytes([0xCC])
+    assert fw.ow_writes[-1] == bytes([0xCC])  # 0xCC = SKIP_ROM command (addresses all devices)

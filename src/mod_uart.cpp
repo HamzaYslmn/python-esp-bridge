@@ -38,7 +38,7 @@ void uart_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (uart_inited[idx]) u->end();
       u->setRxBufferSize(1024);
-      u->begin(rd32(p + 3), SERIAL_8N1, (int8_t)p[2], (int8_t)p[1]);  // begin(baud, cfg, rx, tx)
+      u->begin(rd32(p + 3), SERIAL_8N1, (int8_t)p[2], (int8_t)p[1]);  // arduino-esp32 begin() order: baud, config, rx_pin, tx_pin
       uart_inited[idx] = true;
       proto_reply_ok(seq, cmd);
       break;

@@ -10,11 +10,11 @@ import time
 
 
 def decode(symbols: list[tuple[int, int]]) -> bytes:
-    """Pure decoder: captured 1 us symbols -> the sensor's 5 data bytes.
+    """Pure decoder: list of (level, duration-in-1-us-ticks) RMT symbols -> the sensor's 5 data bytes.
 
-    A data bit is a ~50 us low followed by a high: ~26 us = 0, ~70 us = 1.
-    The capture also contains the start trigger and the 80/80 us response;
-    taking the LAST 40 qualifying (low, high) pairs skips them.
+    A data bit is a ~50 us low followed by a high pulse: ~26 us high = 0, ~70 us high = 1.
+    The capture also includes the start trigger and the 80/80 us acknowledgment response;
+    taking the LAST 40 qualifying (low, high) pairs skips those preamble pulses.
     """
     highs = [dur for i, (level, dur) in enumerate(symbols)
              if level == 1 and i > 0 and symbols[i - 1][0] == 0

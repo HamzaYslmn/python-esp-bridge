@@ -1,6 +1,8 @@
-// I2S audio in/out (std mode, ESP_I2S). Host pushes/pulls PCM <=2KB chunks;
-// DMA buffers absorb link jitter. Link bandwidth caps rates (~92KB/s @921600
-// = 16-bit/16kHz mono). Runs on net_task.
+// I2S audio input and output using ESP_I2S in standard mode.
+// The host pushes or pulls PCM data in <=2 KB chunks; the I2S DMA buffers absorb
+// link-layer jitter. Link bandwidth is the hard ceiling on sample rates:
+// ~92 KB/s at 921600 baud supports up to 16-bit 16 kHz mono.
+// Runs on net_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 

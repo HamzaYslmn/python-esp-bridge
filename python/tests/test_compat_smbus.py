@@ -21,7 +21,7 @@ def test_byte_ops(bus, fw):
 
 def test_register_ops(bus, fw):
     assert bus.read_byte_data(0x48, 0x00) == 0x1A
-    assert fw.i2c_writes[-1] == (0x48, b"\x00")  # register selected via write
+    assert fw.i2c_writes[-1] == (0x48, b"\x00")  # read_byte_data first writes the register address, then reads
 
     bus.write_byte_data(0x48, 0x01, 0x60)
     assert fw.i2c_writes[-1] == (0x48, bytes([0x01, 0x60]))

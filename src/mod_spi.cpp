@@ -38,7 +38,7 @@ void spi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
-    case 0x02: {  // TRANSFER: host, cs i8, data.. -> rx data
+    case 0x02: {  // TRANSFER: host, cs i8 (-1 = no CS), data.. -> rx data (full-duplex)
       if (!st[idx].inited) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       int8_t cs = (int8_t)p[1];

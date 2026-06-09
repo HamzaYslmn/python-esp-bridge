@@ -50,6 +50,8 @@ class OneWire:
             self.write(pin, bytes([MATCH_ROM]) + bytes.fromhex(rom))
 
     def _triplet(self, pin: int, direction: int) -> tuple[int, int, int]:
+        # ROM search triplet: firmware reads two bits then writes one.
+        # Returns (id_bit, complement_bit, direction_taken).
         r = self._b.request(C.OW_TRIPLET, bytes([pin, direction]))
         return r[0], r[1], r[2]
 
@@ -70,9 +72,9 @@ class OneWire:
                     hint = 1 if bit + 1 == last_disc else 0
                 id_bit, cmp_bit, taken = self._triplet(pin, hint)
                 if id_bit and cmp_bit:
-                    return roms  # no device answered this branch
+                    return roms  # both bits 1 means no devices remain on this branch
                 if not id_bit and not cmp_bit and taken == 0:
-                    disc = bit + 1
+                    disc = bit + 1  # remember this as the last fork where we chose 0
                 if taken:
                     rom[bit // 8] |= 1 << (bit % 8)
                 else:

@@ -43,8 +43,9 @@ def _short(value, limit: int = 200) -> str:
 
 
 def _feedback_message(name: str, params: dict, result) -> str:
-    # A confirmation string already reads as feedback ("GPIO2 set to output");
-    # for structured results show the call and a short form of the value.
+    # When the tool already returns a human-readable confirmation string (e.g.
+    # "GPIO2 set to output"), that string is the feedback. For structured
+    # results (dicts, ints, etc.), format as "call(args) -> short_repr".
     if isinstance(result, str):
         return result
     args = ", ".join(f"{k}={v!r}" for k, v in params.items())
@@ -53,8 +54,10 @@ def _feedback_message(name: str, params: dict, result) -> str:
 
 
 def _notify_client(msg: str, level: str = "info") -> None:
-    # fastmcp-specific: the MCP-transport side of feedback. We run in a sync
-    # worker thread, so hop back to the event loop to send the notification.
+    # FastMCP runs each tool in a synchronous worker thread, so we use
+    # anyio.from_thread.run to hop back to the async event loop in order to
+    # send the MCP notification. If that fails (client disconnected, no active
+    # portal), we silently drop it — the server log still captures the message.
     try:
         ctx = get_context()
     except RuntimeError:
@@ -63,7 +66,7 @@ def _notify_client(msg: str, level: str = "info") -> None:
     try:
         anyio.from_thread.run(send, msg)
     except Exception:
-        pass  # client gone or no portal — the server log still has it
+        pass
 
 
 def emit_feedback(name: str, params: dict, result, *, ok: bool = True) -> None:
@@ -95,7 +98,8 @@ def guarded(fn):
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        # FastMCP calls tools with keyword args, so kwargs names the params.
+        # FastMCP calls tools with keyword arguments, so kwargs holds the
+        # named parameters we pass to emit_feedback for display.
         try:
             result = fn(*args, **kwargs)
         except _USER_ERRORS as e:

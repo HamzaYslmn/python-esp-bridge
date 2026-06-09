@@ -5,8 +5,8 @@ import struct
 
 from . import constants as C
 
-# Attenuation -> roughly full-scale input voltage on classic ESP32:
-#   0 dB ≈ 1.1 V, 2.5 dB ≈ 1.5 V, 6 dB ≈ 2.2 V, 11 dB ≈ 3.3 V (default)
+# Attenuation level -> approximate full-scale input range on classic ESP32:
+#   0 dB ≈ 1.1 V,  2.5 dB ≈ 1.5 V,  6 dB ≈ 2.2 V,  11 dB ≈ 3.3 V  (default)
 ATTEN = {0: 0, 2.5: 1, 6: 2, 11: 3, "0db": 0, "2.5db": 1, "6db": 2, "11db": 3}
 
 
@@ -41,7 +41,7 @@ class Dac:
                phase_180: bool = False) -> None:
         """Start the hardware cosine-wave generator (~130 Hz .. ~100 kHz).
 
-        scale: 0..3 = full/half/quarter/eighth amplitude.
+        scale: 0 = full amplitude, 1 = half, 2 = quarter, 3 = eighth.
         """
         self._b.request(C.DAC_COSINE, struct.pack(">BIBbB", pin, freq_hz, scale & 3,
                                                   offset, 1 if phase_180 else 0))

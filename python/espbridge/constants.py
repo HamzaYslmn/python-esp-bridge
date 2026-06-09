@@ -297,9 +297,10 @@ OTA_WRITE = _cmd(MOD_OTA, 0x02)
 OTA_END = _cmd(MOD_OTA, 0x03)
 OTA_ABORT = _cmd(MOD_OTA, 0x04)
 
-# Full-frame OTA chunks (was 1024): halves the round-trip count per MB. The
-# firmware's OTA_WRITE handler streams whatever length arrives into esp_ota_write,
-# so the only ceiling is MAX_PAYLOAD; -8 leaves room for the frame header/CRC.
+# Use the full payload for each OTA chunk (previously 1024 bytes), which halves
+# the number of round-trips per MB. The firmware's OTA_WRITE handler passes
+# whatever arrives directly to esp_ota_write, so the only ceiling is MAX_PAYLOAD;
+# subtracting 8 leaves room for the frame header and CRC.
 OTA_CHUNK = MAX_PAYLOAD - 8
 
 # CAM
@@ -310,11 +311,12 @@ CAM_RELEASE = _cmd(MOD_CAM, 0x04)
 CAM_SET = _cmd(MOD_CAM, 0x05)
 CAM_DEINIT = _cmd(MOD_CAM, 0x06)
 
-# Commands NOT safe to auto-retry after a response timeout: re-executing one
-# whose request got through (only the reply was lost) would double-send data,
-# advance a cursor, or re-trigger a one-shot side effect. Everything else on
-# the bridge sets a level/state and is idempotent. Errs on the side of
-# inclusion — see Bridge.request(retries=).
+# Commands that must NOT be auto-retried after a response timeout. If the
+# original request reached the firmware but only the reply was lost, re-sending
+# one of these would double-send data, advance a file/bus cursor, or re-trigger
+# a one-shot side effect. Everything else on the bridge sets a level or state
+# and is safely idempotent. When in doubt a command is included here — see
+# Bridge.request(retries=) for the retry logic.
 NON_IDEMPOTENT = frozenset({
     SYS_SET_BAUD, SYS_RESET, SYS_SLEEP,
     UART_WRITE,
@@ -328,9 +330,10 @@ NON_IDEMPOTENT = frozenset({
     CAM_CAPTURE,                     # grabs/replaces the held frame buffer
 })
 
-# Reverse lookup for error messages and debug logs. A name qualifies when its
-# prefix matches the module its value belongs to — this filters out same-prefix
-# scalars like UART_CHUNK or ESPNOW_MAX_DATA whose values land in no module.
+# Reverse lookup table used in error messages and debug logs. A name is included
+# only when its prefix matches the module that owns its value — this filters out
+# same-prefix scalars like UART_CHUNK or ESPNOW_MAX_DATA, whose numeric values
+# don't correspond to any command code.
 _MOD_PREFIX = {
     MOD_SYS: "SYS_", MOD_GPIO: "GPIO_", MOD_ADC: "ADC_", MOD_DAC: "DAC_",
     MOD_TOUCH: "TOUCH_", MOD_PWM: "PWM_", MOD_RMT: "RMT_", MOD_MCPWM: "MCPWM_",
