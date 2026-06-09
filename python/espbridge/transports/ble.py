@@ -78,6 +78,46 @@ def find_ble_devices(timeout: float = 5.0) -> list[BleDeviceInfo]:
     return asyncio.run(_scan())
 
 
+def find_ble_devices_fast(match=None, *, settle: float = 0.4,
+                          timeout: float = 10.0) -> list[BleDeviceInfo]:
+    """Scan for bridges, returning as soon as one shows up.
+
+    Unlike find_ble_devices (which always waits the full timeout to enumerate
+    every board), this stops `settle` seconds after the first *matching* bridge
+    is seen — so a connect pays roughly the time-to-first-advertisement instead
+    of the whole scan window. `match` is an optional predicate on a
+    BleDeviceInfo. Returns the matches found (strongest RSSI first), or [] if
+    none appeared within `timeout`.
+    """
+    _require_bleak()
+    from bleak import BleakScanner
+
+    async def _scan():
+        seen: dict[str, BleDeviceInfo] = {}
+
+        def _cb(dev, adv):
+            info = BleDeviceInfo(dev.name or "", dev.address, adv.rssi)
+            if match is not None and not match(info):
+                return
+            seen[dev.address] = info
+
+        scanner = BleakScanner(detection_callback=_cb,
+                               service_uuids=[BLE_LINK_SERVICE_UUID])
+        await scanner.start()
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline and not seen:
+                await asyncio.sleep(0.05)
+            if seen:
+                await asyncio.sleep(settle)  # brief window to catch siblings
+        finally:
+            await scanner.stop()
+        return sorted(seen.values(), key=lambda d: d.rssi, reverse=True)
+
+    return asyncio.run(_scan())
+
+
 class BleTransport:
     """BLE GATT transport with the same blocking interface as SerialTransport."""
 

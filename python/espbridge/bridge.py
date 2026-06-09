@@ -204,23 +204,41 @@ class Bridge:
 
     @staticmethod
     def _ble_candidates(ble: bool | str, name: str | None, mac: str | None):
-        from .transports.ble import BleTransport, find_ble_devices
+        from .transports.ble import (
+            BleTransport, find_ble_devices, find_ble_devices_fast)
 
         target = ble if isinstance(ble, str) else None
-        devs = find_ble_devices()
-        if target is not None:
-            tmac = _norm_mac(target)
-            devs = [d for d in devs
-                    if d.name == target or d.device_name == target
-                    or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac]
-        # The advertised name carries the bridge MAC and custom name: narrow
-        # the candidates before connecting when the caller passed name=/mac=.
-        # On no match keep the full list (adv data can be stale/truncated) —
-        # the post-connect _matches() check stays authoritative either way.
-        if mac is not None:
-            devs = [d for d in devs if _norm_mac(d.mac) == _norm_mac(mac)] or devs
-        if name is not None:
-            devs = [d for d in devs if d.device_name == name] or devs
+
+        def _strict_match(d) -> bool:
+            if target is not None:
+                tmac = _norm_mac(target)
+                if not (d.name == target or d.device_name == target
+                        or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac):
+                    return False
+            if mac is not None and _norm_mac(d.mac) != _norm_mac(mac):
+                return False
+            if name is not None and d.device_name != name:
+                return False
+            return True
+
+        # Fast path: stop scanning shortly after the first matching bridge
+        # shows up, instead of waiting the full discover() window — the common
+        # single-board connect then completes in well under a second.
+        devs = find_ble_devices_fast(_strict_match)
+        if not devs:
+            # Nothing matched the fast filter — fall back to a full scan and the
+            # lenient name/mac filtering below. Advertised names can be stale or
+            # truncated; the post-connect _matches() check stays authoritative.
+            devs = find_ble_devices()
+            if target is not None:
+                tmac = _norm_mac(target)
+                devs = [d for d in devs
+                        if d.name == target or d.device_name == target
+                        or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac]
+            if mac is not None:
+                devs = [d for d in devs if _norm_mac(d.mac) == _norm_mac(mac)] or devs
+            if name is not None:
+                devs = [d for d in devs if d.device_name == name] or devs
         if not devs:
             what = f" named/at {target!r}" if target else ""
             raise NoDeviceError(
