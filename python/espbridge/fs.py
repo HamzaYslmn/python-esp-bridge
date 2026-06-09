@@ -163,6 +163,8 @@ class Volume:
         """Unmount this filesystem; the Volume must not be used afterward."""
         self._b.request(C.FS_UMOUNT, bytes([self._id]))
 
+    end = umount  # Arduino-style alias
+
 
 class Fs:
     """Filesystem access on the ESP32 — reached as ``esp.fs``.
@@ -190,3 +192,5 @@ class Fs:
         r = self._b.request(C.FS_MOUNT, payload, timeout=10.0)  # SD init is slow
         total, used = struct.unpack(">II", r)
         return Volume(self._b, fs_id, total, used)
+
+    begin = mount  # Arduino-style alias

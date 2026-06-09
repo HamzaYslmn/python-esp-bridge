@@ -482,6 +482,14 @@ class Bridge:
         self._start_reader()
         self._handshake(reset_on_open=True)
 
+    def __repr__(self) -> str:
+        info = getattr(self, "info", None)
+        if info is None:
+            return f"<{type(self).__name__} connecting>"
+        label = f" {info.name!r}" if info.name else ""
+        return (f"<{type(self).__name__} {info.chip.name}{label} "
+                f"fw{'.'.join(map(str, info.fw_version))}>")
+
     def close(self) -> None:
         """Close the link and stop the reader thread (idempotent). If the bridge
         was created with ``reset_on_exit=True``, the board is reset first. Prefer

@@ -49,3 +49,7 @@ class Spi:
     def deinit(self, host: int = 0) -> None:
         """Release the SPI host and its pins on the firmware."""
         self._b.request(C.SPI_DEINIT, bytes([host]))
+
+    # House style: begin()/end() work on every peripheral (Arduino-friendly).
+    begin = init
+    end = deinit

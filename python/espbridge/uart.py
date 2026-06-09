@@ -123,3 +123,5 @@ class Uart:
             p = UartPort(self._b, port)
             self._ports[port] = p
         return p
+
+    begin = init  # Arduino-style alias; teardown is the returned port's close()

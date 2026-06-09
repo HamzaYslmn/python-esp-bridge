@@ -44,3 +44,5 @@ class Mcpwm:
     def stop(self) -> None:
         """Stop the generator and release both pins."""
         self._b.request(C.MCPWM_STOP)
+
+    end = stop  # Arduino-style alias (begin() already exists)

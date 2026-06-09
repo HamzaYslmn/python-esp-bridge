@@ -84,6 +84,10 @@ class I2c:
         """Release the bus and its pins on the firmware."""
         self._b.request(C.I2C_DEINIT, bytes([bus]))
 
+    # House style: begin()/end() work on every peripheral (Arduino-friendly).
+    begin = init
+    end = deinit
+
 
 def init_if_pins(i2c, *, bus: int = 0, sda: int | None = None,
                  scl: int | None = None) -> None:
