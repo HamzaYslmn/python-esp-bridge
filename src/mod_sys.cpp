@@ -124,7 +124,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x03: {  // SET_BAUD
-      if (len < 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(4);
       uint32_t baud = rd32(p);
 #if BRIDGE_NATIVE_USB
       (void)baud;
@@ -161,7 +161,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 #if BRIDGE_HAS_SLEEP
     case 0x08: {  // SLEEP: mode u8 (0=deep, 1=light) | us u64 | wake_pin i8 | wake_level u8
-      if (len < 11) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(11);
       uint8_t mode = p[0];
       uint64_t us = ((uint64_t)rd32(p + 1) << 32) | rd32(p + 5);
       int8_t wpin = (int8_t)p[9];

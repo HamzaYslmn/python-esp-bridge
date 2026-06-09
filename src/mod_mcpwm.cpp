@@ -29,7 +29,7 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_MCPWM, op);
   switch (op) {
     case 0x01: {  // INIT: pin_a u8|pin_b i8 (-1 single)|freq u32|deadtime_ns u16
-      if (len < 8) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(8);
       uint32_t freq = rd32(p + 2);
       if (freq == 0 || freq > MCPWM_RES_HZ / 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       mcpwm_teardown();
@@ -96,7 +96,7 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x02: {  // DUTY: permille u16 (0..1000)
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       if (!cmp) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       uint16_t pm = rd16(p);
       if (pm > 1000) pm = 1000;

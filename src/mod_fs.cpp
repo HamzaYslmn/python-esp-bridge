@@ -79,12 +79,12 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   char path[FS_PATH_MAX];
   switch (op) {
     case 0x01: {  // MOUNT: fs|[sd_spi: cs|sck|miso|mosi|freq_mhz] -> total|used kb
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       bool ok = false;
       if (p[0] == 0) ok = LittleFS.begin(true /*format on first use*/);
 #if BRIDGE_HAS_SD
       else if (p[0] == 1) {
-        if (len < 6) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+        NEED(6);
         if (!sd_bus) sd_bus = new SPIClass(BRIDGE_SPI_HOST1);
         sd_bus->begin((int8_t)p[2], (int8_t)p[3], (int8_t)p[4], (int8_t)p[1]);
         ok = SD.begin(p[1], *sd_bus, p[5] * 1000000UL);
@@ -100,7 +100,7 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x02:  // UMOUNT: fs
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       if (p[0] == 0) LittleFS.end();
 #if BRIDGE_HAS_SD
       else if (p[0] == 1) SD.end();

@@ -145,7 +145,7 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WATCH, op);
   switch (op) {
     case 0x01: {  // ADD: id|source|arg|aux|cmp|flags|period u16|a i32|b i32
-      if (len < 16) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(16);
       uint8_t id = p[0], source = p[1], arg = p[2], aux = p[3], cmp = p[4];
       if (source > SRC_HEAP || cmp > CMP_CHANGED) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 #if !BRIDGE_HAS_TOUCH
@@ -169,7 +169,7 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x02: {  // REMOVE: id
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       Watch* w = find(p[0]);
       if (w) w->active = false;
       proto_reply_ok(seq, cmd);

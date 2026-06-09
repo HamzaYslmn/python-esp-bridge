@@ -51,7 +51,7 @@ static void cos_stop(uint8_t pin) {
 
 static void adc_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_ADC, op);
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t pin = p[0];
   switch (op) {
     case 0x01: {  // CONFIG: pin, atten
@@ -80,12 +80,12 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
   (void)p; (void)len;
   proto_reply_err(seq, cmd, ST_UNSUPPORTED);
 #else
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t pin = p[0];
   if (!dac_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
   switch (op) {
     case 0x01:  // WRITE: pin, value
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
 #if BRIDGE_DAC_COSINE
       cos_stop(pin);  // the cosine generator holds exclusive ownership of the DAC channel while active, so stop it before doing a plain write
 #endif
@@ -95,7 +95,7 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
 
     case 0x02: {  // COSINE: pin, freq u32, scale, offset i8, phase
 #if BRIDGE_DAC_COSINE
-      if (len < 8) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(8);
       cos_stop(pin);
       dacDisable(pin);
       dac_cosine_config_t cfg = {};
@@ -148,7 +148,7 @@ static void touch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len
   proto_reply_err(seq, cmd, ST_UNSUPPORTED);
 #else
   if (op != 0x01) { proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); return; }
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t buf[4];
   wr32(buf, (uint32_t)touchRead(p[0]));
   proto_reply(seq, cmd, buf, 4);

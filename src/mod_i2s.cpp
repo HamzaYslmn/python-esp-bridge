@@ -17,7 +17,7 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_I2S, op);
   switch (op) {
     case 0x01: {  // INIT: dir|bclk|ws|dout|din|rate u32|bits|stereo
-      if (len < 11) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(11);
       if (i2s_up) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       i2s_data_bit_width_t bits =
           p[9] == 8 ? I2S_DATA_BIT_WIDTH_8BIT
@@ -42,7 +42,7 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x03: {  // READ: n u16 -> pcm
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       if (!i2s_up) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       uint16_t n = rd16(p);
       if (n > MAX_PAYLOAD - 8) n = MAX_PAYLOAD - 8;

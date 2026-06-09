@@ -23,14 +23,14 @@ static uint8_t spi_rx[MAX_PAYLOAD];
 
 void spi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_SPI, op);
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t idx = p[0];
   SPIClass* spi = host_of(idx);
   if (!spi) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
   switch (op) {
     case 0x01: {  // INIT: host, sck i8, miso i8, mosi i8, freq u32, mode, msb_first
-      if (len < 10) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(10);
       if (st[idx].inited) spi->end();
       spi->begin((int8_t)p[1], (int8_t)p[2], (int8_t)p[3], -1);
       st[idx] = { true, rd32(p + 4), (uint8_t)(p[8] & 3), p[9] };
@@ -40,7 +40,7 @@ void spi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x02: {  // TRANSFER: host, cs i8 (-1 = no CS), data.. -> rx data (full-duplex)
       if (!st[idx].inited) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       int8_t cs = (int8_t)p[1];
       const uint8_t* tx = p + 2;
       uint16_t n = len - 2;

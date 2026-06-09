@@ -60,7 +60,7 @@ static uint8_t ow_read_byte(uint8_t pin) {
 
 void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_ONEWIRE, op);
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t pin = p[0];
   switch (op) {
     case 0x01: {  // RESET -> present u8
@@ -69,7 +69,7 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x02: {  // WRITE: pin|power|data..
-      if (len < 3) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(3);
       for (uint16_t i = 2; i < len; i++) ow_write_byte(pin, p[i]);
       if (p[1]) { pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); }  // hold line high (strong pull-up) for parasite-powered devices
       proto_reply_ok(seq, cmd);
@@ -83,7 +83,7 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x04: {  // TRIPLET: pin|dir -> id_bit|cmp_bit|taken (ROM search step)
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       uint8_t out[3];
       out[0] = ow_read_bit(pin);
       out[1] = ow_read_bit(pin);

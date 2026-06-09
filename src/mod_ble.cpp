@@ -132,7 +132,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
   switch (op) {
     case 0x01: {  // SCAN_START: duration_s (0=forever), active
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       scan_obj = BLEDevice::getScan();
       scan_obj->setAdvertisedDeviceCallbacks(&adv_cb, true /*want duplicates*/);
       scan_obj->setActiveScan(p[1] != 0);
@@ -179,7 +179,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x05: {  // GATTS_DEF: svc_uuid[16], n, {uuid[16], props}*n -> char ids
-      if (len < 17) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(17);
       uint8_t n = p[16];
       if (n == 0 || char_count + n > BLE_MAX_CHARS ||
           len < (uint16_t)(17 + n * 17)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
@@ -225,7 +225,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x08: {  // GATTC_CONN: addr[6], addr_type
-      if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(7);
       if (client_obj && client_obj->isConnected()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       if (!client_obj) {
         client_obj = BLEDevice::createClient();
@@ -247,7 +247,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x0A: {  // GATTC_READ: svc[16], chr[16] -> data
-      if (len < 32) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(32);
       BLERemoteCharacteristic* chr = find_remote_chr(p, p + 16);
       if (!chr) { proto_reply_err(seq, cmd, ST_IO); return; }
       String v = chr->readValue();
@@ -256,7 +256,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x0B: {  // GATTC_WRITE: svc[16], chr[16], data..
-      if (len < 32) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(32);
       BLERemoteCharacteristic* chr = find_remote_chr(p, p + 16);
       if (!chr) { proto_reply_err(seq, cmd, ST_IO); return; }
       chr->writeValue((uint8_t*)(p + 32), len - 32, true);
@@ -265,7 +265,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x0C: {  // GATTC_SUB: svc[16], chr[16], enable
-      if (len < 33) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(33);
       BLERemoteCharacteristic* chr = find_remote_chr(p, p + 16);
       if (!chr) { proto_reply_err(seq, cmd, ST_IO); return; }
       chr->registerForNotify(p[32] ? notify_cb : nullptr);

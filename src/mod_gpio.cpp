@@ -56,7 +56,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_GPIO, op);
   switch (op) {
     case 0x01: {  // SET_MODE: pin, mode
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       uint8_t pin = p[0], mode = p[1];
       if (!valid_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       switch (mode) {
@@ -74,7 +74,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x02: {  // WRITE: pin, value -> level read back
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       if (!valid_pin(p[0])) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       digitalWrite(p[0], p[1] ? HIGH : LOW);
       // Read the pin straight back so the host gets the actual resulting level,
@@ -86,7 +86,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x03: {  // READ: pin -> value
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       if (!valid_pin(p[0])) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       uint8_t v = (uint8_t)digitalRead(p[0]);
       proto_reply(seq, cmd, &v, 1);
@@ -94,7 +94,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x04: {  // WRITE_MASK: mask u64, values u64
-      if (len < 16) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(16);
       uint64_t mask = ((uint64_t)rd32(p) << 32) | rd32(p + 4);
       uint64_t vals = ((uint64_t)rd32(p + 8) << 32) | rd32(p + 12);
       for (uint8_t pin = 0; pin < SOC_GPIO_PIN_COUNT && pin < 64; pin++)
@@ -116,7 +116,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x06: {  // WATCH: pin, edge, debounce_ms u16
-      if (len < 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(4);
       uint8_t pin = p[0], edge = p[1];
       if (!valid_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       int mode = edge == 1 ? RISING : edge == 2 ? FALLING : edge == 3 ? CHANGE : -1;
@@ -129,7 +129,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x07: {  // UNWATCH: pin
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       if (!valid_pin(p[0])) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       detachInterrupt(digitalPinToInterrupt(p[0]));
       debounce_ms[p[0]] = 0;
@@ -138,7 +138,7 @@ void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x08: {  // STATUS: pin -> level u8|mode u8|pwm_freq u32|pwm_duty u32
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       uint8_t pin = p[0];
       if (!valid_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
       // Returns a full snapshot from the chip: the live pad level, the mode last

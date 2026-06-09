@@ -15,7 +15,7 @@ static TwoWire* bus_of(uint8_t idx) {
 
 void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_I2C, op);
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   TwoWire* w = bus_of(p[0]);
   if (!w) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
   uint8_t bus = p[0];
@@ -24,7 +24,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
   switch (op) {
     case 0x01: {  // INIT: bus, sda, scl, freq u32 -> wire_buf u16
-      if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(7);
       if (i2c_inited[bus]) w->end();
       // The default 128 B Wire TX buffer silently truncates larger writes.
       // setBufferSize() requires ~2× the requested size in free heap, so try
@@ -55,7 +55,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x03: {  // WRITE: bus, addr, data..
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       w->beginTransmission(p[1]);
       // write() returns the number of bytes accepted. A short return means the
       // TX buffer overflowed and the trailing bytes were silently dropped.
@@ -87,7 +87,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x04: {  // READ: bus, addr, len -> data
-      if (len < 3) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(3);
       uint8_t rlen = p[2];
       uint8_t buf[255];
       size_t got = w->requestFrom(p[1], rlen);
@@ -98,7 +98,7 @@ void i2c_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x05: {  // WRITE_READ: bus, addr, wlen, wdata[wlen], rlen -> data
-      if (len < 3) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(3);
       uint8_t addr = p[1], wlen = p[2];
       if (len < (uint16_t)(4 + wlen)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       uint8_t rlen = p[3 + wlen];

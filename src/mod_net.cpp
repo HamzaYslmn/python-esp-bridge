@@ -117,7 +117,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_NET, op);
   switch (op) {
     case 0x01: {  // TCP_CONNECT: port u16, host str -> handle
-      if (len < 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(4);
       uint16_t port = rd16(p);
       uint8_t hlen = p[2];
       if (len < (uint16_t)(3 + hlen) || hlen == 0) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
@@ -139,7 +139,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x02: {  // TCP_LISTEN: port u16 -> handle
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       int8_t i = alloc_sock();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       socks[i].server = new NetworkServer(rd16(p));
@@ -151,7 +151,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x03: {  // UDP_OPEN: local_port u16 -> handle
-      if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(2);
       int8_t i = alloc_sock();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       if (!socks[i].udp.begin(rd16(p))) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
@@ -162,7 +162,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x04: {  // SEND: handle, data.. -> sent u16 (TCP)
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       Sock* s = sock_of(p[0]);
       if (!s || s->type != SK_TCP) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       size_t sent = len > 1 ? s->tcp.write(p + 1, len - 1) : 0;
@@ -173,7 +173,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x05: {  // SEND_TO: handle, ip[4], port u16, data.. (UDP)
-      if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(7);
       Sock* s = sock_of(p[0]);
       if (!s || s->type != SK_UDP) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       IPAddress ip(p[1], p[2], p[3], p[4]);
@@ -185,7 +185,7 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x06: {  // CLOSE: handle
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       Sock* s = sock_of(p[0]);
       if (s) free_sock(s);
       proto_reply_ok(seq, cmd);  // idempotent — closing an already-closed socket is not an error

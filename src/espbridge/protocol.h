@@ -27,6 +27,11 @@ void proto_send_event(uint16_t cmd, const uint8_t* data, uint16_t len);
 void proto_log(uint8_t level, const char* msg);
 void proto_log_heap(const char* stage);  // sends a SYS_LOG event: "<stage>, N B free heap"
 
+// Argument-length guard for command handlers: reply ST_BAD_ARGS and return from
+// the handler when the payload is shorter than n bytes. Requires seq, cmd and len
+// in scope (the standard handler signature). Expands inline — no runtime cost.
+#define NEED(n) do { if (len < (n)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; } } while (0)
+
 // Block until every queued frame is on the wire (baud switch / reset).
 void proto_tx_flush();
 

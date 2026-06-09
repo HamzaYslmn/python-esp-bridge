@@ -16,7 +16,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_CAM, op);
   switch (op) {
     case 0x01: {  // INIT: 16x pin i8 | xclk_mhz | framesize | jpeg_q | fb_count
-      if (len < 20) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(20);
       if (cam_up) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       if (!psramFound()) { proto_reply_err(seq, cmd, ST_UNSUPPORTED); return; }
       const int8_t* q = (const int8_t*)p;
@@ -59,7 +59,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x03: {  // READ: offset u32|n u16 -> data
-      if (len < 6) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(6);
       if (!held) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       uint32_t off = rd32(p);
       uint16_t n = rd16(p + 4);
@@ -74,7 +74,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       proto_reply_ok(seq, cmd);
       break;
     case 0x05: {  // SET: prop u8|val i32 -> sensor_t setter
-      if (len < 5) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(5);
       sensor_t* s = cam_up ? esp_camera_sensor_get() : nullptr;
       if (!s) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       int v = (int32_t)rd32(p + 1);

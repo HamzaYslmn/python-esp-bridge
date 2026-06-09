@@ -28,14 +28,14 @@ void uart_poll() {
 
 void uart_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_UART, op);
-  if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(1);
   uint8_t idx = p[0];
   HardwareSerial* u = port_of(idx);
   if (!u) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
   switch (op) {
     case 0x01: {  // INIT: port, tx i8, rx i8, baud u32
-      if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(7);
       if (uart_inited[idx]) u->end();
       u->setRxBufferSize(1024);
       u->begin(rd32(p + 3), SERIAL_8N1, (int8_t)p[2], (int8_t)p[1]);  // arduino-esp32 begin() order: baud, config, rx_pin, tx_pin

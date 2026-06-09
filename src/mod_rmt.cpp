@@ -110,7 +110,7 @@ static void handle_tx(RmtChan* c, uint8_t seq, uint16_t cmd,
 #define RMT_STAGE_WORDS 256
 static void handle_tx_bytes(RmtChan* c, uint8_t seq, uint16_t cmd,
                             const uint8_t* p, uint16_t len) {
-  if (len < 9) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(9);
   rmt_data_t w0 = bit_word(rd32(p)), w1 = bit_word(rd32(p + 4));
   const uint8_t* data = p + 8;
   uint32_t nbits = (uint32_t)(len - 8) * 8;
@@ -149,7 +149,7 @@ static void handle_tx_bytes(RmtChan* c, uint8_t seq, uint16_t cmd,
 // Replies with the captured symbols, or an empty payload if nothing was received.
 static void handle_recv(RmtChan* c, uint8_t seq, uint16_t cmd,
                         const uint8_t* p, uint16_t len) {
-  if (len < 13) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(13);
   uint16_t idle = rd16(p + 1), timeout = rd16(p + 3), max_syms = rd16(p + 5);
   uint8_t trig_pin = p[7], trig_level = p[8];
   uint32_t trig_us = rd32(p + 9);
@@ -249,7 +249,7 @@ void rmt_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     case 0x07: handle_recv(c, seq, cmd, p, len); break;  // RECV
     case 0x08:  // CARRIER: pin|freq u32|duty_pct u8|enable u8
-      if (len < 7) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(7);
       if (!rmtSetCarrier(c->pin, p[6], true, rd32(p + 1), p[5] / 100.0f))
         { proto_reply_err(seq, cmd, ST_IO); return; }
       proto_reply_ok(seq, cmd);

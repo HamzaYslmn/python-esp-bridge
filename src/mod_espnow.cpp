@@ -82,7 +82,7 @@ static uint8_t map_err(esp_err_t e) {
 
 // INIT: channel u8 (0 = auto/inherit) | flags u8 (bit0 = 802.11 LR long range)
 static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
-  if (len < 2) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+  NEED(2);
   uint8_t channel = p[0], flags = p[1];
 
   // ESP-NOW requires the Wi-Fi driver to be running, even if not associated.

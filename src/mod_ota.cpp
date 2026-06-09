@@ -16,7 +16,7 @@ void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_OTA, op);
   switch (op) {
     case 0x01: {  // BEGIN: size u32 (0xFFFFFFFF = unknown)
-      if (len < 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(4);
       if (esp_ota_get_next_update_partition(nullptr) == nullptr) {
         proto_reply_err(seq, cmd, ST_UNSUPPORTED);  // no OTA slot in the table
         return;
@@ -47,7 +47,7 @@ void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
     case 0x03: {  // END: commit u8 (1 = reboot into the new firmware)
-      if (len < 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      NEED(1);
       if (!Update.end(true)) {
         proto_log(2, Update.errorString());
         proto_reply_err(seq, cmd, ST_IO);
