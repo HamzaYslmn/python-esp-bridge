@@ -25,6 +25,18 @@ _UNSET = object()
 
 
 class TcpSocket:
+    """A TCP connection proxied through the ESP32 — stdlib socket-like.
+
+    Obtained from ``esp.net.tcp_connect()`` or ``TcpServer.accept()``.
+
+        >>> sock = esp.net.tcp_connect("example.com", 80)
+        >>> sock.send(b"GET / HTTP/1.0\\r\\n\\r\\n")
+        >>> data = sock.recv()          # b'' on peer close
+        >>> sock.close()
+
+    Usable as a context manager (closes on exit).
+    """
+
     def __init__(self, net: "Net", handle: int, peer: tuple[str, int] | None = None):
         self._net = net
         self._b = net._b
@@ -40,6 +52,7 @@ class TcpSocket:
         self._timeout = timeout
 
     def gettimeout(self) -> float | None:
+        """Current default recv() timeout in seconds (None = blocking)."""
         return self._timeout
 
     # Called from the reader thread to append incoming data and wake any
@@ -56,6 +69,7 @@ class TcpSocket:
 
     @property
     def connected(self) -> bool:
+        """True until the socket is closed locally or by the remote peer."""
         return self._open
 
     def recv(self, maxbytes: int = 65536, timeout: float | None = _UNSET) -> bytes:
@@ -81,6 +95,7 @@ class TcpSocket:
         return data
 
     def recv_exactly(self, n: int, timeout: float | None = None) -> bytes:
+        """Read exactly `n` bytes; raises BridgeError if the peer closes first."""
         out = bytearray()
         while len(out) < n:
             chunk = self.recv(n - len(out), timeout)
@@ -105,6 +120,7 @@ class TcpSocket:
     sendall = send
 
     def close(self) -> None:
+        """Close the connection and release its handle (idempotent)."""
         if self._open:
             self._open = False
             try:
@@ -121,6 +137,16 @@ class TcpSocket:
 
 
 class TcpServer:
+    """A listening TCP socket on the ESP32 — returned by ``esp.net.tcp_listen()``.
+
+        >>> srv = esp.net.tcp_listen(8080)
+        >>> conn = srv.accept()             # blocks for an incoming TcpSocket
+        >>> conn.send(conn.recv())          # echo one chunk
+        >>> conn.close(); srv.close()
+
+    Usable as a context manager (closes on exit).
+    """
+
     def __init__(self, net: "Net", handle: int, port: int):
         self._net = net
         self.handle = handle
@@ -128,12 +154,18 @@ class TcpServer:
         self._accepted: queue.Queue[TcpSocket] = queue.Queue()
 
     def accept(self, timeout: float | None = None) -> TcpSocket:
+        """Wait for and return the next incoming TcpSocket.
+
+        Blocks up to `timeout` seconds (None = forever); raises
+        BridgeTimeoutError if none arrives in time.
+        """
         try:
             return self._accepted.get(timeout=timeout)
         except queue.Empty:
             raise BridgeTimeoutError("no incoming connection") from None
 
     def close(self) -> None:
+        """Stop listening and release the server handle."""
         try:
             self._net._b.request(C.NET_CLOSE, bytes([self.handle]))
         except BridgeError:
@@ -148,6 +180,17 @@ class TcpServer:
 
 
 class UdpSocket:
+    """A UDP socket proxied through the ESP32 — returned by ``esp.net.udp()``.
+
+        >>> sock = esp.net.udp(5000)                 # bind local port 5000
+        >>> sock.sendto(b"ping", ("192.168.1.50", 9))
+        >>> data, addr = sock.recvfrom(timeout=2.0)
+        >>> sock.close()
+
+    Usable as a context manager (closes on exit). Datagrams are dropped
+    silently if the receive queue fills up (connectionless semantics).
+    """
+
     def __init__(self, net: "Net", handle: int, local_port: int):
         self._net = net
         self._b = net._b
@@ -157,9 +200,11 @@ class UdpSocket:
         self._packets: queue.Queue[tuple[bytes, tuple[str, int]]] = queue.Queue(maxsize=256)
 
     def settimeout(self, timeout: float | None) -> None:
+        """Default timeout for recvfrom() in seconds (None = blocking)."""
         self._timeout = timeout
 
     def gettimeout(self) -> float | None:
+        """Current default recvfrom() timeout in seconds (None = blocking)."""
         return self._timeout
 
     def _feed(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -169,6 +214,7 @@ class UdpSocket:
             pass  # UDP is connectionless: silently drop when the queue is full
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Send one datagram to (ip, port); raises ValueError if too large."""
         ip = bytes(int(x) for x in addr[0].split("."))
         if len(data) > C.MAX_PAYLOAD - 7:
             raise ValueError(f"datagram too large (> {C.MAX_PAYLOAD - 7})")
@@ -176,6 +222,11 @@ class UdpSocket:
                         bytes([self.handle]) + ip + struct.pack(">H", addr[1]) + bytes(data))
 
     def recvfrom(self, timeout: float | None = _UNSET) -> tuple[bytes, tuple[str, int]]:
+        """Receive one datagram, returning (data, (ip, port)).
+
+        Blocks up to `timeout` seconds (default: the settimeout() value);
+        raises BridgeTimeoutError if nothing arrives.
+        """
         if timeout is _UNSET:
             timeout = self._timeout
         try:
@@ -184,6 +235,7 @@ class UdpSocket:
             raise BridgeTimeoutError("no datagram received") from None
 
     def close(self) -> None:
+        """Close the UDP socket and release its handle."""
         try:
             self._b.request(C.NET_CLOSE, bytes([self.handle]))
         except BridgeError:
@@ -198,6 +250,16 @@ class UdpSocket:
 
 
 class Net:
+    """TCP/UDP networking through the ESP32's radio — reached as ``esp.net``.
+
+    Requires the board to be on a network (e.g. ``esp.wifi.connect(...)``).
+
+        >>> with esp.net.tcp_connect("example.com", 80) as s:
+        ...     s.send(b"GET / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n")
+        ...     reply = s.recv()
+        >>> status, body = esp.net.http_get("http://example.com/")
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._sockets: dict[int, object] = {}
@@ -251,12 +313,14 @@ class Net:
         return sock
 
     def tcp_listen(self, port: int) -> TcpServer:
+        """Listen for TCP connections on `port`; returns a TcpServer."""
         r = self._b.request(C.NET_TCP_LISTEN, struct.pack(">H", port))
         srv = TcpServer(self, r[0], port)
         self._sockets[r[0]] = srv
         return srv
 
     def udp(self, local_port: int = 0) -> UdpSocket:
+        """Open a UDP socket; bind `local_port` (0 = ephemeral). Returns a UdpSocket."""
         r = self._b.request(C.NET_UDP_OPEN, struct.pack(">H", local_port))
         sock = UdpSocket(self, r[0], local_port)
         self._sockets[r[0]] = sock

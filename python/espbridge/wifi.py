@@ -18,6 +18,8 @@ AUTH_MODES = {0: "open", 1: "wep", 2: "wpa_psk", 3: "wpa2_psk", 4: "wpa_wpa2_psk
 
 @dataclass(frozen=True)
 class Network:
+    """One access point found by scan() (SSID, signal, BSSID, channel, auth mode)."""
+
     ssid: str
     rssi: int
     bssid: str
@@ -27,6 +29,8 @@ class Network:
 
 @dataclass(frozen=True)
 class WifiStatus:
+    """Snapshot of the STA interface (status code, IP config, RSSI, channel, MAC)."""
+
     status: int
     ip: str
     gateway: str
@@ -37,10 +41,26 @@ class WifiStatus:
 
     @property
     def connected(self) -> bool:
+        """True when the STA is associated with an access point."""
         return self.status == WL_CONNECTED
 
 
 class Wifi:
+    """Wi-Fi station/AP control: scan, join, status, host an access point.
+
+    Reached as ``esp.wifi`` where ``esp = espbridge.connect()``.
+
+        >>> esp = espbridge.connect()
+        >>> for net in esp.wifi.scan():
+        ...     print(net.ssid, net.rssi, net.auth)
+        >>> st = esp.wifi.connect("ssid", "password")
+        >>> st.ip
+        '192.168.1.42'
+        >>> esp.wifi.status().connected
+        True
+        >>> esp.wifi.disconnect()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._scan_results: list[Network] = []
@@ -80,6 +100,7 @@ class Wifi:
     # ---- commands — all block until the firmware responds --------------------
 
     def scan(self, timeout: float = 15.0) -> list[Network]:
+        """Scan for access points; returns Networks sorted by signal (strongest first)."""
         self._scan_results = []
         self._scan_done.clear()
         self._b.request(C.WIFI_SCAN)
@@ -89,6 +110,7 @@ class Wifi:
 
     def connect(self, ssid: str, password: str = "", *, wait: bool = True,
                 timeout: float = 20.0) -> WifiStatus:
+        """Join an access point. wait=True blocks until an IP is obtained or `timeout`."""
         self._b.request(C.WIFI_CONNECT, lp(ssid) + lp(password))
         if not wait:
             return self.status()
@@ -101,9 +123,11 @@ class Wifi:
         raise BridgeTimeoutError(f"could not join {ssid!r} within {timeout}s")
 
     def disconnect(self) -> None:
+        """Disconnect from the current access point."""
         self._b.request(C.WIFI_DISCONNECT)
 
     def status(self) -> WifiStatus:
+        """Return the current STA status (connection state, IP config, RSSI, MAC)."""
         p = self._b.request(C.WIFI_STATUS)
         return WifiStatus(
             status=p[0],
@@ -122,7 +146,9 @@ class Wifi:
         return _ip(self._b.request(C.WIFI_AP_START, payload, timeout=5.0))
 
     def ap_stop(self) -> None:
+        """Stop the access point started by ap_start()."""
         self._b.request(C.WIFI_AP_STOP)
 
     def hostname(self, name: str) -> None:
+        """Set the DHCP hostname used on the network (call before connect())."""
         self._b.request(C.WIFI_HOSTNAME, lp(name))

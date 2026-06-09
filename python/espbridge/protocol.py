@@ -84,6 +84,7 @@ def cobs_decode(data) -> bytes:
 
 @dataclass(frozen=True)
 class Frame:
+    """A decoded logical frame: flags, seq, cmd (u16), and payload bytes."""
     flags: int
     seq: int
     cmd: int
@@ -91,10 +92,12 @@ class Frame:
 
     @property
     def is_event(self) -> bool:
+        """True if this is an unsolicited event frame (FLAG_EVENT set)."""
         return bool(self.flags & FLAG_EVENT)
 
     @property
     def is_error(self) -> bool:
+        """True if this frame reports a remote error (FLAG_ERROR set)."""
         return bool(self.flags & FLAG_ERROR)
 
 
@@ -165,6 +168,8 @@ class FrameSplitter:
         self._pos = 0  # index of the first unconsumed byte — avoids an O(n) left-shift after every frame
 
     def feed(self, data: bytes) -> list[bytes]:
+        """Add raw bytes; return the list of complete COBS chunks now available
+        (the data between 0x00 delimiters), buffering any partial tail."""
         chunks: list[bytes] = []
         buf = self._buf
         buf += data
@@ -183,5 +188,6 @@ class FrameSplitter:
         return chunks
 
     def reset(self) -> None:
+        """Discard any buffered partial frame (e.g. after a reconnect)."""
         self._buf.clear()
         self._pos = 0

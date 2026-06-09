@@ -23,6 +23,8 @@ _MODES = {"normal": 0, "listen": 1, "no_ack": 2}
 
 @dataclass
 class Message:
+    """One CAN frame: arbitration id, up to 8 data bytes, extended (29-bit)
+    and rtr (remote-transmission-request) flags."""
     id: int
     data: bytes = b""
     extended: bool = False
@@ -33,6 +35,16 @@ class Message:
 
 
 class Can:
+    """CAN/TWAI bus controller (reached via ``esp.can``).
+
+        esp = espbridge.connect()
+        esp.can.begin(tx=21, rx=22, bitrate=500_000)
+        esp.can.send(0x123, b"\\x01\\x02")
+        msg = esp.can.recv(timeout=1.0)
+        print(esp.can.status())
+        esp.can.end()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.TWAI, "CAN/TWAI")
@@ -91,6 +103,8 @@ class Can:
         self._callbacks.append(callback)
 
     def status(self) -> dict:
+        """Controller snapshot: state (stopped/running/recovering/bus_off),
+        tx_errors, rx_errors, rx_missed (frames dropped by the firmware)."""
         r = self._b.request(C.TWAI_STATUS)
         state, tx_err, rx_err = r[0], r[1], r[2]
         return {"state": ("stopped", "running", "recovering", "bus_off")[state],  # matches TWAI_STATE_* enum order
@@ -102,4 +116,5 @@ class Can:
         self._b.request(C.TWAI_RECOVER)
 
     def end(self) -> None:
+        """Stop the controller and release the TX/RX pins."""
         self._b.request(C.TWAI_DEINIT)

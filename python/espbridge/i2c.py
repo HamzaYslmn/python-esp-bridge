@@ -7,6 +7,14 @@ from . import constants as C
 
 
 class I2c:
+    """I2C master on bus 0 or 1.
+
+        esp.i2c.init(sda=21, scl=22)
+        esp.i2c.scan()                       # [0x3c, 0x68]
+        esp.i2c.write_reg(0x68, 0x6b, 0x00)  # wake an MPU-6050
+        esp.i2c.read_reg(0x68, 0x75)         # WHO_AM_I -> b'\\x68'
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._max_write: int | None = None
@@ -26,6 +34,7 @@ class I2c:
         return C.MAX_PAYLOAD - 2  # 2 bytes of header (bus index + device address) come before the data
 
     def init(self, *, sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> None:
+        """Configure a bus's pins and clock; call once before any transfer."""
         r = self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
         if len(r) >= 2:  # firmware >= 0.3.0 replies with the Wire TX buffer size as a u16
             self._max_write = struct.unpack(">H", r[:2])[0] - 2
@@ -50,6 +59,7 @@ class I2c:
             self._b.send(C.I2C_WRITE, payload)
 
     def read(self, addr: int, n: int, bus: int = 0) -> bytes:
+        """Read n bytes (1..255) straight from a device."""
         if not 1 <= n <= 255:
             raise ValueError("read length must be 1..255")
         return self._b.request(C.I2C_READ, bytes([bus, addr, n]))
@@ -62,11 +72,14 @@ class I2c:
         return self._b.request(C.I2C_WRITE_READ, payload)
 
     def read_reg(self, addr: int, reg: int, n: int = 1, bus: int = 0) -> bytes:
+        """Read n bytes starting at register `reg` (write reg, repeated start)."""
         return self.write_read(addr, bytes([reg]), n, bus)
 
     def write_reg(self, addr: int, reg: int, data: bytes | int, bus: int = 0) -> None:
+        """Write register `reg` with `data` (a single byte int, or bytes)."""
         data = bytes([data]) if isinstance(data, int) else bytes(data)
         self.write(addr, bytes([reg]) + data, bus)
 
     def deinit(self, bus: int = 0) -> None:
+        """Release the bus and its pins on the firmware."""
         self._b.request(C.I2C_DEINIT, bytes([bus]))

@@ -19,6 +19,13 @@ from .errors import RemoteError, UnsupportedError
 
 
 class Ota:
+    """Over-the-air firmware updates over the protocol link.
+
+        esp.ota.flash("Bridge.ino.bin",
+                      progress=lambda done, total: print(f"{done}/{total}"))
+        esp.ota.abort()   # cancel an in-progress flash
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.OTA, "OTA")
@@ -54,4 +61,5 @@ class Ota:
         return written
 
     def abort(self) -> None:
+        """Cancel an in-progress OTA update and discard the partial image."""
         self._b.request(C.OTA_ABORT)

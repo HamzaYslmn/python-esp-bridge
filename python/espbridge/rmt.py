@@ -14,6 +14,7 @@ Symbol = tuple[int, int]  # (level 0/1, duration ticks)
 
 
 def pack_symbols(symbols: list[Symbol]) -> bytes:
+    """Encode (level, ticks) symbols to the wire format (one u16 each)."""
     out = bytearray()
     for level, ticks in symbols:
         if not 0 < ticks <= 0x7FFF:
@@ -23,6 +24,7 @@ def pack_symbols(symbols: list[Symbol]) -> bytes:
 
 
 def unpack_symbols(data: bytes) -> list[Symbol]:
+    """Decode packed wire bytes back to a list of (level, ticks) symbols."""
     return [((s >> 15) & 1, s & 0x7FFF)
             for (s,) in struct.iter_unpack(">H", data)]
 
@@ -35,6 +37,14 @@ def _bit_sym(pair: tuple[Symbol, Symbol]) -> int:
 
 
 class Rmt:
+    """RMT pulse-train transmit/capture (reached via ``esp.rmt``).
+
+        esp = espbridge.connect()
+        esp.rmt.init_tx(pin=18, tick_hz=1_000_000)   # 1 tick = 1 us
+        esp.rmt.tx(18, [(1, 10), (0, 20), (1, 10)])  # high/low/high pulses
+        esp.rmt.deinit(18)
+    """
+
     TX, RX = 0, 1
 
     def __init__(self, bridge):
@@ -53,6 +63,7 @@ class Rmt:
         self._tick_hz[pin] = tick_hz
 
     def deinit(self, pin: int) -> None:
+        """Release `pin` and forget its tick base."""
         self._b.request(C.RMT_DEINIT, bytes([pin]))
         self._tick_hz.pop(pin, None)
 
@@ -85,6 +96,7 @@ class Rmt:
         self._b.request(C.RMT_TX_LOOP, bytes([pin]) + pack_symbols(symbols))
 
     def tx_stop(self, pin: int) -> None:
+        """Stop a looping transmit started with tx_loop()."""
         self._b.request(C.RMT_TX_STOP, bytes([pin]))
 
     def recv(self, pin: int, *, idle_ticks: int, timeout_ms: int = 1000,

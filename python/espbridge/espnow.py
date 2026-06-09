@@ -23,6 +23,16 @@ BROADCAST = "ff:ff:ff:ff:ff:ff"
 
 
 class EspNow:
+    """Connectionless ESP-NOW peer/broadcast messaging, reached as ``esp.espnow``.
+
+        >>> esp = espbridge.connect()
+        >>> esp.espnow.begin()                          # returns this board's MAC
+        >>> esp.espnow.add_peer("a0:b1:c2:d3:e4:f5")
+        >>> esp.espnow.send("a0:b1:c2:d3:e4:f5", b"hi")  # True when the peer ACKs
+        >>> esp.espnow.broadcast(b"hello everyone")
+        >>> esp.espnow.on_receive(lambda mac, data, rssi: print(mac, data, rssi))
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._rx_callbacks: list = []
@@ -119,6 +129,7 @@ class EspNow:
         self._b.request(C.ESPNOW_ADD_PEER, payload)
 
     def remove_peer(self, mac: str | bytes) -> None:
+        """Unregister a peer previously added with add_peer()."""
         self._b.request(C.ESPNOW_DEL_PEER, mac_to_bytes(mac))
 
     def send(self, mac: str | bytes, data: bytes, *, wait: bool = True) -> bool:

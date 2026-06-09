@@ -47,6 +47,7 @@ import functools
 from . import constants as C
 from .bridge import Bridge
 from .gpio import EdgeEvent
+from .watch import WatchEvent
 
 
 def _to_coro(fn):
@@ -117,6 +118,8 @@ class _EventStream:
         return await self._queue.get()
 
     async def aclose(self) -> None:
+        """Stop the stream and unregister it from the bridge (call when done, or
+        just break out of the ``async for`` and let it be garbage-collected)."""
         self._bridge.off_event(self._cmd, self._on_event)
 
 
@@ -158,6 +161,9 @@ class AsyncBridge:
 
     @property
     def bridge(self) -> Bridge:
+        """The underlying synchronous :class:`Bridge` (for events, ``on_event``,
+        device drivers, or any method not surfaced here). Raises if not yet
+        connected."""
         if self._bridge is None:
             raise RuntimeError(
                 "AsyncBridge is not connected — use `async with AsyncBridge(...)` "
@@ -166,12 +172,16 @@ class AsyncBridge:
         return self._bridge
 
     async def connect(self) -> "AsyncBridge":
+        """Open the link off the event loop (Bridge() blocks while connecting).
+        Usually you don't call this directly — use ``async with AsyncBridge():``."""
         if self._bridge is None:
             self._bridge = await asyncio.to_thread(
                 Bridge, *self._args, **self._kwargs)
         return self
 
     async def close(self) -> None:
+        """Close the link off the event loop. No-op for a wrapper created with
+        :meth:`wrap` (whoever owns the underlying Bridge closes it)."""
         if self._bridge is not None and self._owned:
             await asyncio.to_thread(self._bridge.close)
         self._bridge = None
@@ -193,6 +203,12 @@ class AsyncBridge:
         every pin armed with ``await esp.gpio.watch(pin, ...)``."""
         return self.events(C.GPIO_EDGE_EVT, parse=EdgeEvent.parse, maxsize=maxsize)
 
+    def watch_events(self, *, maxsize: int = 0) -> _EventStream:
+        """``async for ev in esp.watch_events()`` yields :class:`WatchEvent`s
+        from every rule defined with ``await esp.watch.add(...)`` — the polled,
+        non-interrupt, threshold-based events."""
+        return self.events(C.WATCH_EVT, parse=WatchEvent.parse, maxsize=maxsize)
+
     def __getattr__(self, name):
         if name.startswith("_"):  # never proxy private/dunder lookups
             raise AttributeError(name)
@@ -205,5 +221,5 @@ class AsyncBridge:
 
     def __dir__(self):
         extra = (*Bridge._SUBAPIS, "bridge", "connect", "close",
-                 "events", "gpio_events")
+                 "events", "gpio_events", "watch_events")
         return [*super().__dir__(), *extra]

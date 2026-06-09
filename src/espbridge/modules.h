@@ -28,6 +28,8 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
+void watch_poll();  // net_task: evaluate polled watch rules -> WATCH_EVT
 
 // Generates a handler body that returns ST_UNSUPPORTED for every op.
 // Use in the #else branch of a chip-capability guard so that all declared
@@ -49,6 +51,23 @@ void wifi_poll();
 void net_poll();
 
 bool wifi_is_active();    // used by ADC2-conflict guard
+
+// True if `pin` is an ADC2 channel — ADC2 shares hardware with the Wi-Fi radio,
+// so reads on these pins fail/return garbage while Wi-Fi is active. Shared by the
+// analog and watch modules (both sample the ADC).
+static inline bool pin_is_adc2(uint8_t pin) {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  switch (pin) {
+    case 0: case 2: case 4: case 12: case 13: case 14: case 15:
+    case 25: case 26: case 27: return true;
+    default: return false;
+  }
+#elif defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)
+  return pin >= 11 && pin <= 20;
+#else
+  return false;  // C3/C6: ADC2 unusable/absent; analogRead maps to ADC1
+#endif
+}
 bool espnow_is_active();  // keeps mod_wifi from dropping to WIFI_MODE_NULL
 
 // Fills out[] with the SYS_INFO payload and returns the byte count written.

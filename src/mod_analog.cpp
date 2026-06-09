@@ -15,20 +15,7 @@
 #include <esp32-hal-touch.h>
 #endif
 
-// ADC2 shares hardware with the Wi-Fi radio on these chips.
-static bool pin_is_adc2(uint8_t pin) {
-#if defined(CONFIG_IDF_TARGET_ESP32)
-  switch (pin) {
-    case 0: case 2: case 4: case 12: case 13: case 14: case 15:
-    case 25: case 26: case 27: return true;
-    default: return false;
-  }
-#elif defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)
-  return pin >= 11 && pin <= 20;
-#else
-  return false;  // C3/C6: ADC2 unusable/absent; analogRead maps to ADC1
-#endif
-}
+// pin_is_adc2() — the ADC2/Wi-Fi conflict check — is shared via modules.h.
 
 #if BRIDGE_HAS_DAC
 static bool dac_pin(uint8_t pin) {

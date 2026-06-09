@@ -5,8 +5,8 @@
 
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 4
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_MINOR 5
+#define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -97,6 +97,7 @@ enum ChipModel : uint8_t {
 #define MOD_NVS   0x71
 #define MOD_OTA   0x72
 #define MOD_CAM   0x73
+#define MOD_WATCH 0x74
 
 #define CMD(mod, op) ((uint16_t)(((mod) << 8) | (op)))
 
@@ -354,3 +355,25 @@ enum ChipModel : uint8_t {
 #define CAM_RELEASE     CMD(MOD_CAM, 0x04) // return the held frame buffer
 #define CAM_SET         CMD(MOD_CAM, 0x05) // prop u8|val i32 (sensor_t setter id; ids defined host-side)
 #define CAM_DEINIT      CMD(MOD_CAM, 0x06)
+
+// WATCH — on-device, POLLED (not interrupt-driven) user-definable event engine.
+// The host defines a rule; the firmware samples a source every period_ms on a
+// background task, compares against thresholds, and emits WATCH_EVT only when
+// the rule's state changes. The board pushes events instead of the host polling
+// thousands of times — and nothing runs in an ISR, so the main loop is never
+// interrupted.
+//   source u8: 0 ADC raw (0..4095) | 1 ADC mV | 2 GPIO level (0/1) |
+//              3 touch | 4 free-heap (bytes)
+//   arg u8:    pin for ADC/GPIO/touch; ignored for heap
+//   aux u8:    ADC attenuation (0..3) for ADC sources; else ignored
+//   cmp u8:    0 above | 1 below | 2 inside | 3 outside | 4 changed
+//     above:   active when v>=a, releases when v<=b   (set b==a for no hysteresis)
+//     below:   active when v<=a, releases when v>=b
+//     inside:  active when a<=v<=b ;  outside: active when v<a || v>b
+//     changed: emit whenever |v - last_emitted| >= a   (a = delta; b unused)
+//   flags u8:  bit0 emit on enter | bit1 emit on exit | bit2 emit first sample
+#define WATCH_ADD       CMD(MOD_WATCH, 0x01) // id u8|source u8|arg u8|aux u8|cmp u8|flags u8|period_ms u16|a i32|b i32
+#define WATCH_REMOVE    CMD(MOD_WATCH, 0x02) // id u8
+#define WATCH_CLEAR     CMD(MOD_WATCH, 0x03) // (remove every rule)
+#define WATCH_LIST      CMD(MOD_WATCH, 0x04) // -> n u8|{id u8|state u8|value i32}*n
+#define WATCH_EVT       CMD(MOD_WATCH, 0x80) // id u8|state u8 (1 active/changed,0 inactive)|value i32|millis u32

@@ -41,6 +41,9 @@ class FakeFirmware:
         self.gpio_levels: dict[int, int] = {}
         self.watching: dict[int, tuple[int, int]] = {}
 
+        self.watches: dict[int, dict] = {}  # id -> watch rule (WATCH_ADD)
+        self.watch_supported = True         # set False to simulate pre-0.5.0 firmware
+
         self.wifi_connected = False
         self.wifi_ssid: str | None = None
 
@@ -659,6 +662,27 @@ class FakeFirmware:
         elif cmd == C.CAM_DEINIT:
             self.cam_config = None
             self._reply(seq, cmd)
+
+        # ---- WATCH (polled event engine) ----
+        elif cmd == C.WATCH_ADD:
+            if not self.watch_supported:
+                self._reply_err(seq, cmd, C.Status.UNKNOWN_CMD)
+                return
+            wid, src, arg, aux, cmpv, flags, period, a, b = struct.unpack(">BBBBBBHii", p)
+            self.watches[wid] = dict(source=src, arg=arg, aux=aux, cmp=cmpv,
+                                     flags=flags, period_ms=period, a=a, b=b)
+            self._reply(seq, cmd)
+        elif cmd == C.WATCH_REMOVE:
+            self.watches.pop(p[0], None)
+            self._reply(seq, cmd)
+        elif cmd == C.WATCH_CLEAR:
+            self.watches.clear()
+            self._reply(seq, cmd)
+        elif cmd == C.WATCH_LIST:
+            out = bytes([len(self.watches)])
+            for wid in self.watches:
+                out += bytes([wid, 0]) + struct.pack(">i", 0)
+            self._reply(seq, cmd, out)
 
         # ---- OTA ----
         elif cmd == C.OTA_BEGIN:

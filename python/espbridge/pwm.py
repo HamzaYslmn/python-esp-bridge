@@ -7,11 +7,19 @@ from . import constants as C
 
 
 class Pwm:
+    """PWM output via the LEDC peripheral, plus servo/tone helpers.
+
+        esp.pwm.attach(2, freq=1000)
+        esp.pwm.duty_pct(2, 50)        # 50% duty
+        esp.pwm.detach(2)
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._attached: dict[int, tuple[int, int]] = {}  # pin -> (freq_hz, resolution_bits)
 
     def attach(self, pin: int, freq: int = 1000, resolution_bits: int = 10) -> None:
+        """Start a PWM channel on a pin at `freq` Hz with the given duty resolution."""
         self._b.request(C.PWM_ATTACH, struct.pack(">BIB", pin, freq, resolution_bits))
         self._attached[pin] = (freq, resolution_bits)
 
@@ -20,12 +28,14 @@ class Pwm:
         self._b.request(C.PWM_WRITE, struct.pack(">BI", pin, duty))
 
     def duty_pct(self, pin: int, percent: float) -> None:
+        """Set duty cycle as a percentage (0..100); auto-attaches the pin if needed."""
         if pin not in self._attached:
             self.attach(pin)
         _, res = self._attached[pin]
         self.write(pin, round((2**res - 1) * max(0.0, min(100.0, percent)) / 100.0))
 
     def detach(self, pin: int) -> None:
+        """Stop PWM on a pin and free its LEDC channel."""
         self._b.request(C.PWM_DETACH, bytes([pin]))
         self._attached.pop(pin, None)
 

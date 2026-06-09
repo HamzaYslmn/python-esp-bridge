@@ -24,6 +24,8 @@ def to_uuid128(value: int | str | _uuid.UUID) -> bytes:
 
 @dataclass(frozen=True)
 class Advertisement:
+    """A single BLE advertisement seen during a scan (address, RSSI, raw AD payload)."""
+
     addr: str
     addr_type: int
     rssi: int
@@ -54,9 +56,11 @@ class Characteristic:
         self.on_write = None  # callback(bytes)
 
     def set(self, data: bytes) -> None:
+        """Update the stored value clients will get on the next read."""
         self._ble._b.request(C.BLE_GATTS_SET, bytes([self.char_id]) + bytes(data))
 
     def notify(self, data: bytes) -> None:
+        """Push `data` to subscribed clients as a notification (requires Ble.NOTIFY)."""
         self._ble._b.request(C.BLE_GATTS_NTFY, bytes([self.char_id]) + bytes(data))
 
 
@@ -68,10 +72,12 @@ class GattClient:
         self.connected = True
 
     def read(self, service, char) -> bytes:
+        """Read a remote characteristic's value (UUIDs as int/str/UUID)."""
         return self._ble._b.request(
             C.BLE_GATTC_READ, to_uuid128(service) + to_uuid128(char), timeout=10.0)
 
     def write(self, service, char, data: bytes) -> None:
+        """Write `data` to a remote characteristic (UUIDs as int/str/UUID)."""
         self._ble._b.request(
             C.BLE_GATTC_WRITE, to_uuid128(service) + to_uuid128(char) + bytes(data),
             timeout=10.0)
@@ -84,17 +90,36 @@ class GattClient:
             timeout=10.0)
 
     def unsubscribe(self, service, char) -> None:
+        """Stop notifications from a characteristic previously passed to subscribe()."""
         self._ble._notify_callbacks.pop(to_uuid128(char), None)
         self._ble._b.request(
             C.BLE_GATTC_SUB, to_uuid128(service) + to_uuid128(char) + b"\x00",
             timeout=10.0)
 
     def disconnect(self) -> None:
+        """Drop the link to the peripheral."""
         self.connected = False
         self._ble._b.request(C.BLE_GATTC_DISC, timeout=10.0)
 
 
 class Ble:
+    """BLE scanning, advertising, GATT server and a single-link GATT client.
+
+    Reached as ``esp.ble`` where ``esp = espbridge.connect()``.
+
+        >>> esp = espbridge.connect()
+        >>> for adv in esp.ble.scan(5.0):      # central: discover nearby devices
+        ...     print(adv.addr, adv.rssi, adv.name)
+        >>> cli = esp.ble.connect("aa:bb:cc:dd:ee:ff")
+        >>> cli.read(0x180f, 0x2a19)           # battery service / level
+        >>> cli.disconnect()
+        >>>
+        >>> # peripheral: serve a characteristic and advertise
+        >>> ch, = esp.ble.serve(0x180f, [(0x2a19, Ble.READ | Ble.NOTIFY)])
+        >>> esp.ble.advertise("my-esp")
+        >>> ch.set(b"\\x64")
+    """
+
     # characteristic property flags
     READ = C.GATT_PROP_READ
     WRITE = C.GATT_PROP_WRITE
@@ -186,10 +211,12 @@ class Ble:
 
     def advertise(self, name: str = "", *, manufacturer_data: bytes = b"",
                   service_uuid16: int = 0) -> None:
+        """Start advertising so centrals can discover and connect to this board."""
         payload = lp(name) + lp(manufacturer_data) + struct.pack(">H", service_uuid16)
         self._b.request(C.BLE_ADV_START, payload, timeout=10.0)
 
     def advertise_stop(self) -> None:
+        """Stop advertising."""
         self._b.request(C.BLE_ADV_STOP, timeout=10.0)
 
     # ---- GATT server -----------------------------------------------------------------
@@ -210,6 +237,7 @@ class Ble:
         return out
 
     def wait_connect(self, timeout: float | None = None) -> bool:
+        """Block until a client connects to the GATT server; True if one did."""
         return self._server_connected.wait(timeout)
 
     # ---- GATT client ------------------------------------------------------------------

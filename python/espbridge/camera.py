@@ -41,6 +41,15 @@ _CHUNK = C.MAX_PAYLOAD - 8
 
 
 class Camera:
+    """JPEG snapshots from OV-series sensors (reached via ``esp.camera``).
+
+        esp = espbridge.connect()
+        esp.camera.begin("ai-thinker")            # ESP32-CAM board
+        jpeg = esp.camera.capture()               # bytes, ready to save
+        open("shot.jpg", "wb").write(jpeg)
+        esp.camera.end()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.CAM, "camera (BRIDGE_ENABLE_CAM=1 firmware + PSRAM)")
@@ -79,4 +88,5 @@ class Camera:
         self._b.request(C.CAM_SET, struct.pack(">Bi", _PROPS[prop], value))
 
     def end(self) -> None:
+        """Power down the sensor and free its buffers."""
         self._b.request(C.CAM_DEINIT)

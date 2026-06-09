@@ -41,6 +41,15 @@ PRESETS: dict[str, dict] = {
 
 
 class Eth:
+    """Wired Ethernet link (reached via ``esp.eth``; firmware opt-in).
+
+        esp = espbridge.connect()
+        esp.eth.begin("wt32-eth01")          # board preset
+        ip = esp.eth.wait_for_ip()           # block for DHCP lease
+        print(esp.eth.status())
+        esp.eth.end()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.ETH, "Ethernet (BRIDGE_ENABLE_ETH=1 firmware)")
@@ -84,10 +93,12 @@ class Eth:
         return self._ip or self.status()["ip"]
 
     def status(self) -> dict:
+        """Link snapshot: link (up/down), ip, gateway, netmask, mac."""
         r = self._b.request(C.ETH_STATUS)
         return {"link": bool(r[0]), "ip": _ip(r[1:5]), "gateway": _ip(r[5:9]),
                 "netmask": _ip(r[9:13]),
                 "mac": mac_to_str(r[13:19])}
 
     def end(self) -> None:
+        """Stop the Ethernet driver and drop the link."""
         self._b.request(C.ETH_STOP)

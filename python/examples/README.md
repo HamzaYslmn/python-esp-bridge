@@ -22,6 +22,7 @@ Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
 |---|---|
 | `blink.py` | GPIO output, ping latency |
 | `button_interrupt.py` | edge interrupts with debounce → Python callback |
+| `watch_threshold.py` | polled (non-ISR) on-device watch: ESP32 pushes an event when a condition trips — analog threshold **or** digital level (or touch / free-heap) — over BLE or USB, no polling |
 | `adc_dac.py` | analog read (raw + mV) and true DAC output + cosine generator |
 | `pwm_servo.py` | LEDC PWM fade + hobby servo sweep |
 | `i2c_scan.py` | I2C bus scan |

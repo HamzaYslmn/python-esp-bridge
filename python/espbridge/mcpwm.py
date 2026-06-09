@@ -14,6 +14,14 @@ from . import constants as C
 
 
 class Mcpwm:
+    """Complementary PWM pair with hardware deadtime (reached via ``esp.mcpwm``).
+
+        esp = espbridge.connect()
+        esp.mcpwm.begin(pin_a=25, pin_b=26, freq=20_000, deadtime_ns=500)
+        esp.mcpwm.duty(35.0)   # percent on pin_a; pin_b is the inverse
+        esp.mcpwm.stop()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.MCPWM, "MCPWM")
@@ -34,4 +42,5 @@ class Mcpwm:
         self._b.request(C.MCPWM_DUTY, struct.pack(">H", pm))
 
     def stop(self) -> None:
+        """Stop the generator and release both pins."""
         self._b.request(C.MCPWM_STOP)

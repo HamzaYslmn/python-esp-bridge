@@ -20,6 +20,14 @@ _CHUNK = C.MAX_PAYLOAD - 8
 
 
 class I2s:
+    """I2S audio output/input (reached via ``esp.i2s``).
+
+        esp = espbridge.connect()
+        esp.i2s.begin_output(bclk=26, ws=25, dout=22, rate=16_000)
+        esp.i2s.write(pcm_bytes)              # 16-bit LE PCM
+        esp.i2s.end()
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.I2S, "I2S")
@@ -80,4 +88,5 @@ class I2s:
         return b"".join(parts)
 
     def end(self) -> None:
+        """Stop the I2S peripheral and release its pins."""
         self._b.request(C.I2S_DEINIT)

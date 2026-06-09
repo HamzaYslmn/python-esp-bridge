@@ -228,6 +228,7 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
     case MOD_I2S:    i2s_handle(op, seq, p, len); break;
     case MOD_ETH:    eth_handle(op, seq, p, len); break;
     case MOD_CAM:    cam_handle(op, seq, p, len); break;
+    case MOD_WATCH:  watch_handle(op, seq, p, len); break;
     default:         proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); break;
   }
 }
@@ -249,6 +250,7 @@ static void net_task(void*) {
     wifi_poll();
     net_poll();
     twai_poll();
+    watch_poll();  // polled (non-ISR) user watch rules -> WATCH_EVT
   }
 }
 

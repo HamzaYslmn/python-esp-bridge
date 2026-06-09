@@ -100,6 +100,7 @@ MOD_FS = 0x70
 MOD_NVS = 0x71
 MOD_OTA = 0x72
 MOD_CAM = 0x73
+MOD_WATCH = 0x74
 
 # SYS
 SYS_PING = _cmd(MOD_SYS, 0x01)
@@ -311,6 +312,13 @@ CAM_RELEASE = _cmd(MOD_CAM, 0x04)
 CAM_SET = _cmd(MOD_CAM, 0x05)
 CAM_DEINIT = _cmd(MOD_CAM, 0x06)
 
+# WATCH — polled, user-definable on-device event rules
+WATCH_ADD = _cmd(MOD_WATCH, 0x01)
+WATCH_REMOVE = _cmd(MOD_WATCH, 0x02)
+WATCH_CLEAR = _cmd(MOD_WATCH, 0x03)
+WATCH_LIST = _cmd(MOD_WATCH, 0x04)
+WATCH_EVT = _cmd(MOD_WATCH, 0x80)
+
 # Commands that must NOT be auto-retried after a response timeout. If the
 # original request reached the firmware but only the reply was lost, re-sending
 # one of these would double-send data, advance a file/bus cursor, or re-trigger
@@ -340,7 +348,7 @@ _MOD_PREFIX = {
     MOD_I2C: "I2C_", MOD_SPI: "SPI_", MOD_UART: "UART_", MOD_ONEWIRE: "OW_",
     MOD_TWAI: "TWAI_", MOD_I2S: "I2S_", MOD_WIFI: "WIFI_", MOD_NET: "NET_",
     MOD_ESPNOW: "ESPNOW_", MOD_ETH: "ETH_", MOD_BLE: "BLE_", MOD_FS: "FS_",
-    MOD_NVS: "NVS_", MOD_OTA: "OTA_", MOD_CAM: "CAM_",
+    MOD_NVS: "NVS_", MOD_OTA: "OTA_", MOD_CAM: "CAM_", MOD_WATCH: "WATCH_",
 }
 
 _CMD_NAMES = {

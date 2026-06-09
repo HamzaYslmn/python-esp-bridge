@@ -24,6 +24,14 @@ def crc8(data: bytes) -> int:
 
 
 class OneWire:
+    """1-Wire bus master (reset/read/write + ROM search & addressing).
+
+        roms = esp.onewire.search(pin=4)   # ['28b1642f050000c7', ...]
+        esp.onewire.select(4, roms[0])
+        esp.onewire.write(4, b"\\x44", power=True)  # DS18B20 convert-T
+        data = esp.onewire.read(4, 9)               # scratchpad
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.ONEWIRE, "1-Wire")
@@ -38,6 +46,7 @@ class OneWire:
         self._b.request(C.OW_WRITE, bytes([pin, 1 if power else 0]) + data)
 
     def read(self, pin: int, n: int) -> bytes:
+        """Read n bytes from the bus (reads time slots, returns the bits)."""
         return self._b.request(C.OW_READ, bytes([pin, n]))
 
     def select(self, pin: int, rom: str | None) -> None:

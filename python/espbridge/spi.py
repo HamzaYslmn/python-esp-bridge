@@ -10,12 +10,19 @@ _CHUNK = C.MAX_PAYLOAD - 2
 
 
 class Spi:
+    """SPI master, full-duplex.
+
+        esp.spi.init(sck=18, miso=19, mosi=23, freq=1_000_000)
+        rx = esp.spi.transfer(b"\\x9f\\x00\\x00", cs=5)  # read JEDEC ID
+    """
+
     def __init__(self, bridge):
         self._b = bridge
 
     def init(self, *, sck: int = 18, miso: int = 19, mosi: int = 23,
              freq: int = 1_000_000, mode: int = 0, msb_first: bool = True,
              host: int = 0) -> None:
+        """Configure the SPI host's pins, clock and mode; call once first."""
         self._b.request(C.SPI_INIT, struct.pack(">BbbbIBB", host, sck, miso, mosi,
                                                 freq, mode, 1 if msb_first else 0))
 
@@ -40,4 +47,5 @@ class Spi:
         return bytes(rx)
 
     def deinit(self, host: int = 0) -> None:
+        """Release the SPI host and its pins on the firmware."""
         self._b.request(C.SPI_DEINIT, bytes([host]))

@@ -36,6 +36,8 @@ from .errors import (
     UnsupportedError,
 )
 from .transports import find_ports
+from .gpio import EdgeEvent
+from .watch import WatchEvent
 
 
 def find_ble_devices(timeout: float = 5.0):
@@ -54,7 +56,7 @@ def __getattr__(name):
         return AsyncBridge
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__version__ = "0.5.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "Bridge",
@@ -80,5 +82,7 @@ __all__ = [
     "RemoteError",
     "UnsupportedError",
     "find_ports",
+    "EdgeEvent",
+    "WatchEvent",
     "__version__",
 ]

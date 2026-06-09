@@ -22,6 +22,31 @@ from .errors import (
 from .protocol import Frame, FrameSplitter, decode_frame, encode_frame, mac_to_str
 from .transports import SerialTransport, find_ports
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # imported for editors / type-checkers only — no runtime cost
+    from .analog import Adc, Dac, Touch
+    from .ble import Ble
+    from .camera import Camera
+    from .can import Can
+    from .espnow import EspNow
+    from .eth import Eth
+    from .fs import Fs
+    from .gpio import Gpio
+    from .i2c import I2c
+    from .i2s import I2s
+    from .mcpwm import Mcpwm
+    from .net import Net
+    from .nvs import Nvs
+    from .onewire import OneWire
+    from .ota import Ota
+    from .pwm import Pwm
+    from .rmt import Rmt
+    from .spi import Spi
+    from .uart import Uart
+    from .watch import Watch
+    from .wifi import Wifi
+
 
 @dataclass(frozen=True)
 class Info:
@@ -37,6 +62,7 @@ class Info:
 
     @classmethod
     def parse(cls, payload: bytes) -> "Info":
+        """Decode a SYS_INFO payload into an :class:`Info` (used at handshake)."""
         if len(payload) < 18:
             raise ProtocolError(f"short SYS_INFO payload: {len(payload)} bytes")
         proto, maj, mnr, pat, model, rev = struct.unpack_from(">6B", payload)
@@ -95,7 +121,42 @@ class Bridge:
     on one thread doesn't stall fast calls on another. For a process-wide shared
     link with auto-reconnect, use :func:`espbridge.connect` / ``BridgeManager``;
     for ``await``, wrap it with :class:`espbridge.AsyncBridge`.
+
+    Peripherals hang off the bridge as sub-APIs — ``esp.gpio``, ``esp.adc``,
+    ``esp.i2c``, ``esp.watch`` and so on (see the table in ``_SUBAPIS``). They
+    are created lazily on first access; the annotations just below let editors
+    resolve them to their classes and show each method's signature and docstring.
     """
+
+    # Lazily-created sub-APIs (see __getattr__ / _SUBAPIS). Declared at type-check
+    # time only — these are NOT real class attributes (no assignment), so
+    # __getattr__ still builds them on demand — but they let an editor resolve
+    # ``esp.gpio`` -> Gpio, ``esp.watch`` -> Watch, ... and surface each method's
+    # signature and docstring instead of showing "Unknown".
+    if TYPE_CHECKING:
+        gpio: Gpio
+        adc: Adc
+        dac: Dac
+        touch: Touch
+        pwm: Pwm
+        i2c: I2c
+        spi: Spi
+        uart: Uart
+        wifi: Wifi
+        net: Net
+        ble: Ble
+        espnow: EspNow
+        rmt: Rmt
+        onewire: OneWire
+        fs: Fs
+        nvs: Nvs
+        ota: Ota
+        can: Can
+        i2s: I2s
+        eth: Eth
+        camera: Camera
+        mcpwm: Mcpwm
+        watch: Watch
 
     def __init__(
         self,
@@ -424,6 +485,9 @@ class Bridge:
         self._handshake(reset_on_open=True)
 
     def close(self) -> None:
+        """Close the link and stop the reader thread (idempotent). If the bridge
+        was created with ``reset_on_exit=True``, the board is reset first. Prefer
+        a ``with Bridge() as esp:`` block, which calls this automatically."""
         if self._closing:
             return
         self._closing = True
@@ -519,6 +583,8 @@ class Bridge:
             self._handlers.setdefault(cmd, []).append(callback)
 
     def off_event(self, cmd: int | None, callback) -> None:
+        """Unregister an event callback previously added with :meth:`on_event`
+        (no-op if it isn't registered)."""
         with self._handlers_lock:
             try:
                 self._handlers.get(cmd, []).remove(callback)
@@ -691,14 +757,22 @@ class Bridge:
 
     @property
     def caps(self) -> C.Cap:
+        """The board's capability flags (a :class:`constants.Cap` bitset), e.g.
+        ``C.Cap.DAC in esp.caps``."""
         assert self.info is not None
         return self.info.caps
 
     def require(self, cap: C.Cap, what: str) -> None:
+        """Raise :class:`UnsupportedError` if the board lacks ``cap``; ``what`` is
+        the human name used in the message. Used by sub-APIs to fail clearly on
+        chips that don't have a peripheral."""
         if self.info is not None and cap not in self.info.caps:
             raise UnsupportedError(f"{what} is not available on {self.info.chip.name}")
 
     def free_heap(self) -> dict:
+        """Heap stats from the board: ``{"free", "min_free", "largest_block",
+        "dropped_events"}`` in bytes (plus ``"link_rx_dropped"`` on fw >= 0.3.2).
+        Handy for spotting memory pressure or a leak over time."""
         v = self.request(C.SYS_FREE_HEAP)
         free, min_free, largest, dropped = struct.unpack_from(">4I", v)
         out = {"free": free, "min_free": min_free, "largest_block": largest,
@@ -785,6 +859,7 @@ class Bridge:
         "eth": ("eth", "Eth"),
         "camera": ("camera", "Camera"),
         "mcpwm": ("mcpwm", "Mcpwm"),
+        "watch": ("watch", "Watch"),
     }
 
     def __getattr__(self, name):
@@ -824,18 +899,23 @@ class BridgeSet(list):
     """A list of Bridges with convenience helpers (returned by connect_all)."""
 
     def by_name(self, name: str) -> "Bridge":
+        """Return the bridge whose persistent name matches; raise
+        :class:`NoDeviceError` if none is connected."""
         for b in self:
             if b.info is not None and b.info.name == name:
                 return b
         raise NoDeviceError(f"no connected bridge named {name!r}")
 
     def by_mac(self, mac: str) -> "Bridge":
+        """Return the bridge with this MAC (separators/case ignored); raise
+        :class:`NoDeviceError` if none is connected."""
         for b in self:
             if b.info is not None and _norm_mac(b.info.mac) == _norm_mac(mac):
                 return b
         raise NoDeviceError(f"no connected bridge with MAC {mac}")
 
     def close_all(self) -> None:
+        """Close every bridge in the set (also done by the ``with`` block exit)."""
         for b in self:
             b.close()
 

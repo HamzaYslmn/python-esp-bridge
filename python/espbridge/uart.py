@@ -30,6 +30,7 @@ class UartPort:
             cb(data)
 
     def write(self, data: bytes) -> None:
+        """Send bytes out the port (chunked into <= 1 KB requests)."""
         data = bytes(data)
         for off in range(0, len(data), _WRITE_CHUNK):
             self._b.request(C.UART_WRITE, bytes([self.port]) + data[off : off + _WRITE_CHUNK])
@@ -53,17 +54,21 @@ class UartPort:
             return len(self._buf)
 
     def reset_input_buffer(self) -> None:
+        """Discard all buffered received bytes (pyserial-compatible)."""
         with self._cond:
             self._buf.clear()
 
     def flush(self) -> None:
+        """No-op (writes are synchronous requests); for pyserial compatibility."""
         pass  # writes are synchronous requests; nothing left to flush
 
     def readline(self, timeout: float | None = None) -> bytes:
+        """Read until newline (or timeout); returns what arrived, partial included."""
         t = timeout if timeout is not None else (self.timeout or 2.0)
         return self.read_until(b"\n", t)
 
     def read_until(self, sep: bytes = b"\n", timeout: float = 2.0) -> bytes:
+        """Read until `sep` is seen; on timeout returns whatever is buffered."""
         import time
         deadline = time.monotonic() + timeout
         with self._cond:
@@ -85,10 +90,18 @@ class UartPort:
         self._callbacks.append(callback)
 
     def close(self) -> None:
+        """Tear down the port on the firmware (stops RX streaming)."""
         self._b.request(C.UART_DEINIT, bytes([self.port]))
 
 
 class Uart:
+    """Secondary UART manager; init() returns a pyserial-like UartPort.
+
+        port = esp.uart.init(port=1, tx=17, rx=16, baud=9600)
+        port.write(b"AT\\r\\n")
+        print(port.readline())
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._ports: dict[int, UartPort] = {}
@@ -103,6 +116,7 @@ class Uart:
 
     def init(self, *, port: int = 1, tx: int = 17, rx: int = 16,
              baud: int = 115_200) -> UartPort:
+        """Open/configure a secondary UART and return its UartPort."""
         self._b.request(C.UART_INIT, struct.pack(">BbbI", port, tx, rx, baud))
         p = self._ports.get(port)
         if p is None:

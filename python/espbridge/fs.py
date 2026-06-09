@@ -44,6 +44,10 @@ class RemoteFile:
         return b"".join(parts)
 
     def write(self, data: bytes) -> int:
+        """Write `data` at the current position; returns bytes written.
+
+        Raises OSError on a short write (e.g. filesystem full).
+        """
         written = 0
         for i in range(0, len(data), _CHUNK):
             chunk = data[i : i + _CHUNK]
@@ -55,9 +59,11 @@ class RemoteFile:
         return written
 
     def seek(self, pos: int) -> None:
+        """Move the read/write cursor to absolute byte offset `pos`."""
         self._b.request(C.FS_SEEK, struct.pack(">BI", self._fd, pos))
 
     def close(self) -> None:
+        """Flush and close the file handle (idempotent)."""
         if self._open:
             self._open = False
             self._b.request(C.FS_CLOSE, bytes([self._fd]))
@@ -70,7 +76,16 @@ class RemoteFile:
 
 
 class Volume:
-    """One mounted filesystem (returned by Fs.mount)."""
+    """One mounted filesystem (returned by ``esp.fs.mount``). Paths are absolute.
+
+        >>> vol = esp.fs.mount("littlefs")
+        >>> vol.write_file("/a.txt", b"hi")
+        >>> vol.read_file("/a.txt")
+        b'hi'
+        >>> for name, size, isdir in vol.list("/"):
+        ...     print(name, size, isdir)
+        >>> vol.umount()
+    """
 
     def __init__(self, bridge, fs_id: int, total_kb: int, used_kb: int):
         self._b = bridge
@@ -84,20 +99,24 @@ class Volume:
         return bytes([self._id]) + path.encode()
 
     def open(self, path: str, mode: str = "r") -> RemoteFile:
+        """Open `path` and return a RemoteFile. mode: 'r', 'w' or 'a'."""
         r = self._b.request(C.FS_OPEN,
                             bytes([self._id, _MODES[mode]]) + self._path(path)[1:])
         fd, size = struct.unpack(">BI", r)
         return RemoteFile(self._b, fd, size)
 
     def read_file(self, path: str) -> bytes:
+        """Read and return the whole file at `path`."""
         with self.open(path) as f:
             return f.read()
 
     def write_file(self, path: str, data: bytes) -> None:
+        """Write `data` to `path`, truncating any existing file."""
         with self.open(path, "w") as f:
             f.write(data)
 
     def append_file(self, path: str, data: bytes) -> None:
+        """Append `data` to `path` (creating it if needed)."""
         with self.open(path, "a") as f:
             f.write(data)
 
@@ -123,15 +142,18 @@ class Volume:
         return size, bool(isdir), mtime
 
     def remove(self, path: str) -> None:
+        """Delete the file or empty directory at `path`."""
         self._b.request(C.FS_REMOVE, self._path(path))
 
     def rename(self, src: str, dst: str) -> None:
+        """Rename/move `src` to `dst` (both absolute paths)."""
         if not (src.startswith("/") and dst.startswith("/")):
             raise ValueError("paths must be absolute ('/...')")
         self._b.request(C.FS_RENAME,
                         bytes([self._id]) + lp(src) + dst.encode())
 
     def mkdir(self, path: str) -> None:
+        """Create a directory at `path`."""
         self._b.request(C.FS_MKDIR, self._path(path))
 
     def df(self) -> tuple[int, int]:
@@ -140,10 +162,17 @@ class Volume:
         return struct.unpack(">II", r)
 
     def umount(self) -> None:
+        """Unmount this filesystem; the Volume must not be used afterward."""
         self._b.request(C.FS_UMOUNT, bytes([self._id]))
 
 
 class Fs:
+    """Filesystem access on the ESP32 — reached as ``esp.fs``.
+
+        >>> vol = esp.fs.mount("littlefs")     # or "sd"/"sdmmc"
+        >>> vol.write_file("/log.txt", b"boot ok")
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         bridge.require(C.Cap.FS, "filesystem")

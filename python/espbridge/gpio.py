@@ -51,6 +51,16 @@ class PinStatus:
 
 
 class Gpio:
+    """Digital pins: modes, read/write, batch ops, edge interrupts.
+
+        esp.gpio.mode(2, "output")
+        esp.gpio.write(2, 1)
+        esp.gpio.mode(15, "input_pullup")
+        level = esp.gpio.read(15)
+        esp.gpio.watch(15, "falling", callback=lambda ev: print(ev))
+        esp.gpio.unwatch(15)
+    """
+
     def __init__(self, bridge):
         self._b = bridge
         self._watchers: dict[int, list] = {}
@@ -64,6 +74,8 @@ class Gpio:
             cb(ev)
 
     def mode(self, pin: int, mode: str | int) -> None:
+        """Set a pin's mode: "input", "output", "input_pullup",
+        "input_pulldown", or "output_open_drain"."""
         m = MODES[mode] if isinstance(mode, str) else int(mode)
         self._b.request(C.GPIO_SET_MODE, bytes([pin, m]))
 
@@ -89,6 +101,7 @@ class Gpio:
         return level
 
     def read(self, pin: int) -> int:
+        """Current level of a pin (0 or 1)."""
         return self._b.request(C.GPIO_READ, bytes([pin]))[0]
 
     def write_many(self, values: dict[int, int | bool]) -> None:
@@ -151,5 +164,6 @@ class Gpio:
         self._b.request(C.GPIO_WATCH, struct.pack(">BBH", pin, e, debounce_ms))
 
     def unwatch(self, pin: int) -> None:
+        """Stop watching a pin and drop its callbacks."""
         self._b.request(C.GPIO_UNWATCH, bytes([pin]))
         self._watchers.pop(pin, None)

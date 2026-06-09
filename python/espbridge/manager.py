@@ -55,6 +55,7 @@ class BridgeManager:
 
     @property
     def connect_kwargs(self) -> dict:
+        """A copy of the settings used to (re)open the Bridge."""
         return dict(self._kwargs)
 
     @staticmethod
@@ -64,6 +65,7 @@ class BridgeManager:
         return b is None or not b.is_alive()
 
     def is_connected(self) -> bool:
+        """True if a live link is currently open (not None, not dropped)."""
         return not self._stale(self._bridge)
 
     def bridge(self) -> Bridge:
