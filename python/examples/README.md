@@ -26,7 +26,9 @@ Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
 | `pwm_servo.py` | LEDC PWM fade + hobby servo sweep |
 | `i2c_scan.py` | I2C bus scan |
 | `spi_transfer.py` | full-duplex SPI (flash JEDEC ID) |
-| `rtos_concurrency.py` | FreeRTOS task split: fast lane stays ~ms while radio blocks |
+| `rtos_concurrency.py` | FreeRTOS task split: fast lane stays ~ms while radio blocks (+ live OLED) |
+| `async_fanout.py` | `AsyncBridge`: `await` calls and fan out concurrent I/O with `asyncio.gather` |
+| `shared_connection.py` | `espbridge.connect()`: one shared, thread-safe link many threads use — easy integration |
 
 ## devices/ — sensors, LEDs, motors, buses (pure-Python drivers)
 

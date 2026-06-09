@@ -25,6 +25,14 @@ class EdgeEvent:
     level: int
     millis: int  # firmware uptime ms
 
+    @classmethod
+    def parse(cls, payload: bytes) -> "EdgeEvent | None":
+        """Decode a GPIO_EDGE_EVT payload (pin u8 | level u8 | millis u32);
+        None if it's too short to be a valid event."""
+        if len(payload) < 6:
+            return None
+        return cls(payload[0], payload[1], struct.unpack_from(">I", payload, 2)[0])
+
 
 @dataclass(frozen=True)
 class PinStatus:
@@ -49,9 +57,9 @@ class Gpio:
         bridge.on_event(C.GPIO_EDGE_EVT, self._on_edge)
 
     def _on_edge(self, payload: bytes) -> None:
-        if len(payload) < 6:
+        ev = EdgeEvent.parse(payload)
+        if ev is None:
             return
-        ev = EdgeEvent(payload[0], payload[1], struct.unpack_from(">I", payload, 2)[0])
         for cb in self._watchers.get(ev.pin, ()):
             cb(ev)
 

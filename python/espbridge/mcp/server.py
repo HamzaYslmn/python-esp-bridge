@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import threading
 
 from .. import __version__
-from ..bridge import Bridge
 from ..errors import BridgeError
+from ..manager import BridgeManager as _CoreBridgeManager
 from ..transports import find_ports
 from .common import FEEDBACK, ToolError, guarded, info_dict
 
@@ -55,9 +54,10 @@ Conventions:
 """
 
 
-class BridgeManager:
-    """Owns the single shared Bridge connection and any stateful handles
-    (mounted filesystem volumes, opened UART ports) layered on top of it.
+class BridgeManager(_CoreBridgeManager):
+    """The core shared-bridge manager (one thread-safe, auto-reconnecting link)
+    plus the stateful handles the MCP tools layer on top: mounted filesystem
+    volumes, opened UART ports, and noted I2C buses (for board_status).
 
     Thread-safe: FastMCP runs each (synchronous) tool in a worker thread, and
     Bridge.request() is itself thread-safe, so concurrent tool calls share one
@@ -65,64 +65,17 @@ class BridgeManager:
     """
 
     def __init__(self, **connect_kwargs):
-        self._kwargs = {k: v for k, v in connect_kwargs.items() if v is not None}
-        self._bridge: Bridge | None = None
-        self._lock = threading.RLock()
+        super().__init__(**connect_kwargs)
         self._volumes: dict = {}       # fs kind -> Volume
         self._uart_ports: dict = {}    # port number -> UartPort
         self._i2c_buses: dict = {}     # bus number -> {sda, scl, freq} (for board_status)
 
-    @property
-    def connect_kwargs(self) -> dict:
-        return dict(self._kwargs)
-
-    @staticmethod
-    def _stale(b: Bridge | None) -> bool:
-        return b is None or b.is_closing()
-
-    def is_connected(self) -> bool:
-        return not self._stale(self._bridge)
-
-    def _teardown(self) -> None:
-        if self._bridge is not None:
-            try:
-                self._bridge.close()
-            except Exception:
-                pass
-        self._bridge = None
+    def _close_locked(self) -> None:
+        # Tear down the link, then drop the per-connection handles built on it.
+        super()._close_locked()
         self._volumes.clear()
         self._uart_ports.clear()
         self._i2c_buses.clear()
-
-    def connect(self, **overrides) -> Bridge:
-        """(Re)connect, replacing any existing link. overrides win over the
-        defaults the server was started with."""
-        with self._lock:
-            self._teardown()
-            kwargs = dict(self._kwargs)
-            kwargs.update({k: v for k, v in overrides.items() if v is not None})
-            self._bridge = Bridge(**kwargs)
-            return self._bridge
-
-    def bridge(self) -> Bridge:
-        """Return the live Bridge, auto-connecting with the startup defaults.
-
-        Fast path: a healthy bridge is returned without the lock (a single
-        reference read is atomic under the GIL); the lock is taken only to
-        (re)connect, so concurrent tool calls don't serialize on a live link.
-        """
-        b = self._bridge
-        if not self._stale(b):
-            return b
-        with self._lock:
-            if self._stale(self._bridge):
-                self._teardown()
-                self._bridge = Bridge(**self._kwargs)
-            return self._bridge
-
-    def disconnect(self) -> None:
-        with self._lock:
-            self._teardown()
 
     def volume(self, kind: str, *, remount: bool = False, **mount_kwargs):
         """Mount (and cache) a filesystem volume of the given kind.

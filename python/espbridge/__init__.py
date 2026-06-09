@@ -25,6 +25,7 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
 from .bridge import Bridge, BridgeSet, Info, connect_all
 from .constants import Cap, ChipModel, Status
 from .drivers import driver_names, register_driver
+from .manager import BridgeManager, connect, disconnect_all, shared_manager
 from .errors import (
     AuthError,
     BridgeError,
@@ -43,11 +44,26 @@ def find_ble_devices(timeout: float = 5.0):
 
     return _scan(timeout)
 
+
+def __getattr__(name):
+    # Lazy: importing AsyncBridge pulls in asyncio, so defer it until first use
+    # rather than charging every sync/USB-only script for the import.
+    if name == "AsyncBridge":
+        from .aio import AsyncBridge
+
+        return AsyncBridge
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __version__ = "0.5.0"
 
 __all__ = [
     "Bridge",
+    "AsyncBridge",
     "BridgeSet",
+    "BridgeManager",
+    "connect",
+    "shared_manager",
+    "disconnect_all",
     "connect_all",
     "register_driver",
     "driver_names",

@@ -88,6 +88,13 @@ class Bridge:
 
     >>> esp = Bridge(name="relays")
     >>> esp = Bridge(mac="24:a1:60:12:34:56")
+
+    Thread-safe: share **one** Bridge across threads rather than opening several
+    (a serial/BLE link can't be opened twice). Requests from different threads
+    are correlated by sequence number and pipeline on the wire, so a slow call
+    on one thread doesn't stall fast calls on another. For a process-wide shared
+    link with auto-reconnect, use :func:`espbridge.connect` / ``BridgeManager``;
+    for ``await``, wrap it with :class:`espbridge.AsyncBridge`.
     """
 
     def __init__(
@@ -108,6 +115,9 @@ class Bridge:
         transport=None,
     ):
         self.timeout = timeout
+        # Guards lazy sub-API creation in __getattr__ so two threads that first
+        # touch e.g. esp.gpio at once can't both build (and leak) a sub-API.
+        self._subapi_lock = threading.Lock()
         # How many times request() re-sends after a response timeout.
         # Only commands that are safe to execute more than once are retried
         # (see constants.NON_IDEMPOTENT for the exceptions); this lets a lost
@@ -288,13 +298,22 @@ class Bridge:
         self._pending_lock = threading.Lock()
         self._seq = 0
         self._write_lock = threading.Lock()
-        # Bytes written to the transport but not yet known to have been
-        # consumed by the firmware. Because the firmware processes requests in
-        # arrival order, any reply proves it has drained everything sent before
-        # it, so a reply resets this counter to zero. _flow gates concurrent
-        # writes against the transport's window to prevent the firmware's link
-        # RX buffer from overflowing (the BLE rx-overflow / frame-loss path).
+        # Bytes in flight: written to the transport but not yet known consumed by
+        # the firmware. _flow gates concurrent writes against the transport's
+        # window so the firmware's link RX buffer can't overflow (the BLE
+        # rx-overflow / frame-loss path). Two buckets, because they clear
+        # differently:
+        #   _unacked    — pending *requests*. Each reserves its bytes before the
+        #                 write and releases exactly those bytes when its own
+        #                 reply lands, so N concurrent requests stay correctly
+        #                 accounted (resetting to zero on any reply would erase
+        #                 the others still on the wire).
+        #   _send_bytes — fire-and-forget send() frames, which get no reply of
+        #                 their own. A request reply proves everything written
+        #                 before it (in wire order) was consumed, so any reply
+        #                 clears this bucket.
         self._unacked = 0
+        self._send_bytes = 0
         self._flow = threading.Condition()
         self._handlers: dict[int | None, list] = {}
         self._handlers_lock = threading.Lock()
@@ -545,10 +564,19 @@ class Bridge:
         with self._flow:
             window = getattr(self._t, "max_inflight", None)
             if window and self._ready.is_set():
-                while self._unacked + size > window and not self._closing:
+                while self._unacked + self._send_bytes + size > window \
+                        and not self._closing:
                     if not self._flow.wait(timeout=self.timeout):
                         break
             self._unacked += size
+
+    def _ack_window(self, size: int) -> None:
+        """A request's reply arrived: release that request's own reserved bytes,
+        and clear pending send() bytes (the reply proves they were consumed)."""
+        with self._flow:
+            self._unacked = max(0, self._unacked - size)
+            self._send_bytes = 0
+            self._flow.notify_all()
 
     def _release_window(self, size: int) -> None:
         with self._flow:
@@ -577,12 +605,10 @@ class Bridge:
             if p.frame is None:
                 raise BridgeTimeoutError("connection closed while waiting for response")
             replied = True
-            # Any reply proves the firmware has consumed every byte sent before
-            # it, because requests are processed in arrival order. The link RX
-            # buffer is now empty, so the in-flight byte count resets to zero.
-            with self._flow:
-                self._unacked = 0
-                self._flow.notify_all()
+            # Reply landed: release this request's reserved bytes (only its own,
+            # so other threads' in-flight requests stay accounted) and clear any
+            # fire-and-forget send() bytes written before it.
+            self._ack_window(len(data))
             if debug:
                 log.debug(f"<- {C.cmd_name(cmd)} seq={seq} "
                           f"{'ERR' if p.frame.is_error else 'ok'} "
@@ -629,13 +655,13 @@ class Bridge:
         window = getattr(self._t, "burst_window", None)
         if window and self._ready.is_set():
             with self._flow:
-                over = self._unacked + len(data) > window
+                over = self._unacked + self._send_bytes + len(data) > window
             if over:
-                self.request(C.SYS_PING, b"\x00")  # fence: a reply resets _unacked
+                self.request(C.SYS_PING, b"\x00")  # fence: a reply clears _send_bytes
         with self._write_lock:
             self._t.write(data)
         with self._flow:
-            self._unacked += len(data)
+            self._send_bytes += len(data)
 
     # ---- conveniences ---------------------------------------------------------------------
 
@@ -752,11 +778,18 @@ class Bridge:
         if sub is not None:
             import importlib
 
-            mod_name, cls_name = sub
-            obj = getattr(importlib.import_module(f".{mod_name}", __package__),
-                          cls_name)(self)
-            setattr(self, name, obj)  # cache: next access skips __getattr__
-            return obj
+            with self._subapi_lock:
+                # Double-check under the lock: another thread may have created
+                # and cached it while we were blocked, in which case reuse that
+                # one (building a second would leak its event registrations).
+                cached = self.__dict__.get(name)
+                if cached is not None:
+                    return cached
+                mod_name, cls_name = sub
+                obj = getattr(importlib.import_module(f".{mod_name}", __package__),
+                              cls_name)(self)
+                setattr(self, name, obj)  # cache: next access skips __getattr__
+                return obj
         # Registered device drivers (bundled in espbridge.drivers, or
         # pip-installed plugins): esp.<name>(...) builds it with this bridge bound to
         # its first argument — esp.dht(4) is DHT(esp, 4). See espbridge.drivers.

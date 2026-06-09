@@ -398,7 +398,7 @@ static void rx_task(void*) {
 // end of setup() after all other init is done.
 void proto_init() {
   txq = xQueueCreate(48, sizeof(Frame));
-  netq = xQueueCreate(16, sizeof(Req));
+  netq = xQueueCreate(NETQ_DEPTH, sizeof(Req));
 }
 
 void proto_start() {

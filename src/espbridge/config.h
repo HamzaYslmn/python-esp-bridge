@@ -173,4 +173,9 @@
 #define NET_MAX_SOCKETS 8
 #define NET_WINDOW      4096   // per-socket credit window (bytes)
 
+// Depth of the queue feeding bridge_net (slow handlers). Deeper = more
+// concurrent slow requests can be in flight from a multi-threaded host before
+// one is rejected with ST_BUSY; the cost is just queue slots (Req structs).
+#define NETQ_DEPTH      32
+
 #define BLE_MAX_CHARS   16

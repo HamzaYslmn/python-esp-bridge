@@ -172,6 +172,43 @@ The firmware is fully event-driven on FreeRTOS: serial TX, command handling
 and the network stack run as separate tasks, so a blocking Wi-Fi/BLE
 operation never delays a GPIO read (~1 ms round-trips at 921600 Bd).
 
+## Concurrency & integration
+
+A board's link can't be opened twice, but **one `Bridge` is thread-safe** —
+share it across threads and their requests pipeline on the wire, correlated by
+sequence number, so a slow call on one thread never stalls a fast call on
+another (the firmware runs a matching task split; see
+[`rtos_concurrency.py`](python/examples/basics/rtos_concurrency.py)).
+
+For easy integration, don't pass a `Bridge` around — call `connect()` anywhere
+and get the same shared, auto-reconnecting link:
+
+```python
+import espbridge
+
+esp = espbridge.connect(ble=False)      # same live link from any thread/module
+esp.gpio.write(2, 1)                     # safe to call concurrently
+
+# e.g. a FastAPI/Flask route — every request shares the one connection:
+@app.get("/adc/{pin}")
+def read(pin: int):
+    return {"mV": espbridge.connect(ble=False).adc.read_mv(pin)}
+```
+
+For `await`, wrap any bridge — fan out concurrent I/O with `asyncio.gather`
+([`async_fanout.py`](python/examples/basics/async_fanout.py)):
+
+```python
+from espbridge import AsyncBridge
+
+async with AsyncBridge(ble=False) as esp:        # or AsyncBridge.wrap(espbridge.connect())
+    t, h = await asyncio.gather(esp.adc.read(34), esp.adc.read(35))
+```
+
+Multiple processes? One process owns the link (e.g. the
+[MCP](#drive-it-from-an-ai-agent-mcp) or an HTTP server) and the others talk to
+it. See [`shared_connection.py`](python/examples/basics/shared_connection.py).
+
 ## Use the libraries you already know
 
 espbridge speaks the wire protocols of the popular Python hardware ecosystems,
