@@ -38,6 +38,24 @@ _BUNDLED: dict[str, str] = {
     "ir_sender": "espbridge.drivers.ir:IrSender",
     "ir_receiver": "espbridge.drivers.ir:IrReceiver",
     "pcf8574": "espbridge.drivers.pcf8574:PCF8574",
+    # ADC / sensors (I2C)
+    "ads1115": "espbridge.drivers.ads1115:ADS1115",     # 16-bit 4-ch ADC
+    "bh1750": "espbridge.drivers.bh1750:BH1750",        # ambient light (lux)
+    "bme280": "espbridge.drivers.bme280:BME280",        # temp / humidity / pressure
+    "mpu6050": "espbridge.drivers.mpu6050:MPU6050",     # 6-axis IMU (accel + gyro)
+    "ds3231": "espbridge.drivers.ds3231:DS3231",        # real-time clock
+    # actuators (robotics)
+    "pca9685": "espbridge.drivers.pca9685:PCA9685",     # 16-ch servo / PWM driver
+    "motor": "espbridge.drivers.motor:Motor",           # DC motor H-bridge (L298N/TB6612/DRV8833)
+    # audio (I2S)
+    "inmp441": "espbridge.drivers.inmp441:INMP441",     # MEMS microphone
+    "max98357": "espbridge.drivers.max98357:MAX98357",  # class-D amplifier
+    # radios (SPI transceivers)
+    "nrf24": "espbridge.drivers.nrf24:NRF24",           # 2.4 GHz transceiver
+    "sx127x": "espbridge.drivers.sx127x:SX127x",        # LoRa 433/868/915 (SX1276/RFM95)
+    "rfm95": "espbridge.drivers.sx127x:SX127x",         # alias for RFM95/96 modules
+    "sx126x": "espbridge.drivers.sx126x:SX126x",        # LoRa 433/868/915 (SX1262/1268)
+    "sx128x": "espbridge.drivers.sx128x:SX128x",        # 2.4 GHz LoRa (SX1280/1281)
 }
 
 # name -> driver class, or a lazy "module:Class" string, or an EntryPoint.

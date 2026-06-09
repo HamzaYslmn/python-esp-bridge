@@ -19,6 +19,8 @@ A0..A2 strap pins.
 """
 from __future__ import annotations
 
+from ..i2c import init_if_pins
+
 
 class PCF8574:
     def __init__(self, bridge, address: int = 0x20, *, bus: int = 0,
@@ -29,13 +31,7 @@ class PCF8574:
         self._i2c = bridge.i2c
         self._addr = address
         self._bus = bus
-        # Only (re)initialise the bus if the caller gave pins; otherwise assume
-        # esp.i2c.init() was already called (the common case with several
-        # I2C devices sharing one bus). Pass through just the pins given and let
-        # I2c.init supply its own defaults for the rest.
-        if sda is not None or scl is not None:
-            pins = {k: v for k, v in (("sda", sda), ("scl", scl)) if v is not None}
-            self._i2c.init(bus=bus, **pins)
+        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
         # Power-on state of the latch is all-high (all pins usable as inputs).
         self._state = 0xFF
 
@@ -54,7 +50,7 @@ class PCF8574:
         if level:
             self._state |= 1 << pin
         else:
-            self._state &= ~(1 << pin) & 0xFF
+            self._state &= ~(1 << pin)
         self.write_port(self._state)
 
     def read_pin(self, pin: int) -> int:

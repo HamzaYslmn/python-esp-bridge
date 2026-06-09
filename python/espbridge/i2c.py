@@ -83,3 +83,14 @@ class I2c:
     def deinit(self, bus: int = 0) -> None:
         """Release the bus and its pins on the firmware."""
         self._b.request(C.I2C_DEINIT, bytes([bus]))
+
+
+def init_if_pins(i2c, *, bus: int = 0, sda: int | None = None,
+                 scl: int | None = None) -> None:
+    """Bring up an I2C bus only when pins are given; otherwise do nothing and
+    assume a prior ``init()``. The one-liner device drivers use in __init__ so
+    several chips can share one already-configured bus (pass ``esp.i2c``)."""
+    if sda is None and scl is None:
+        return
+    pins = {k: v for k, v in (("sda", sda), ("scl", scl)) if v is not None}
+    i2c.init(bus=bus, **pins)

@@ -122,9 +122,8 @@ class OLED:
         # must be bit-reversed (handled by the _BITREV lookup table).
         raw = image.transpose(self._Image.Transpose.TRANSPOSE).tobytes()
         bpr = self.height // 8  # transposed row = bpr bytes, one per page
-        pages = self.height // 8
         chunk = self._chunk
-        for page in range(pages):
+        for page in range(bpr):
             data = raw[page::bpr].translate(_BITREV)
             # All writes except the very last are fire-and-forget (pipelined).
             # The final write uses wait=True, which flushes the pipeline and
@@ -141,7 +140,7 @@ class OLED:
                 end = min(off + chunk, len(data))
                 self._i2c.write(self.addr, bytes([_DATA]) + data[off:end],
                                 self._bus,
-                                wait=page == pages - 1 and end >= len(data))
+                                wait=page == bpr - 1 and end >= len(data))
 
     @contextlib.contextmanager
     def draw(self):

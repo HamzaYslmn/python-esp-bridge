@@ -56,3 +56,21 @@ class, or `register_driver()` at runtime).
 | `ir_sender` / `ir_receiver` | NEC + raw infrared remotes | RMT |
 | `stepper` | A4988 / DRV8825 stepper motors | RMT |
 | `pcf8574` | PCF8574 / PCF8574A 8-bit GPIO expander | I2C |
+| `ads1115` | ADS1115 16-bit 4-channel ADC | I2C |
+| `bh1750` | BH1750 ambient-light (lux) sensor | I2C |
+| `bme280` | BME280 / BMP280 temperature · humidity · pressure | I2C |
+| `mpu6050` | MPU6050 / MPU6500 / MPU9250 6-axis IMU | I2C |
+| `ds3231` | DS3231 real-time clock | I2C |
+| `pca9685` | PCA9685 16-channel servo / PWM driver | I2C |
+| `motor` | DC motor H-bridge (L298N / TB6612FNG / DRV8833) | PWM + GPIO |
+| `inmp441` | INMP441 MEMS microphone | I2S |
+| `max98357` | MAX98357A class-D amplifier | I2S |
+| `nrf24` | nRF24L01+ 2.4 GHz transceiver | SPI |
+| `sx127x` / `rfm95` | SX1276/77/78/79 (RFM95/96) LoRa 433/868/915 MHz | SPI |
+| `sx126x` | SX1262 / SX1268 LoRa 433/868/915 MHz | SPI |
+| `sx128x` | SX1280 / SX1281 2.4 GHz LoRa | SPI |
+
+> The I2C sensors, motor/servo, audio and radio drivers above are built from
+> each device's datasheet and verified at the protocol level (the exact bytes on
+> the wire). The radio drivers (`nrf24`, `sx127x`, `sx126x`, `sx128x`) in
+> particular still want on-air validation against real silicon.
