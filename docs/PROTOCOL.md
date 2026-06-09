@@ -169,7 +169,7 @@ The design rule of v0.3.0: the firmware moves *symbols*, the host implements
 *device protocols*. A symbol is `u16 BE = level<<15 | duration` in ticks of
 `1/tick_hz` (set at `RMT_INIT`, 1 kHz..80 MHz). One primitive set covers
 WS2812 strips, IR send/receive, DHT, HC-SR04 and stepper pulse generation —
-all decoding/encoding lives in Python (`espbridge.neopixel/ir/dht/hcsr04/stepper`).
+all decoding/encoding lives in Python (`espbridge.drivers.neopixel/ir/dht/hcsr04/stepper`).
 
 | cmd | payload | reply |
 |-----|---------|-------|
@@ -190,7 +190,7 @@ trigger. Captures are capped at `RMT_MAX_RX_SYMS` (1020).
 ### 1-Wire (module 0x43)
 
 Bit-timing primitives only — ROM search, CRC8 and device drivers live in
-Python (`espbridge.onewire`, `espbridge.ds18b20`): `OW_RESET` (presence),
+Python (`espbridge.onewire`, `espbridge.drivers.ds18b20`): `OW_RESET` (presence),
 `OW_WRITE` (with optional strong pull-up for parasite power), `OW_READ`,
 `OW_TRIPLET` (one Maxim-search step: read bit + complement, write direction).
 

@@ -3,7 +3,7 @@
     pip install "python-esp-bridge[oled]"   (just adds Pillow for drawing)
 
     from espbridge import Bridge
-    from espbridge.oled import OLED
+    from espbridge.drivers.oled import OLED
 
     with Bridge() as esp:
         oled = OLED(esp)                       # bus init + auto-detect + power up
@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import contextlib
 
-from .errors import NoDeviceError
+from ..errors import NoDeviceError
 
 _CMD = 0x00   # control byte: command stream follows
 _DATA = 0x40  # control byte: display data follows

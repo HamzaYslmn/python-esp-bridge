@@ -2,7 +2,7 @@
 import time
 
 from espbridge import Bridge
-from espbridge.ds18b20 import DS18B20
+from espbridge.drivers.ds18b20 import DS18B20
 
 with Bridge() as esp:
     roms = DS18B20.discover(esp, pin=4)

@@ -540,7 +540,8 @@ def register_fs(mcp, mgr) -> None:
                  mosi: int = -1, freq_mhz: int = 20) -> dict:
         """Mount a filesystem: "littlefs" (internal flash), "sd" (SPI card; give
         cs and optionally sck/miso/mosi) or "sdmmc". Returns total/used KiB."""
-        vol = mgr.volume(kind, cs=cs, sck=sck, miso=miso, mosi=mosi, freq_mhz=freq_mhz)
+        vol = mgr.volume(kind, remount=True, cs=cs, sck=sck, miso=miso,
+                         mosi=mosi, freq_mhz=freq_mhz)
         return {"kind": kind, "total_kb": vol.total_kb, "used_kb": vol.used_kb}
 
     @mcp.tool

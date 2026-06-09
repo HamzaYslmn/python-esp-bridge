@@ -1,6 +1,6 @@
 """HC-SR04 ultrasonic distance sensor over the RMT primitive.
 
-    from espbridge.hcsr04 import HCSR04
+    from espbridge.drivers.hcsr04 import HCSR04
     sonar = HCSR04(esp, trig=5, echo=18)
     print(sonar.distance_cm())
 

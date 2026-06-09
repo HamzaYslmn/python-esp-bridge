@@ -2,7 +2,7 @@
 import time
 
 from espbridge import Bridge
-from espbridge.stepper import Stepper
+from espbridge.drivers.stepper import Stepper
 
 with Bridge() as esp:
     motor = Stepper(esp, step_pin=12, dir_pin=14)

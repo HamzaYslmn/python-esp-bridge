@@ -71,21 +71,23 @@ class Bridge:
     """Connection to a python-esp-bridge ESP32.
 
     >>> from espbridge import Bridge
-    >>> with Bridge() as esp:         # Bluetooth first, then USB serial
+    >>> with Bridge() as esp:         # prefer Bluetooth, fall back to USB serial
     ...     esp.gpio.mode(2, "output")
     ...     esp.gpio.write(2, 1)
+
+    Pick the transport with ``ble`` (firmware default password "espbridge",
+    change it via EspBridge.begin("...") in the sketch):
+
+    >>> esp = Bridge()                  # ble=True: Bluetooth, else USB serial
+    >>> esp = Bridge(ble=False)         # USB / COM port only (Bluetooth off)
+    >>> esp = Bridge(ble="relays")      # a named board over Bluetooth only
+    >>> esp = Bridge(port="COM7")       # a specific serial port
 
     With several boards attached, select one by persistent name or MAC
     (assign names once with ``Bridge(port=...).set_name("relays")``):
 
     >>> esp = Bridge(name="relays")
     >>> esp = Bridge(mac="24:a1:60:12:34:56")
-
-    Over Bluetooth instead of USB (firmware default password "espbridge",
-    change it via EspBridge.begin("...") in the sketch):
-
-    >>> esp = Bridge(ble=True)                      # the only advertising bridge
-    >>> esp = Bridge(ble="relays", password="espbridge")
     """
 
     def __init__(
@@ -94,7 +96,7 @@ class Bridge:
         *,
         name: str | None = None,
         mac: str | None = None,
-        ble: bool | str = False,
+        ble: bool | str | None = True,
         password: str | None = None,
         baud: int = 115200,
         upgrade_baud: bool = True,
@@ -114,40 +116,22 @@ class Bridge:
         self.reset_on_exit = False  # set for real only once connected (see below)
         self.info: Info | None = None
 
-        # Candidates: (transport factory, label, usb_chip).
+        # Build the ordered list of connection candidates to probe, each a
+        # (transport factory, label, usb_chip) tuple. The `ble` flag decides
+        # which transports are tried:
+        #   ble=True (default) : prefer Bluetooth, then fall back to USB serial
+        #   ble=False          : USB serial only — Bluetooth disabled
+        #   ble="name"/"mac"   : that Bluetooth device only (no USB fallback)
+        # An explicit transport= or port= overrides `ble` entirely.
         if transport is not None:
             candidates = [(lambda t=transport: t, "transport",
                            getattr(transport, "usb_chip", None))]
-        elif ble:
-            candidates = self._ble_candidates(ble, name, mac)
         elif port is not None:
             chip = next((p.usb_chip for p in find_ports() if p.device == port), None)
             candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
                            port, chip)]
         else:
-            # Default: try BLE first, then fall back to USB serial.
-            # If the [ble] extra is not installed, or nothing is advertising,
-            # BLE is skipped silently and a USB-only setup still works.
-            # To pin a specific transport use port=, ble=True/'name', name=, or mac=.
-            candidates = []
-            try:
-                candidates += self._ble_candidates(True, name, mac)
-            except NoDeviceError:
-                pass  # nothing advertising over Bluetooth in range
-            except ImportError:
-                log.debug("Bluetooth unavailable (pip install "
-                          "'python-esp-bridge[ble]'); using USB serial")
-            # Then probe every ESP32-like serial port in order; the first one
-            # that responds to the handshake (and matches name=/mac= if given)
-            # wins — non-bridge boards simply time out and are skipped.
-            candidates += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
-                            p.device, p.usb_chip) for p in find_ports()]
-            if not candidates:
-                raise NoDeviceError(
-                    "no bridge found over Bluetooth or USB serial — power the "
-                    "board (and flash it: docs/FIRMWARE.md), or pass "
-                    "port='COM5'/'/dev/ttyUSB0' or ble=True"
-                )
+            candidates = self._auto_candidates(ble, name, mac, baud)
 
         probing = len(candidates) > 1
         errors: list[str] = []
@@ -203,8 +187,40 @@ class Bridge:
                 raise
         raise NoDeviceError("no matching bridge found — " + "; ".join(errors))
 
+    def _auto_candidates(self, ble, name, mac, baud):
+        """Candidates for the no-port path: Bluetooth and/or USB serial per `ble`.
+
+        ble=False -> USB serial only (Bluetooth disabled); ble="name"/"mac" ->
+        that Bluetooth device only (no USB fallback); ble=True/None (default) ->
+        prefer Bluetooth, then fall back to USB serial.
+        """
+        ble_only = isinstance(ble, str)   # a named target: Bluetooth, no USB fallback
+        candidates = []
+        if ble is not False:              # True / None / "name": Bluetooth wanted
+            try:
+                candidates += self._ble_candidates(ble, name, mac)
+            except NoDeviceError:
+                if ble_only:
+                    raise                 # the named board must be present
+            except ImportError:
+                if ble_only:
+                    raise
+                log.debug("Bluetooth unavailable (pip install "
+                          "'python-esp-bridge[ble]'); using USB serial")
+        if not ble_only:                  # USB serial too, unless pinned to a BLE name.
+            # First port that handshakes (and matches name=/mac= if given) wins;
+            # non-bridge boards simply time out and are skipped.
+            candidates += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
+                            p.device, p.usb_chip) for p in find_ports()]
+        if not candidates:
+            raise NoDeviceError(
+                "no bridge found — power the board (and flash it: "
+                "docs/FIRMWARE.md), then pass port='COM5'/'/dev/ttyUSB0', "
+                "ble=True, or ble='name'")
+        return candidates
+
     @staticmethod
-    def _ble_candidates(ble: bool | str, name: str | None, mac: str | None):
+    def _ble_candidates(ble: bool | str | None, name: str | None, mac: str | None):
         from .transports.ble import (
             BleTransport, find_ble_devices, find_ble_devices_fast)
 
@@ -732,18 +748,29 @@ class Bridge:
     }
 
     def __getattr__(self, name):
-        try:
-            mod_name, cls_name = self._SUBAPIS[name]
-        except KeyError:
-            raise AttributeError(name) from None
-        import importlib
+        sub = self._SUBAPIS.get(name)
+        if sub is not None:
+            import importlib
 
-        obj = getattr(importlib.import_module(f".{mod_name}", __package__), cls_name)(self)
-        setattr(self, name, obj)  # cache: next access skips __getattr__
-        return obj
+            mod_name, cls_name = sub
+            obj = getattr(importlib.import_module(f".{mod_name}", __package__),
+                          cls_name)(self)
+            setattr(self, name, obj)  # cache: next access skips __getattr__
+            return obj
+        # Registered device drivers (bundled in espbridge.drivers, or
+        # pip-installed plugins): esp.<name>(...) builds it with this bridge bound to
+        # its first argument — esp.dht(4) is DHT(esp, 4). See espbridge.drivers.
+        from . import drivers
+
+        cls = drivers.get_driver(name)
+        if cls is not None:
+            return drivers.BoundDriver(self, cls, name)
+        raise AttributeError(name)
 
     def __dir__(self):
-        return [*super().__dir__(), *self._SUBAPIS]
+        from . import drivers
+
+        return [*super().__dir__(), *self._SUBAPIS, *drivers.driver_names()]
 
 
 class BridgeSet(list):

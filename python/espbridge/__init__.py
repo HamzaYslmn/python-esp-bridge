@@ -17,11 +17,14 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
         esp.can.begin(tx=21, rx=22)      # CAN bus
         esp.ota.flash("new.bin")         # update the firmware over the link
 
-    # device drivers in pure Python (RMT / 1-Wire primitives):
-    #   espbridge.neopixel, .dht, .ds18b20, .hcsr04, .ir, .stepper
+    # device drivers in pure Python (RMT / 1-Wire / I2C primitives), all under
+    # espbridge.drivers: dht, oled, neopixel, ds18b20, hcsr04, ir, stepper, ...
+    # ...or write/register your own — esp.<name>(...) — see espbridge.drivers
+    #    and docs/DRIVERS.md ("bring your own driver").
 """
 from .bridge import Bridge, BridgeSet, Info, connect_all
 from .constants import Cap, ChipModel, Status
+from .drivers import driver_names, register_driver
 from .errors import (
     AuthError,
     BridgeError,
@@ -40,12 +43,14 @@ def find_ble_devices(timeout: float = 5.0):
 
     return _scan(timeout)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "Bridge",
     "BridgeSet",
     "connect_all",
+    "register_driver",
+    "driver_names",
     "find_ble_devices",
     "Info",
     "Cap",

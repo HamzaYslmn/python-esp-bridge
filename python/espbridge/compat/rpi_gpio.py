@@ -45,6 +45,11 @@ def _b() -> Bridge:
     return _bridge
 
 
+def _channels(channel):
+    """RPi.GPIO accepts a single channel or a list/tuple — normalize to a list."""
+    return list(channel) if isinstance(channel, (list, tuple)) else [channel]
+
+
 def setmode(mode) -> None:  # accepted for API compatibility; ESP32 GPIO numbers are always used
     pass
 
@@ -54,8 +59,7 @@ def setwarnings(flag: bool) -> None:
 
 
 def setup(channel, direction, pull_up_down=PUD_OFF, initial=None) -> None:
-    channels = channel if isinstance(channel, (list, tuple)) else [channel]
-    for ch in channels:
+    for ch in _channels(channel):
         if direction == OUT:
             _b().gpio.mode(ch, "output")
             if initial is not None:
@@ -67,7 +71,7 @@ def setup(channel, direction, pull_up_down=PUD_OFF, initial=None) -> None:
 
 
 def output(channel, value) -> None:
-    channels = channel if isinstance(channel, (list, tuple)) else [channel]
+    channels = _channels(channel)
     values = value if isinstance(value, (list, tuple)) else [value] * len(channels)
     if len(channels) > 1:
         _b().gpio.write_many(dict(zip(channels, values)))
@@ -114,7 +118,15 @@ class PWM:
 
 
 def cleanup(channel=None) -> None:
+    """Reset the given channel(s) to input (RPi.GPIO semantics), or — with no
+    channel — release the bridge this module opened itself."""
     global _bridge, _owned
+    if channel is not None:
+        # Use _bridge directly, not _b(): cleaning a pin shouldn't auto-open a link.
+        if _bridge is not None:
+            for ch in _channels(channel):
+                _bridge.gpio.mode(ch, "input")
+        return
     if _bridge is not None and _owned:
         _bridge.close()
         _bridge = None

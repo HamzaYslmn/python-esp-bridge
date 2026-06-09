@@ -1,5 +1,5 @@
 """Stepper driver: pulse generation, ramps, direction, position."""
-from espbridge.stepper import Stepper, _step_syms, ramp_periods
+from espbridge.drivers.stepper import Stepper, _step_syms, ramp_periods
 
 
 def test_step_syms_short_period():

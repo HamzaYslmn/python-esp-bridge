@@ -1,10 +1,10 @@
-"""espbridge.oled.OLED: dual-chip init and page-mode framing (SSD1306 + SH1106)."""
+"""espbridge.drivers.oled.OLED: dual-chip init and page-mode framing (SSD1306 + SH1106)."""
 import pytest
 
 pytest.importorskip("PIL")
 from PIL import Image  # noqa: E402
 
-from espbridge.oled import OLED  # noqa: E402
+from espbridge.drivers.oled import OLED  # noqa: E402
 
 
 class FakeI2c:

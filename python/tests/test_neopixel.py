@@ -1,7 +1,7 @@
 """NeoPixel driver: pixel buffer, color order, brightness -> TX_BYTES payload."""
 import pytest
 
-from espbridge.neopixel import NeoPixel
+from espbridge.drivers.neopixel import NeoPixel
 
 
 def test_show_sends_grb(bridge, fw):

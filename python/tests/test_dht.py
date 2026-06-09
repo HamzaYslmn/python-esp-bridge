@@ -1,7 +1,7 @@
 """DHT decoder against synthetic pulse trains (no hardware)."""
 import pytest
 
-from espbridge.dht import DHT, convert, decode
+from espbridge.drivers.dht import DHT, convert, decode
 
 
 def dht_pulses(data: bytes) -> list[tuple[int, int]]:

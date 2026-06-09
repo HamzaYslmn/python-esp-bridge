@@ -1,6 +1,6 @@
 """DS18B20 / DS18S20 temperature sensors over the 1-Wire bus.
 
-    from espbridge.ds18b20 import DS18B20
+    from espbridge.drivers.ds18b20 import DS18B20
     probe = DS18B20(esp, pin=4)            # first sensor on the bus
     print(probe.read())                    # degrees C
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from .onewire import crc8
+from ..onewire import crc8
 
 _FAMILIES = (0x28, 0x10, 0x22)  # DS18B20, DS18S20, DS1822
 CONVERT_T = 0x44

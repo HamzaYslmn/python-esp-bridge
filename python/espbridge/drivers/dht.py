@@ -1,6 +1,6 @@
 """DHT11/DHT22 temperature & humidity sensors over the RMT primitive.
 
-    from espbridge.dht import DHT
+    from espbridge.drivers.dht import DHT
     sensor = DHT(esp, pin=4, model=22)
     temp_c, humidity = sensor.read()
 """

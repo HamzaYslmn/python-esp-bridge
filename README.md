@@ -69,6 +69,10 @@ are implemented in Python where they are easy to read, test and extend.
        esp.gpio.write(2, 1)
    ```
 
+   `Bridge()` prefers Bluetooth and falls back to USB serial; pass
+   `ble=False` for **USB / COM only** (Bluetooth off), `ble="name"` to pin a
+   specific board over Bluetooth, or `port="COM7"` for a specific serial port.
+
    `espbridge` on the command line prints connection info; `espbridge ports`
    lists candidate serial ports; `espbridge scan` probes every attached board
    and `espbridge scan --ble` finds bridges advertising over Bluetooth.
@@ -101,21 +105,56 @@ are implemented in Python where they are easy to read, test and extend.
 | Camera | JPEG snapshots from ESP32-CAM / XIAO-S3-Sense / ESP-EYE (firmware opt-in, PSRAM) |
 | MCPWM  | complementary PWM pair with hardware deadtime for H-bridges (`esp.mcpwm`; not on S2/C3) |
 
-**Device drivers in pure Python** (over the RMT/1-Wire primitives — no
+**Device drivers in pure Python** (over the RMT/1-Wire/I2C primitives — no
 firmware changes to add your own):
 
 ```python
-from espbridge.neopixel import NeoPixel   # WS2812/SK6812 strips
-from espbridge.dht import DHT             # DHT11/DHT22 temp+humidity
-from espbridge.ds18b20 import DS18B20     # 1-Wire thermometers (multi-drop)
-from espbridge.hcsr04 import HCSR04       # ultrasonic ranging
-from espbridge.ir import IrSender, IrReceiver  # NEC remotes + raw IR
-from espbridge.stepper import Stepper     # A4988/DRV8825 with ramps
+from espbridge.drivers.neopixel import NeoPixel   # WS2812/SK6812 strips
+from espbridge.drivers.dht import DHT             # DHT11/DHT22 temp+humidity
+from espbridge.drivers.ds18b20 import DS18B20     # 1-Wire thermometers (multi-drop)
+from espbridge.drivers.hcsr04 import HCSR04       # ultrasonic ranging
+from espbridge.drivers.ir import IrSender, IrReceiver  # NEC remotes + raw IR
+from espbridge.drivers.stepper import Stepper     # A4988/DRV8825 with ramps
 
 NeoPixel(esp, pin=5, n=30).fill((0, 0, 64))
 print(DHT(esp, 4).read())                 # (23.1, 65.5)
 Stepper(esp, step_pin=12, dir_pin=14).move(400, speed=800, accel=1600)
 ```
+
+### Bring your own driver
+
+Those are **reference implementations, not the limit.** Every bundled driver
+lives in [`espbridge/drivers/`](python/espbridge/drivers/), and a driver is just
+a Python class whose constructor takes the bridge and talks to a device over the
+primitives above — [`drivers/dht.py`](python/espbridge/drivers/dht.py) is 75
+lines. So any sensor, display or protocol is a host-side class away, with **no
+firmware change**:
+
+```python
+class MyTempSensor:                          # any class taking the bridge first
+    def __init__(self, esp, address=0x48):
+        self._i2c, self._addr = esp.i2c, address
+    def read_c(self):
+        hi, lo = self._i2c.read_reg(self._addr, 0x00, 2)
+        return ((hi << 8 | lo) >> 4) * 0.0625
+
+MyTempSensor(esp).read_c()                    # works as-is, nothing to register
+```
+
+Register a name for the `esp.<name>(...)` sugar, or ship a pip package that
+others install and your driver shows up on every bridge automatically:
+
+```python
+from espbridge import register_driver
+register_driver("mytemp", MyTempSensor)
+esp.mytemp(address=0x48).read_c()             # == MyTempSensor(esp, address=0x48)
+```
+
+`espbridge drivers` lists everything available (the bundled
+[`drivers/`](python/espbridge/drivers/) and any installed plugins). Full guide:
+[**`docs/DRIVERS.md`**](docs/DRIVERS.md). And if a driver already exists in the
+Adafruit / luma / gpiozero / smbus2 ecosystems, it runs unchanged through the
+[compat shims](#use-the-libraries-you-already-know) — no rewrite needed.
 
 The firmware is fully event-driven on FreeRTOS: serial TX, command handling
 and the network stack run as separate tasks, so a blocking Wi-Fi/BLE
@@ -165,7 +204,7 @@ I2C OLEDs (SSD1306 / SH1106 / the ubiquitous clones) are supported directly —
 `pip install "python-esp-bridge[oled]"`, draw with PIL:
 
 ```python
-from espbridge.oled import OLED
+from espbridge.drivers.oled import OLED
 
 oled = OLED(esp)                # bus init + auto-detect + clone-safe power-up
 with oled.draw() as d:          # d is a PIL ImageDraw

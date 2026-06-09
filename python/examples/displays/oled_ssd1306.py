@@ -1,6 +1,6 @@
 """I2C OLED hello-world — direct espbridge support, zero configuration.
 
-espbridge.oled.OLED drives true SSD1306s *and* the common SH1106 clones sold
+espbridge.drivers.oled.OLED drives true SSD1306s *and* the common SH1106 clones sold
 as "SSD1306" (the Arduino Adafruit_SSD1306 equivalent — no code on the ESP32,
 drawing is plain PIL). Only genuine 1.3" SH1106 modules need a tweak:
 
@@ -9,15 +9,16 @@ drawing is plain PIL). Only genuine 1.3" SH1106 modules need a tweak:
 
 Wiring (classic DevKit defaults): SDA -> GPIO21, SCL -> GPIO22, VCC -> 3V3, GND.
 """
+
 import sys
 import time
 
 from espbridge import Bridge
-from espbridge.oled import OLED
+from espbridge.drivers.oled import OLED
 
 colstart = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 
-with Bridge() as esp:
+with Bridge(ble=False) as esp:
     oled = OLED(esp, colstart=colstart)
 
     # --- the Arduino sketch, line for line ---------------------------------

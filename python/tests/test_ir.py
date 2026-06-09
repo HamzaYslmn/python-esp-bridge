@@ -1,5 +1,5 @@
 """IR NEC codec: encode/decode roundtrip + receiver plumbing."""
-from espbridge.ir import IrReceiver, IrSender, decode_nec, nec_symbols
+from espbridge.drivers.ir import IrReceiver, IrSender, decode_nec, nec_symbols
 
 
 def test_nec_roundtrip():

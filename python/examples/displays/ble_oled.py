@@ -15,7 +15,7 @@ import sys
 import time
 
 from espbridge import Bridge
-from espbridge.oled import OLED
+from espbridge.drivers.oled import OLED
 
 colstart = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 

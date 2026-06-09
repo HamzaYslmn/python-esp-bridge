@@ -7,7 +7,7 @@ Identical to luma on a Raspberry Pi except the serial interface line:
     uv run luma/oled.py ssd1306    # true SSD1306
 
 For panel adjustments (contrast, vertical offset, mirroring, clone column
-offset) use the native driver instead — espbridge.oled.OLED has a named
+offset) use the native driver instead — espbridge.drivers.oled.OLED has a named
 method for each: see ../oled_ssd1306.py.
 """
 import sys

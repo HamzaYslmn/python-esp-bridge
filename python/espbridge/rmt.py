@@ -1,7 +1,7 @@
 """Generic RMT pulse-train play/capture.
 
 The firmware only moves symbols; device protocols live in Python on top of
-this (espbridge.neopixel, .ir, .dht, .hcsr04, .stepper). A symbol is
+this (espbridge.drivers.neopixel / .ir / .dht / .hcsr04 / .stepper). A symbol is
 ``(level, ticks)`` with ticks in units of ``1/tick_hz`` seconds (1..0x7FFF).
 """
 from __future__ import annotations

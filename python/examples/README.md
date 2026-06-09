@@ -40,6 +40,11 @@ Without uv: `pip install -e "..[oled,ble]"` once, then `python basics/blink.py`.
 | `can_dump.py` | CAN bus monitor + periodic frame (TWAI, needs a transceiver) |
 | `i2s_record.py` | record an I2S MEMS mic to a WAV file on the host |
 
+These drivers are pure Python over the bridge's primitives — **your own device
+is the same pattern, no firmware change**. See
+[`../../docs/DRIVERS.md`](../../docs/DRIVERS.md) for writing/registering one
+(`esp.<name>(...)`), and `espbridge drivers` to list what's available.
+
 ## system/ — on-board storage, sleep, firmware updates
 
 | example | shows |
@@ -78,7 +83,7 @@ The Bluetooth password defaults to `espbridge`; change it by passing it to
 
 | example | shows |
 |---|---|
-| `oled_ssd1306.py` | SSD1306/SH1106 OLED via `espbridge.oled.OLED` — auto-handles the common clones, PIL drawing |
+| `oled_ssd1306.py` | SSD1306/SH1106 OLED via `espbridge.drivers.oled.OLED` — auto-handles the common clones, PIL drawing |
 | `ble_oled.py` | the same display driven **over Bluetooth** — no COM port at all |
 
 ## compat/ — ecosystem integrations (espbridge.compat)

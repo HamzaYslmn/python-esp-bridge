@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from . import __version__
 from ._log import log
@@ -26,14 +27,28 @@ def _print_info(esp: Bridge) -> None:
     print(f"free heap : {heap['free']} (min {heap['min_free']})")
 
 
+def _force_utf8_output() -> None:
+    """Print UTF-8 regardless of the console's locale (Windows defaults to cp1252,
+    which mangles the em dashes / box characters in our output)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):  # not a reconfigurable TextIO (e.g. piped/redirected)
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_output()
     ap = argparse.ArgumentParser(prog="espbridge",
                                  description="python-esp-bridge host tool")
     ap.add_argument("--version", action="version", version=f"espbridge {__version__}")
     ap.add_argument("-p", "--port", help="serial port (default: auto-detect)")
     ap.add_argument("-n", "--name", help="select device by stored name")
     ap.add_argument("-b", "--ble", nargs="?", const=True, metavar="NAME_OR_MAC",
-                    help="connect over Bluetooth instead of USB")
+                    help="force Bluetooth (optionally to a named/MAC device); "
+                         "the default already prefers Bluetooth")
+    ap.add_argument("--usb", action="store_true",
+                    help="USB serial only — disable Bluetooth")
     ap.add_argument("--password", help="Bluetooth link password "
                                        "(default: 'espbridge')")
     ap.add_argument("--no-baud-upgrade", action="store_true",
@@ -46,12 +61,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="scan for bridges advertising over Bluetooth")
     sub.add_parser("info", help="connect and print firmware/chip info (default; "
                                 "shows every device when several are attached)")
+    sub.add_parser("drivers", help="list registered device drivers "
+                                   "(bundled + installed plugins)")
     p_name = sub.add_parser("set-name", help="store a device name on the ESP32 (NVS)")
     p_name.add_argument("new_name", help="name to assign (max 32 bytes)")
     args = ap.parse_args(argv)
 
     kwargs = dict(upgrade_baud=not args.no_baud_upgrade)
-    if args.ble:
+    if args.usb:
+        kwargs["ble"] = False
+    elif args.ble:
         kwargs["ble"] = args.ble
     if args.password is not None:
         kwargs["password"] = args.password
@@ -68,6 +87,19 @@ def main(argv: list[str] | None = None) -> int:
             for d in devs:
                 print(f"{d.device_name or '-':<16s} {d.mac or '-':<18s} "
                       f"{d.name:<32s} {d.rssi} dBm")
+            return 0
+
+        if args.cmd == "drivers":
+            from .drivers import driver_names, driver_source
+
+            names = driver_names()
+            if not names:
+                print("no drivers registered")
+                return 0
+            width = max(len(n) for n in names) + len("esp.(...)")
+            for n in names:
+                print(f"{'esp.' + n + '(...)':<{width}}  {driver_source(n)}")
+            print("\nWrite or install your own — see docs/DRIVERS.md")
             return 0
 
         if args.cmd == "ports":

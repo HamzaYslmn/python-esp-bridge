@@ -2,7 +2,7 @@
 
 Pulse timing is generated on the ESP32; ramps and position live in Python.
 
-    from espbridge.stepper import Stepper
+    from espbridge.drivers.stepper import Stepper
     motor = Stepper(esp, step_pin=12, dir_pin=14)
     motor.move(400, speed=800, accel=1600)   # blocks until done
     motor.run(-200); ...; motor.stop()       # continuous
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from .rmt import Symbol
+from ..rmt import Symbol
 
 _PULSE = 10        # step-pulse high time, us (drivers need >=1-2 us)
 _MAX_SYM = 0x7FFF  # RMT symbol duration limit

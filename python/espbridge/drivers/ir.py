@@ -1,12 +1,12 @@
 """Infrared remote send/receive (NEC protocol + raw) over the RMT primitive.
 
-    from espbridge.ir import IrSender, IrReceiver
+    from espbridge.drivers.ir import IrSender, IrReceiver
     IrSender(esp, pin=4).send_nec(addr=0x00, command=0x45)
     addr, cmd = IrReceiver(esp, pin=15).receive()   # TSOP-style 38 kHz module
 """
 from __future__ import annotations
 
-from .rmt import Symbol
+from ..rmt import Symbol
 
 _TOL = 0.30  # +-30% pulse-width tolerance
 

@@ -124,11 +124,17 @@ class BridgeManager:
         with self._lock:
             self._teardown()
 
-    def volume(self, kind: str, **mount_kwargs):
-        """Lazily mount (and cache) a filesystem volume of the given kind."""
+    def volume(self, kind: str, *, remount: bool = False, **mount_kwargs):
+        """Mount (and cache) a filesystem volume of the given kind.
+
+        Lazy callers that just need *a* mount pass no kwargs and get the cached
+        volume. An explicit `fs_mount` passes remount=True so the pins/options
+        it was given are actually applied, instead of silently returning a
+        volume mounted earlier with different (or default) pins.
+        """
         with self._lock:
             vol = self._volumes.get(kind)
-            if vol is None:
+            if vol is None or remount:
                 vol = self.bridge().fs.mount(kind, **mount_kwargs)
                 self._volumes[kind] = vol
             return vol

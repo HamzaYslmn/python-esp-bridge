@@ -1,7 +1,7 @@
 """IR remote: print NEC codes from a TSOP receiver on GPIO 15, and
 re-send the last code out an IR LED on GPIO 4 when you press Enter."""
 from espbridge import Bridge
-from espbridge.ir import IrReceiver, IrSender
+from espbridge.drivers.ir import IrReceiver, IrSender
 
 with Bridge() as esp:
     rx = IrReceiver(esp, pin=15)

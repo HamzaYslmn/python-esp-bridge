@@ -126,8 +126,48 @@ def test_no_device_over_ble_or_serial_errors(monkeypatch):
     monkeypatch.setattr(bridge_mod, "find_ports", lambda: [])
     monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates",
                         staticmethod(lambda *a, **k: []))
-    with pytest.raises(NoDeviceError, match="Bluetooth or USB"):
+    with pytest.raises(NoDeviceError, match="no bridge found"):
         Bridge(upgrade_baud=False, reset_on_open=False)
+
+
+def _boom_ble(*a, **k):
+    raise AssertionError("ble=False must not attempt Bluetooth")
+
+
+def _no_ble(*a, **k):
+    raise NoDeviceError("no Bluetooth devices in range")
+
+
+def test_ble_false_disables_bluetooth_and_uses_serial(monkeypatch):
+    # ble=False must skip Bluetooth entirely (not even probe it) and use USB.
+    fakes = {"COM7": FakeFirmware(mac="aabbccddee0d")}
+    monkeypatch.setattr(bridge_mod, "find_ports",
+                        lambda: [PortInfo(d, "cp210x", "") for d in fakes])
+
+    def fake_serial(port, baud=115200, usb_chip=None):
+        fakes[port].boot()
+        return fakes[port].transport
+
+    monkeypatch.setattr(bridge_mod, "SerialTransport", fake_serial)
+    monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates", staticmethod(_boom_ble))
+    b = Bridge(ble=False, upgrade_baud=False, reset_on_open=False)
+    try:
+        assert b.info.mac == "aa:bb:cc:dd:ee:0d"
+    finally:
+        b.close()
+
+
+def test_ble_named_target_does_not_fall_back_to_serial(monkeypatch):
+    # A serial board is present, but ble="missing" wants that BLE device only —
+    # it must raise rather than silently connecting over USB.
+    monkeypatch.setattr(bridge_mod, "find_ports",
+                        lambda: [PortInfo("COM7", "cp210x", "")])
+    monkeypatch.setattr(bridge_mod, "SerialTransport",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("named BLE target must not use serial")))
+    monkeypatch.setattr(bridge_mod.Bridge, "_ble_candidates", staticmethod(_no_ble))
+    with pytest.raises(NoDeviceError):
+        Bridge(ble="missing", upgrade_baud=False, reset_on_open=False)
 
 
 def test_selector_no_match_lists_candidates(monkeypatch):

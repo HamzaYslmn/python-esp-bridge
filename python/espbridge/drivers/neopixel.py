@@ -1,7 +1,7 @@
 """WS2812/SK6812 addressable LED strips, driven through the RMT primitive.
 
     from espbridge import Bridge
-    from espbridge.neopixel import NeoPixel
+    from espbridge.drivers.neopixel import NeoPixel
 
     with Bridge() as esp:
         strip = NeoPixel(esp, pin=5, n=30)
@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from . import constants as C
+from .. import constants as C
 
 # 100 ns ticks; WS2812B timing: 0-bit = 0.4 us high + 0.85 us low,
 # 1-bit = 0.8 us high + 0.45 us low (the >50 us latch happens naturally

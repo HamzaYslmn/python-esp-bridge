@@ -1,6 +1,6 @@
 [project]
 name = "python-esp-bridge"
-version = "0.4.0"
+version = "0.5.0"
 description = "Control every ESP32 peripheral from Python over USB serial or Bluetooth — GPIO, ADC, DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE, ESP-NOW, RMT, 1-Wire, CAN, I2S, files, NVS, OTA"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,12 @@ Homepage = "https://github.com/HamzaYslmn/python-esp-bridge"
 [project.scripts]
 espbridge = "espbridge.cli:main"
 espbridge-mcp = "espbridge.mcp.server:main"
+
+# Third-party device drivers: a package advertises its driver classes in this
+# group and they become available as esp.<name>(...) on every bridge, with no
+# import or register_driver() call. See docs/DRIVERS.md.
+#   [project.entry-points."espbridge.drivers"]
+#   mydevice = "my_package.module:MyDriver"
 
 [dependency-groups]
 dev = ["pytest>=8", "pillow>=10", "gpiozero>=2", "fastmcp>=2.3"]
