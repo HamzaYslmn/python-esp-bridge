@@ -343,7 +343,7 @@ enum ChipModel : uint8_t {
 #define OTA_END         CMD(MOD_OTA, 0x03) // commit u8; commit=1 -> reply, flush, reboot into new fw
 #define OTA_ABORT       CMD(MOD_OTA, 0x04)
 
-#define OTA_CHUNK 1024  // recommended bytes per OTA_WRITE
+#define OTA_CHUNK (MAX_PAYLOAD - 8)  // host chunk size per OTA_WRITE; firmware accepts up to MAX_PAYLOAD
 
 // CAM (compile-time opt-in: BRIDGE_ENABLE_CAM; supported on esp32/s2/s3 with PSRAM).
 // Pin assignments and sensor property ids are defined in Python:
