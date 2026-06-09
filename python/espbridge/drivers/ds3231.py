@@ -24,7 +24,7 @@ Temperature (updated every 64 s):
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 import struct
 
@@ -49,10 +49,7 @@ class DS3231:
         if address != _ADDR:
             raise ValueError(f"DS3231 address {address:#04x} invalid "
                              f"(fixed at 0x68)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
 
     def now(self) -> tuple[int, int, int, int, int, int, int]:
         """Read the clock; returns (year, month, day, hour, minute, second, weekday).

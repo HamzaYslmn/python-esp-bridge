@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Callable
 
 from . import constants as C
-from .errors import RemoteError, UnsupportedError
+from .errors import RemoteError, needs_fw
+from .protocol import chunks
 
 
 class Ota:
@@ -44,15 +45,11 @@ class Ota:
         try:
             self._b.request(C.OTA_BEGIN, struct.pack(">I", len(data)), timeout=15.0)
         except RemoteError as e:
-            if e.status == C.Status.UNSUPPORTED:
-                raise UnsupportedError(
-                    "no OTA partition — flash once over USB with a dual-app "
-                    "scheme (Arduino: Partition Scheme > 'Minimal SPIFFS')"
-                ) from None
-            raise
+            needs_fw(e, "no OTA partition — flash once over USB with a dual-app "
+                        "scheme (Arduino: Partition Scheme > 'Minimal SPIFFS')",
+                     status=C.Status.UNSUPPORTED)
         written = 0
-        for i in range(0, len(data), C.OTA_CHUNK):
-            chunk = data[i : i + C.OTA_CHUNK]
+        for chunk in chunks(data, C.OTA_CHUNK):
             r = self._b.request(C.OTA_WRITE, chunk, timeout=15.0)
             written = struct.unpack(">I", r)[0]
             if progress:

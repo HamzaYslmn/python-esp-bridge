@@ -15,6 +15,7 @@ from __future__ import annotations
 import struct
 
 from . import constants as C
+from .protocol import CHUNK
 
 # framesize_t values (esp32-camera)
 FRAMESIZE_QQVGA, FRAMESIZE_QCIF, FRAMESIZE_HQVGA, FRAMESIZE_240X240, \
@@ -36,9 +37,6 @@ PRESETS: dict[str, list[int]] = {
     "xiao-s3-sense": [-1, -1, 10, 40, 39, 48, 11, 12, 14, 16, 18, 17, 15, 38, 47, 13],
     "freenove-s3":   [-1, -1, 15, 4, 5, 16, 17, 18, 12, 10, 8, 9, 11, 6, 7, 13],
 }
-
-_CHUNK = C.MAX_PAYLOAD - 8
-
 
 class Camera:
     """JPEG snapshots from OV-series sensors (reached via ``esp.camera``).
@@ -74,7 +72,7 @@ class Camera:
         pos = 0
         while pos < total:
             chunk = self._b.request(
-                C.CAM_READ, struct.pack(">IH", pos, min(_CHUNK, total - pos)))
+                C.CAM_READ, struct.pack(">IH", pos, min(CHUNK, total - pos)))
             if not chunk:
                 break
             out[pos:pos + len(chunk)] = chunk

@@ -27,7 +27,7 @@ Key registers (all addresses 7-bit, big-endian 16-bit sample words):
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 import struct
 
@@ -57,10 +57,7 @@ class MPU6050:
             raise ValueError("accel_range must be 0..3 (±2/4/8/16 g)")
         if gyro_range not in _GYRO_SCALE:
             raise ValueError("gyro_range must be 0..3 (±250/500/1000/2000 dps)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
         self._accel_scale = _ACCEL_SCALE[accel_range]
         self._gyro_scale = _GYRO_SCALE[gyro_range]
         # Clear SLEEP (PWR_MGMT_1 <- 0x00) so the sensors start sampling, then

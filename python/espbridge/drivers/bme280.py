@@ -25,7 +25,7 @@ they are clearer and accurate to the sensor's own resolution.
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 import struct
 import time
@@ -60,10 +60,7 @@ class BME280:
         if not 0x76 <= address <= 0x77:
             raise ValueError(f"BME280 address {address:#04x} out of range "
                              f"(0x76-0x77)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
 
         self.chip_id = self._i2c.read_reg(self._addr, _REG_ID, 1, self._bus)[0]
         if self.chip_id not in (_CHIP_ID_BME280, _CHIP_ID_BMP280):

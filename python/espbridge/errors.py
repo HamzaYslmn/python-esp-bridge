@@ -65,3 +65,16 @@ class RemoteError(BridgeError):
         hint = _STATUS_HINTS.get(self.status)
         super().__init__(f"{cmd_name(cmd)} failed: {name}"
                          + (f" — {hint}" if hint else ""))
+
+
+def needs_fw(exc: RemoteError, message: str,
+             *, status: Status = Status.UNKNOWN_CMD) -> None:
+    """Inside an ``except RemoteError`` block, turn a 'feature missing' status
+    into a friendly UnsupportedError; re-raise anything else unchanged::
+
+        except RemoteError as e:
+            needs_fw(e, "gpio.status() needs firmware >= 0.3.6 — reflash")
+    """
+    if exc.status == status:
+        raise UnsupportedError(message) from None
+    raise exc

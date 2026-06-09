@@ -15,8 +15,7 @@ from __future__ import annotations
 import struct
 
 from . import constants as C
-
-_CHUNK = C.MAX_PAYLOAD - 8
+from .protocol import CHUNK, chunks
 
 
 class I2s:
@@ -60,8 +59,7 @@ class I2s:
         """Play raw PCM (little-endian, interleaved when stereo); blocks as
         the DMA queue fills — that's the playback pacing."""
         written = 0
-        for i in range(0, len(pcm), _CHUNK):
-            chunk = pcm[i : i + _CHUNK]
+        for chunk in chunks(pcm):
             r = self._b.request(C.I2S_WRITE, chunk, timeout=10.0)
             w = struct.unpack(">H", r)[0]
             written += w
@@ -74,11 +72,11 @@ class I2s:
         if seconds is not None:
             n = int(seconds * self._rate) * self._frame
         if n is None:
-            n = _CHUNK
+            n = CHUNK
         parts: list[bytes] = []
         got = 0
         while got < n:
-            want = min(_CHUNK, n - got)
+            want = min(CHUNK, n - got)
             chunk = self._b.request(C.I2S_READ, struct.pack(">H", want),
                                     timeout=10.0)
             if not chunk:

@@ -94,3 +94,19 @@ def init_if_pins(i2c, *, bus: int = 0, sda: int | None = None,
         return
     pins = {k: v for k, v in (("sda", sda), ("scl", scl)) if v is not None}
     i2c.init(bus=bus, **pins)
+
+
+def bind_i2c(bridge, address: int, *, bus: int = 0,
+             sda: int | None = None, scl: int | None = None):
+    """Wire an I2C device driver to a bus; returns ``(i2c, address, bus)``.
+
+    Collapses the identical preamble every bundled I2C driver shares::
+
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address,
+                                                     bus=bus, sda=sda, scl=scl)
+
+    Brings the bus up (``init()``) only when sda/scl are given, otherwise assumes
+    a prior ``esp.i2c.init()``."""
+    i2c = bridge.i2c
+    init_if_pins(i2c, bus=bus, sda=sda, scl=scl)
+    return i2c, address, bus

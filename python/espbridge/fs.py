@@ -14,9 +14,8 @@ from __future__ import annotations
 import struct
 
 from . import constants as C
-from .protocol import lp
+from .protocol import lp, CHUNK, chunks
 
-_CHUNK = C.MAX_PAYLOAD - 8
 _IDS = {"littlefs": 0, "sd": 1, "sdmmc": 2}
 _MODES = {"r": 0, "w": 1, "a": 2}
 
@@ -35,7 +34,7 @@ class RemoteFile:
         parts: list[bytes] = []
         got = 0
         while n is None or got < n:
-            want = _CHUNK if n is None else min(_CHUNK, n - got)
+            want = CHUNK if n is None else min(CHUNK, n - got)
             chunk = self._b.request(C.FS_READ, struct.pack(">BH", self._fd, want))
             parts.append(chunk)
             got += len(chunk)
@@ -49,8 +48,7 @@ class RemoteFile:
         Raises OSError on a short write (e.g. filesystem full).
         """
         written = 0
-        for i in range(0, len(data), _CHUNK):
-            chunk = data[i : i + _CHUNK]
+        for chunk in chunks(data):
             r = self._b.request(C.FS_WRITE, bytes([self._fd]) + chunk)
             w = struct.unpack(">H", r)[0]
             written += w

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from . import constants as C
 from .analog import ATTEN
-from .errors import RemoteError, UnsupportedError
+from .errors import RemoteError, needs_fw
 
 # source ids (must match mod_watch.cpp)
 SOURCES = {"adc": 0, "adc_raw": 0, "adc_mv": 1, "gpio": 2, "touch": 3, "heap": 4}
@@ -163,11 +163,7 @@ class Watch:
         except RemoteError as e:
             self._cbs.pop(id, None)
             self._ids.discard(id)
-            if e.status == C.Status.UNKNOWN_CMD:
-                raise UnsupportedError(
-                    "watch engine needs bridge firmware >= 0.5.0 — reflash"
-                ) from None
-            raise
+            needs_fw(e, "watch engine needs bridge firmware >= 0.5.0 — reflash")
         return id
 
     def remove(self, id: int) -> None:

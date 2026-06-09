@@ -5,7 +5,7 @@ import struct
 from dataclasses import dataclass
 
 from . import constants as C
-from .errors import BridgeError, RemoteError, UnsupportedError
+from .errors import BridgeError, RemoteError, needs_fw
 
 MODES = {
     "input": 0,
@@ -130,11 +130,7 @@ class Gpio:
         try:
             r = self._b.request(C.GPIO_STATUS, bytes([pin]))
         except RemoteError as e:
-            if e.status == C.Status.UNKNOWN_CMD:
-                raise UnsupportedError(
-                    "gpio.status() needs bridge firmware >= 0.3.6 — reflash"
-                ) from None
-            raise
+            needs_fw(e, "gpio.status() needs bridge firmware >= 0.3.6 — reflash")
         level, mode = r[0], r[1]
         freq, duty = struct.unpack_from(">II", r, 2)
         return _pin_status(pin, level, mode, freq, duty)
@@ -146,11 +142,7 @@ class Gpio:
         try:
             r = self._b.request(C.GPIO_DUMP)
         except RemoteError as e:
-            if e.status == C.Status.UNKNOWN_CMD:
-                raise UnsupportedError(
-                    "gpio.dump() needs bridge firmware >= 0.3.7 — reflash"
-                ) from None
-            raise
+            needs_fw(e, "gpio.dump() needs bridge firmware >= 0.3.7 — reflash")
         out, pos = [], 1
         for _ in range(r[0]):
             pin, mode, level = r[pos], r[pos + 1], r[pos + 2]

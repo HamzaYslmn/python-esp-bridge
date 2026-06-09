@@ -33,7 +33,7 @@ https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 import struct
 import time
@@ -61,10 +61,7 @@ class PCA9685:
         if not 0x40 <= address <= 0x7F:
             raise ValueError(f"PCA9685 address {address:#04x} out of range "
                              f"(0x40-0x7F)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
         self._freq = 0
         # Enable auto-increment and wake (clear SLEEP) so multi-byte LED writes
         # land in consecutive registers.

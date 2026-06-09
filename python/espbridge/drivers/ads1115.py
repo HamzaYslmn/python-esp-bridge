@@ -28,7 +28,7 @@ Config register layout (datasheet TI SBAS444, Table 8):
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 import struct
 import time
@@ -77,10 +77,7 @@ class ADS1115:
         if not 0x48 <= address <= 0x4B:
             raise ValueError(f"ADS1115 address {address:#04x} out of range "
                              f"(0x48-0x4B)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
         self._gain = gain          # full-scale +/- volts for the chosen PGA
         self._data_rate = data_rate
 

@@ -129,6 +129,15 @@ def decode_frame(encoded: bytes) -> Frame:
 
 # ---- wire-format helpers shared by the sub-API modules ---------------------------
 
+CHUNK = MAX_PAYLOAD - 8  # max blob bytes per request (leaves room for header + CRC)
+
+
+def chunks(data, size: int = CHUNK):
+    """Yield ``data`` in ``size``-byte slices — the splitting loop the blob write
+    paths (fs/i2s/ota) share."""
+    for i in range(0, len(data), size):
+        yield data[i:i + size]
+
 
 def lp(s: str | bytes) -> bytes:
     """Length-prefixed string (len u8 | bytes) — the protocol's string format."""

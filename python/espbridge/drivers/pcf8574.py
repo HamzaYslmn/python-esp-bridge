@@ -19,7 +19,7 @@ A0..A2 strap pins.
 """
 from __future__ import annotations
 
-from ..i2c import init_if_pins
+from ..i2c import bind_i2c
 
 
 class PCF8574:
@@ -28,10 +28,7 @@ class PCF8574:
         if not 0x20 <= address <= 0x3F:
             raise ValueError(f"PCF8574 address {address:#04x} out of range "
                              f"(0x20-0x27 or 0x38-0x3F)")
-        self._i2c = bridge.i2c
-        self._addr = address
-        self._bus = bus
-        init_if_pins(self._i2c, bus=bus, sda=sda, scl=scl)
+        self._i2c, self._addr, self._bus = bind_i2c(bridge, address, bus=bus, sda=sda, scl=scl)
         # Power-on state of the latch is all-high (all pins usable as inputs).
         self._state = 0xFF
 
