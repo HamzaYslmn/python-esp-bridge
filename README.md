@@ -31,12 +31,20 @@ are implemented in Python where they are easy to read, test and extend.
    (Arduino IDE Library Manager), open *File → Examples → python esp bridge →
    Bridge*, pick partition scheme *Huge APP*, hit Upload. The whole sketch is
    `EspBridge.begin();`. Details: [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
-2. **Install the Python library** on the Pi/PC:
+2. **Install the Python library** on the Pi/PC — with pip:
 
    ```sh
    pip install python-esp-bridge            # USB + Bluetooth, both included
    pip install "python-esp-bridge[oled]"    # + Pillow, for OLED displays
    pip install "python-esp-bridge[mcp]"     # + the MCP server (espbridge-mcp)
+   ```
+
+   ...or with [uv](https://docs.astral.sh/uv/):
+
+   ```sh
+   uv add python-esp-bridge                 # into a uv project (USB + Bluetooth)
+   uv add "python-esp-bridge[oled]"         # with an extra (oled / mcp / all)
+   uv pip install python-esp-bridge         # ...or into the active environment
    ```
 
    Bluetooth works out of the box (no extra); the old `[ble]` extra is kept as
