@@ -88,7 +88,7 @@ args — to the `args` array in a JSON config, or after `--` in the
 
 - `-p COM7` — a fixed serial port
 - `-n relays` — select a board by its stored name
-- `-b` — Bluetooth instead of USB (also install the `[ble]` extra)
+- `-b` — Bluetooth instead of USB (built in; no extra needed)
 - `--transport http --host 0.0.0.0 --port-num 8000` — serve over HTTP for remote / multi-client use
 
 `espbridge-mcp --help` lists every flag. The server connects at startup and

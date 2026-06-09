@@ -34,9 +34,13 @@ are implemented in Python where they are easy to read, test and extend.
 2. **Install the Python library** on the Pi/PC:
 
    ```sh
-   pip install python-esp-bridge          # USB only
-   pip install "python-esp-bridge[ble]"   # + Bluetooth support
+   pip install python-esp-bridge            # USB + Bluetooth, both included
+   pip install "python-esp-bridge[oled]"    # + Pillow, for OLED displays
+   pip install "python-esp-bridge[mcp]"     # + the MCP server (espbridge-mcp)
    ```
+
+   Bluetooth works out of the box (no extra); the old `[ble]` extra is kept as
+   a no-op for back-compat.
 
 3. **Go:**
 

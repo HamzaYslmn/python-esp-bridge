@@ -13,7 +13,8 @@ uv run displays/oled_ssd1306.py
 uv run wireless/ble_blink.py      # no USB needed
 ```
 
-Without uv: `pip install -e "..[oled,ble]"` once, then `python basics/blink.py`.
+Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
+(Bluetooth is included in the base install; `[oled]` just adds Pillow).
 
 ## basics/ — core peripherals over USB
 
