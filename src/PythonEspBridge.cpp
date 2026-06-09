@@ -3,8 +3,28 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
+#include <esp_system.h>
 
 EspBridgeClass EspBridge;
+
+// Why the chip last reset — logged at boot so a stall that resets the board is
+// diagnosable on reconnect (brownout => power; task watchdog => a task starved;
+// panic => firmware bug) instead of a mystery.
+static const char* reset_reason_str() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "power-on";
+    case ESP_RST_EXT:       return "external reset";
+    case ESP_RST_SW:        return "software reset";
+    case ESP_RST_PANIC:     return "panic/exception";
+    case ESP_RST_INT_WDT:   return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:  return "task watchdog (a task starved the CPU)";
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
+    case ESP_RST_BROWNOUT:  return "brownout (supply voltage dropped)";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "unknown";
+  }
+}
 
 void EspBridgeClass::begin(const char* password, bool ble) {
   // Redirect all IDF Wi-Fi and Bluetooth log output to SYS_LOG protocol events
@@ -26,6 +46,10 @@ void EspBridgeClass::begin(const char* password, bool ble) {
   gpio_init();
   wifi_init();
   proto_start();   // spawn the bridge_tx, bridge_rx, and bridge_net FreeRTOS tasks
+
+  { char msg[64];
+    snprintf(msg, sizeof(msg), "boot: last reset = %s", reset_reason_str());
+    proto_log(1, msg); }
 
   // Wi-Fi and ESP-NOW stay off until the host sends its first radio command
   // (lazy init). A board that only uses BLE therefore never loads the Wi-Fi

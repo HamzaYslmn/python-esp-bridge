@@ -1,6 +1,11 @@
 """Bridge under heavy multi-threaded use: flow-control accounting, the
-sub-API creation race, and many threads sharing one connection."""
+sub-API creation race, many threads sharing one connection, and the
+dead-link detection that lets BridgeManager auto-reconnect."""
 import threading
+
+import pytest
+
+from espbridge import constants as C
 
 
 def test_ack_releases_only_its_own_bytes(bridge):
@@ -73,3 +78,20 @@ def test_many_threads_share_one_bridge(bridge):
 
     assert not errors, errors
     assert bridge._unacked == 0              # accounting balanced after the storm
+
+
+def test_is_alive_flips_with_link_dead(bridge):
+    assert bridge.is_alive()
+    bridge._link_dead = True
+    assert not bridge.is_alive()
+
+
+def test_timeout_with_failed_ping_marks_link_dead(fw, bridge):
+    """A request timeout whose confirming ping also fails => board gone =>
+    is_alive() goes False (so BridgeManager reconnects)."""
+    bridge.timeout = 0.15
+    bridge.retries = 0
+    fw.blackhole_cmds.update({C.SYS_FREE_HEAP, C.SYS_PING})  # board stops answering
+    with pytest.raises(Exception):
+        bridge.free_heap()
+    assert not bridge.is_alive()

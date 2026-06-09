@@ -319,6 +319,10 @@ class Bridge:
         self._handlers_lock = threading.Lock()
         self._ready = threading.Event()
         self._closing = False
+        # Set once a request times out AND a confirming ping also fails: the
+        # board stopped answering (reset/brown-out/unplug). BridgeManager treats
+        # the link as stale and reconnects on the next access. See is_alive().
+        self._link_dead = False
         self.info = None
         self.on_event(C.SYS_READY, self._on_ready)
         self.on_event(C.SYS_LOG, self._on_sys_log)
@@ -436,6 +440,13 @@ class Bridge:
     def is_closing(self) -> bool:
         """True once close() has been called (the link is down or going down)."""
         return self._closing
+
+    def is_alive(self) -> bool:
+        """False once the link is closing, or the board has stopped answering (a
+        request timed out and a follow-up ping confirmed the link is gone — a
+        reset, brown-out, or unplug). BridgeManager / espbridge.connect() use
+        this to transparently reconnect."""
+        return not self._closing and not self._link_dead
 
     def __enter__(self) -> "Bridge":
         return self
@@ -636,6 +647,9 @@ class Bridge:
                         "Bridge(retries=...) re-sends safe commands "
                         "automatically")
             except Exception:  # incl. transport write errors on a dead link
+                # Confirming ping failed too: the board is gone, not just a
+                # dropped frame. Flag the link dead so BridgeManager reconnects.
+                self._link_dead = True
                 msg += (" — and the bridge no longer answers pings: link lost, "
                         "board reset/brown-out, or firmware stuck (power and "
                         "cable/radio range are the usual suspects)")

@@ -234,11 +234,17 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
 
 static void net_task(void*) {
   Req r;
+  uint16_t spins = 0;
   for (;;) {
     // Wake at least every 2 ms to poll sockets / scan completion.
     if (xQueueReceive(netq, &r, pdMS_TO_TICKS(2)) == pdTRUE) {
       net_dispatch(r.cmd, r.seq, r.buf, r.len);
       free(r.buf);
+      // A continuously-fed queue never hits the 2 ms timeout above, so yield
+      // periodically to keep the idle task (and its Task-WDT) alive.
+      if (++spins >= RX_YIELD_EVERY) { spins = 0; vTaskDelay(1); }
+    } else {
+      spins = 0;  // the 2 ms receive timeout already yielded
     }
     wifi_poll();
     net_poll();
@@ -384,11 +390,22 @@ static bool proto_pump_rx() {
 }
 
 static void rx_task(void*) {
+  uint16_t spins = 0;
   for (;;) {
     bool busy = proto_pump_rx();
     gpio_poll();   // ISR edge queue -> events
     uart_poll();   // secondary UART RX -> events
-    if (!busy) vTaskDelay(1);
+    // Yield regularly. Idle -> sleep a tick. Under sustained traffic we still
+    // must yield every RX_YIELD_EVERY loops, or this priority-10 task starves
+    // the core's idle task and trips the idle Task-WDT — a reset that looks
+    // like a random stall under heavy load.
+    if (!busy) {
+      spins = 0;
+      vTaskDelay(1);
+    } else if (++spins >= RX_YIELD_EVERY) {
+      spins = 0;
+      vTaskDelay(1);
+    }
   }
 }
 

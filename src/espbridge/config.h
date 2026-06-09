@@ -178,4 +178,10 @@
 // one is rejected with ST_BUSY; the cost is just queue slots (Req structs).
 #define NETQ_DEPTH      32
 
+// rx_task / net_task yield a scheduler tick at least this often even under
+// continuous traffic. Without it a busy high-priority bridge task starves the
+// core's idle task and trips the idle Task-WDT — a reset that looks like a
+// random stall under sustained load. Cost: ~1 ms per this many messages.
+#define RX_YIELD_EVERY  48
+
 #define BLE_MAX_CHARS   16

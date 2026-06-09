@@ -37,11 +37,21 @@ class BridgeManager:
     link is opened lazily on first use and transparently reopened if it drops.
     """
 
-    def __init__(self, **connect_kwargs):
+    def __init__(self, *, keepalive: float | None = None, **connect_kwargs):
         # Drop None values so they don't override Bridge's own defaults.
         self._kwargs = {k: v for k, v in connect_kwargs.items() if v is not None}
         self._bridge: Bridge | None = None
         self._lock = threading.RLock()
+        # Optional heartbeat: ping the link every `keepalive` seconds so an idle
+        # connection is kept warm and a silent drop is noticed (and reconnected)
+        # promptly, instead of only on the next request. See _keepalive_loop.
+        self._keepalive = keepalive
+        self._ka_stop = threading.Event()
+        self._ka_thread: threading.Thread | None = None
+        if keepalive and keepalive > 0:
+            self._ka_thread = threading.Thread(
+                target=self._keepalive_loop, name="espbridge-keepalive", daemon=True)
+            self._ka_thread.start()
 
     @property
     def connect_kwargs(self) -> dict:
@@ -49,13 +59,16 @@ class BridgeManager:
 
     @staticmethod
     def _stale(b: Bridge | None) -> bool:
-        return b is None or b.is_closing()
+        # Reconnect if there's no link, it's closing, or the board stopped
+        # answering (is_alive() went False after a reset / brown-out / unplug).
+        return b is None or not b.is_alive()
 
     def is_connected(self) -> bool:
         return not self._stale(self._bridge)
 
     def bridge(self) -> Bridge:
-        """The live Bridge, auto-connecting with the configured settings.
+        """The live Bridge, connecting on first use and **reconnecting if the
+        board reset / browned out / was unplugged** (see Bridge.is_alive).
 
         Fast path: a healthy link is returned without taking the lock (a single
         reference read is atomic under the GIL), so concurrent callers never
@@ -80,8 +93,30 @@ class BridgeManager:
             self._bridge = Bridge(**kwargs)
             return self._bridge
 
+    def _keepalive_loop(self) -> None:
+        """Heartbeat: keep an *opened* link warm and self-heal a dropped one.
+
+        Pings the live link each interval; if it has gone stale (board reset /
+        brown-out / unplug) it reconnects. It deliberately does **not** open a
+        link that was never used or was explicitly :meth:`disconnect`-ed (those
+        leave ``_bridge`` None) — keepalive maintains a connection, it doesn't
+        force one into existence.
+        """
+        while not self._ka_stop.wait(self._keepalive):
+            b = self._bridge
+            if b is None:
+                continue                 # idle / disconnected — nothing to keep alive
+            try:
+                if self._stale(b):
+                    self.bridge()        # dropped while we held it -> reconnect now
+                else:
+                    b.ping()             # warm the live link / detect a fresh drop
+            except Exception:
+                pass                     # next tick re-evaluates and retries
+
     def disconnect(self) -> None:
-        """Close the link. A later :meth:`bridge`/:meth:`connect` reopens it."""
+        """Close the link. A later :meth:`bridge`/:meth:`connect` reopens it
+        (and the keepalive heartbeat, if any, keeps watching it)."""
         with self._lock:
             self._close_locked()
 
@@ -95,11 +130,18 @@ class BridgeManager:
                 pass
             self._bridge = None
 
+    def shutdown(self) -> None:
+        """Stop the keepalive heartbeat (if running) and close the link. Use
+        this for good when you're done with the manager; :meth:`disconnect` is
+        the lighter, reopenable close."""
+        self._ka_stop.set()
+        self.disconnect()
+
     def __enter__(self) -> "BridgeManager":
         return self
 
     def __exit__(self, *exc) -> None:
-        self.disconnect()
+        self.shutdown()
 
 
 # ---- process-wide shared links -------------------------------------------------
@@ -116,29 +158,35 @@ def _key(kwargs: dict):
         return None  # unhashable arg (e.g. transport=) -> never shared
 
 
-def shared_manager(**kwargs) -> BridgeManager:
+def shared_manager(*, keepalive: float | None = None, **kwargs) -> BridgeManager:
     """The process-wide :class:`BridgeManager` for these settings, created once
-    and reused. Unhashable settings (e.g. ``transport=``) get a fresh manager."""
+    and reused. Unhashable settings (e.g. ``transport=``) get a fresh manager.
+
+    ``keepalive`` (seconds) only takes effect when the manager is first created
+    for a given set of settings; it is not part of the sharing key."""
     key = _key(kwargs)
     if key is None:
-        return BridgeManager(**kwargs)
+        return BridgeManager(keepalive=keepalive, **kwargs)
     with _shared_lock:
         mgr = _shared.get(key)
         if mgr is None:
-            mgr = BridgeManager(**kwargs)
+            mgr = BridgeManager(keepalive=keepalive, **kwargs)
             _shared[key] = mgr
         return mgr
 
 
-def connect(**kwargs) -> Bridge:
+def connect(*, keepalive: float | None = None, **kwargs) -> Bridge:
     """Return a process-wide shared, thread-safe :class:`Bridge` for these
     settings, connecting on first use.
 
     Same settings -> same live link, so any thread / handler can call this and
     share one connection (a board's link can't be opened twice). Accepts the
     same keyword arguments as ``Bridge`` (``port=``, ``ble=``, ``name=``, ...).
+
+    Pass ``keepalive=<seconds>`` to run a background heartbeat that keeps the
+    link warm and transparently reconnects it if the board resets / drops.
     """
-    return shared_manager(**kwargs).bridge()
+    return shared_manager(keepalive=keepalive, **kwargs).bridge()
 
 
 def disconnect_all() -> None:
@@ -147,4 +195,4 @@ def disconnect_all() -> None:
         managers = list(_shared.values())
         _shared.clear()
     for mgr in managers:
-        mgr.disconnect()
+        mgr.shutdown()
