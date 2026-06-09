@@ -125,10 +125,12 @@ class BleTransport:
     needs_auth = True   # firmware requires SYS_AUTH before other commands
     usb_chip = None
     # Max unacknowledged fire-and-forget bytes before Bridge.send() inserts a
-    # ping fence. The firmware buffers BLE writes in a LINK_RX_BUF (6144 B)
-    # stream buffer that drains only as fast as commands execute; BLE delivers
+    # ping fence. The firmware buffers BLE writes in a LINK_RX_BUF stream
+    # buffer that drains only as fast as commands execute; BLE delivers
     # faster than a 1 KB I2C write executes (~23 ms at 400 kHz), so an
     # unthrottled burst overflows it and frames are dropped (-> host timeout).
+    # These defaults fit one max-size frame; Bridge._tune_flow_window() raises
+    # both to 8192 on fw >= 0.5.1 (bigger LINK_RX_BUF, ~3 frames pipeline).
     burst_window = 4096
     # Same cap, applied to *waited* requests too: pipelined/concurrent requests
     # (several threads, or large echoes) would otherwise flood the same buffer

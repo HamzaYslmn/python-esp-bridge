@@ -379,11 +379,15 @@ BLE_LINK_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # host -> board (writ
 BLE_LINK_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # board -> host (notify)
 DEFAULT_PASSWORD = "espbridge"  # firmware default; change via EspBridge.begin()
 
-# Safe upgraded baud per bridge chip (conservative defaults; CH340 can do 2M).
+# Upgraded baud per bridge chip — optimistic targets, not guarantees:
+# Bridge._upgrade_baud() probes the driver and ladders down to 921600 on
+# failure, so a board that can't do the listed rate still ends up fast.
+# cp210x: 1.5M verified on CP2102 (2M garbles, 3M driver-rejected).
+# ch340: divider does 2M not 1.5M. ch9102: rated to 4M; 1.5M is safe.
 UPGRADE_BAUD = {
-    "cp210x": 921600,
-    "ch340": 921600,
-    "ch9102": 921600,
+    "cp210x": 1500000,
+    "ch340": 2000000,
+    "ch9102": 1500000,
     "native": None,  # USB CDC ignores baud
     None: 921600,
 }

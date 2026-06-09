@@ -19,6 +19,7 @@
 #include <BLE2902.h>
 #include <esp_mac.h>
 #include <esp_bt.h>
+#include <esp_gap_ble_api.h>
 #include <esp32-hal-bt.h>
 #include <freertos/stream_buffer.h>
 
@@ -51,13 +52,12 @@ void bt_prepare_ble_only() {
 #endif
 }
 
-// Size of the RX stream buffer (host-to-board direction).
-// rx_task drains this nearly continuously; the worst-case stall is a slow
-// inline command handler such as an I2C scan (~80 ms ≈ about 4 KB at BLE
-// throughput). The buffer is intentionally lean: on a classic ESP32 running
-// Wi-Fi + Bluedroid + ESP-NOW, the heap margin is only a few KB, so every
-// KB allocated here is a KB that cannot be used for the radio stack.
-#define LINK_RX_BUF 6144
+// RX stream buffer (host-to-board). Holds ~3 max-size wire frames (2058 B
+// each) plus slack, so the host can pipeline that many; the Python side's BLE
+// max_inflight is this minus one frame (8192) on fw >= 0.5.1. Kept lean — on a
+// classic ESP32 with Wi-Fi + Bluedroid + ESP-NOW every KB here is one the radio
+// stack loses.
+#define LINK_RX_BUF 10240
 
 static bool enabled = false;
 static volatile bool connected = false;
@@ -70,30 +70,45 @@ static BLECharacteristic* tx_chr = nullptr;
 static StreamBufferHandle_t rx_buf = nullptr;
 static volatile uint32_t rx_dropped = 0;  // bytes lost to RX buffer overflow
 
-// Hands-off connection-parameter policy.
-// Hard-won lesson from running Wi-Fi + BLE + ESP-NOW simultaneously:
-// the peripheral must NOT initiate any link-layer control procedures after
-// connecting — specifically no esp_ble_gap_update_conn_params and no
-// esp_ble_gap_set_pkt_data_len.
-//
-// Issuing those requests immediately after connect races the central's own
-// setup procedures. Windows in particular runs several setup steps
-// (MTU exchange, service discovery, security) right at connect time, and if
-// our parameter-update request collides with any of those, the Link Layer
-// stalls: the connection appears "up", but ATT goes silent and the host
-// times out partway through the handshake.
-//
-// The correct approach: the central owns the connection parameters. We
-// publish our preferred connection interval passively in the advertisement
-// payload via setMinPreferred/setMaxPreferred (the Slave Connection Interval
-// Range AD type). A central that honours it applies fast parameters before
-// connecting; one that ignores it still works, just at its default interval.
+// Connection-parameter policy: hands-off at connect, tune after auth.
+// Initiating LL control procedures right after connecting races the central's
+// own setup (Windows runs MTU exchange / discovery / security then), stalling
+// the Link Layer — "up" but ATT-silent until the host times out. So at connect
+// we only advertise a preferred interval passively (setMin/MaxPreferred);
+// Windows ignores it and sits at ~20 ms.
+// After SYS_AUTH — the last handshake step, so connect-time setup is provably
+// done — we tune in a strict sequence, each step kicked off by the previous
+// one's completion event: (1) ask 7.5 ms, (2) fall back to 7.5-15 ms if
+// rejected, (3) data-length extension to 251-byte PDUs. Drops round trips from
+// ~40 ms to ~15 ms on Windows.
+static esp_bd_addr_t peer_bda;  // central's address, captured at connect
+static volatile uint8_t tune_state = 0;  // 0 idle, 1 asked 7.5ms, 2 asked range, 3 done
+
+static void request_conn_params(uint16_t min_int, uint16_t max_int) {
+  esp_ble_conn_update_params_t p = {};
+  memcpy(p.bda, peer_bda, sizeof(p.bda));
+  p.min_int = min_int;
+  p.max_int = max_int;
+  p.latency = 0;
+  p.timeout = 400;  // 4 s supervision timeout
+  esp_err_t err = esp_ble_gap_update_conn_params(&p);
+  if (err != ESP_OK) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "ble: conn param request failed (%d)", (int)err);
+    proto_log(2, msg);
+  }
+}
+
 class LinkSrvCb : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     connected = true;
     authed = false;       // reset auth on every new connection — the host must re-authenticate each time
     att_mtu = 23;
     congested = false;
+  }
+  void onConnect(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+    memcpy(peer_bda, param->connect.remote_bda, sizeof(peer_bda));
+    tune_state = 0;
   }
   void onDisconnect(BLEServer* s) override {
     connected = false;
@@ -149,6 +164,37 @@ static void link_gatts_evt(esp_gatts_cb_event_t event, esp_gatt_if_t,
   if (event == ESP_GATTS_CONGEST_EVT) congested = param->congest.congested;
 }
 
+// GAP watch: advances the post-auth tuning sequence (see tune_state) and logs
+// each outcome, so a central rejecting fast parameters is visible instead of
+// just "BLE feels slow". tune_state stops the central's own later updates from
+// re-triggering the sequence.
+static void link_gap_evt(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
+  if (event == ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT) {
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "ble: conn params status=%d interval=%.2fms latency=%d timeout=%dms",
+             (int)param->update_conn_params.status,
+             param->update_conn_params.conn_int * 1.25,
+             (int)param->update_conn_params.latency,
+             (int)param->update_conn_params.timeout * 10);
+    proto_log(1, msg);
+    if (tune_state == 1 && param->update_conn_params.status != 0) {
+      tune_state = 2;  // 7.5 ms rejected: settle for anything in 7.5-15 ms
+      request_conn_params(0x06, 0x0C);
+    } else if (tune_state == 1 || tune_state == 2) {
+      tune_state = 3;  // parameters settled: now (and only now) ask for DLE
+      esp_ble_gap_set_pkt_data_len(peer_bda, 251);
+    }
+  } else if (event == ESP_GAP_BLE_SET_PKT_LENGTH_COMPLETE_EVT) {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "ble: data len status=%d rx=%d tx=%d",
+             (int)param->pkt_data_length_cmpl.status,
+             (int)param->pkt_data_length_cmpl.params.rx_len,
+             (int)param->pkt_data_length_cmpl.params.tx_len);
+    proto_log(1, msg);
+  }
+}
+
 // Minimum free heap required before calling BLEDevice::init().
 // Bluedroid's host stack and the GATT service together need roughly this much
 // on top of the already-started BLE controller. Below this threshold,
@@ -189,6 +235,7 @@ void link_ble_init(const char* password) {
   BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
   BLEDevice::setMTU(517);
   BLEDevice::setCustomGattsHandler(link_gatts_evt);  // congestion watch
+  BLEDevice::setCustomGapHandler(link_gap_evt);      // conn-param outcome watch
 
   server = BLEDevice::createServer();
   server->setCallbacks(&link_srv_cb);
@@ -222,7 +269,15 @@ bool link_ble_enabled() { return enabled; }
 bool link_ble_connected() { return connected; }
 uint32_t link_ble_rx_dropped() { return rx_dropped; }
 bool link_ble_authed() { return connected && authed; }
-void link_ble_set_authed(bool v) { authed = v; }
+
+void link_ble_set_authed(bool v) {
+  authed = v;
+  if (!v || !connected || tune_state != 0) return;
+  // Kick off post-auth link tuning (see tune_state); link_gap_evt() drives the
+  // rest. The central resolves each request async; rejection leaves defaults.
+  tune_state = 1;
+  request_conn_params(0x06, 0x06);  // ask for the spec minimum, 7.5 ms
+}
 const char* link_ble_password() { return link_password; }
 void* link_ble_server() { return server; }
 

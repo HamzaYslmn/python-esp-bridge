@@ -227,6 +227,7 @@ class Bridge:
                 if self._matches(name, mac):
                     if upgrade_baud and getattr(self._t, "has_baud", True):
                         self._upgrade_baud(baud, target_baud)
+                    self._tune_flow_window()
                     self.reset_on_exit = reset_on_exit
                     if probing and name is None and mac is None:
                         others = ", ".join(l for _, l, _ in candidates
@@ -440,27 +441,54 @@ class Bridge:
             target = C.UPGRADE_BAUD.get(getattr(self._t, "usb_chip", None), 921600)
         if not target or target == current:
             return
+        # Ladder down to the universally-safe 921600 if the target fails, so a
+        # too-optimistic target costs one recovery cycle, not a 115200 link.
+        for baud in dict.fromkeys((target, 921600)):
+            if current < baud <= target and self._try_baud(current, baud):
+                return
+
+    def _try_baud(self, current: int, target: int) -> bool:
+        """One baud-upgrade attempt; restores a working link at `current` on
+        failure (reopening the port to reset the board if it already switched)."""
+        # Probe the host driver first: an unsupported rate (e.g. 3M on CP210x)
+        # raises here, before the firmware switches — a bad target stays a no-op.
+        try:
+            self._t.set_baudrate(target)
+            self._t.set_baudrate(current)
+        except Exception as e:
+            log.warning(f"host driver rejected {target} baud ({e})")
+            return False
         self.request(C.SYS_SET_BAUD, struct.pack(">I", target))
-        time.sleep(0.05)  # give the firmware time to flush its TX buffer before it switches baud
+        time.sleep(0.05)  # let the firmware flush its TX buffer before it switches baud
         self._t.set_baudrate(target)
         for _ in range(3):
             try:
-                self.ping(b"baud")
+                # A baud-check ping round-trips in ms; short timeout keeps a
+                # failed attempt cheap.
+                self.request(C.SYS_PING, b"baud", timeout=0.3, retries=0)
                 log.debug(f"baud upgraded {current} -> {target}")
-                return
+                return True
             except BridgeTimeoutError:
                 continue
-        # Could not talk at the new baud: fall back.
         log.warning(f"baud upgrade to {target} failed; falling back to {current}")
         self._t.set_baudrate(current)
         try:
-            self.ping(b"fallback")
+            self.request(C.SYS_PING, b"fallback", timeout=0.5, retries=0)
         except BridgeTimeoutError:
-            # The firmware already switched to `target` and can no longer hear
-            # us at the original baud. Reopen the port so the open-time
-            # DTR/RTS toggle resets the board — this is reliable even on
-            # boards where a direct reset pulse is not.
+            # Firmware already switched and can't hear us at `current`. Reopen
+            # the port so the open-time DTR/RTS toggle resets the board.
             self._reconnect(current)
+        return False
+
+    def _tune_flow_window(self) -> None:
+        """Widen the BLE in-flight window on firmware that can take it.
+
+        fw >= 0.5.1 grew LINK_RX_BUF to 10240; that minus one max-size frame
+        (8192) lets ~3 requests pipeline, where the class default fits one and
+        serializes every round trip. Older firmware keeps the defaults."""
+        assert self.info is not None
+        if getattr(self._t, "max_inflight", None) and self.info.fw_version >= (0, 5, 1):
+            self._t.max_inflight = self._t.burst_window = 8192
 
     def _start_reader(self) -> None:
         self._reader = threading.Thread(target=self._read_loop, daemon=True,

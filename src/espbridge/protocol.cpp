@@ -97,6 +97,22 @@ static QueueHandle_t txq;
 static std::atomic<bool> tx_busy{false};       // tx_task busy-with-a-frame flag (read by proto_tx_flush)
 static std::atomic<uint32_t> dropped{0};       // frames dropped across all producer tasks
 
+// Reply routing: a reply goes back only on the link its request came from.
+// Broadcasting to serial during a BLE session blocks tx_task ~180 ms on a 2 KB
+// reply into the idle 115200-baud UART — the old BLE throughput ceiling.
+// Handlers don't carry the origin, but a reply is always enqueued from the task
+// that dispatched it (rx_task inline, net_task queued), so a per-task origin set
+// at dispatch time suffices.
+static TaskHandle_t rx_task_h, net_task_h;
+static uint8_t origin_rx = DEST_ALL, origin_net = DEST_ALL;
+
+static uint8_t reply_dest() {
+  TaskHandle_t t = xTaskGetCurrentTaskHandle();
+  if (t == rx_task_h) return origin_rx;
+  if (t == net_task_h) return origin_net;
+  return DEST_ALL;  // unknown task (shouldn't happen): fall back to broadcast
+}
+
 static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
                           const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
   if (!txq) { dropped++; return; }  // proto_log_hook_install() may call this before proto_init()
@@ -132,11 +148,18 @@ static void tx_task(void*) {
     wr16(logical + 4 + f.len, crc16_ccitt(logical, 4 + f.len));
     uint16_t n = cobs_encode(logical, 4 + f.len + 2, encoded);
     encoded[n++] = 0x00;
-    if (f.dest == DEST_ALL) {
+    if (f.dest == LINK_USB) {
       Serial.write(encoded, n);
-      if (link_ble_authed()) link_ble_write(encoded, n);
     } else if (f.dest == LINK_BLE) {
-      link_ble_write(encoded, n);  // pre-auth: SYS_AUTH replies / ST_DENIED
+      link_ble_write(encoded, n);
+    } else {  // DEST_ALL: events / boot banner
+      // With a BLE client attached, copy to serial only if it fits the TX ring
+      // now — blocking into the idle 115200-baud UART would stall the BLE frames
+      // behind it. USB-only keeps the blocking write (there the UART is the
+      // requester's link, so back-pressure is correct pacing).
+      if (!link_ble_authed() || Serial.availableForWrite() >= (int)n)
+        Serial.write(encoded, n);
+      if (link_ble_authed()) link_ble_write(encoded, n);
     }
     tx_busy = false;
   }
@@ -144,14 +167,14 @@ static void tx_task(void*) {
 
 void proto_reply(uint8_t seq, uint16_t cmd, const uint8_t* data, uint16_t len) {
   if (seq == 0) return;  // fire-and-forget: no reply
-  enqueue_frame(0, seq, cmd, data, len);
+  enqueue_frame(0, seq, cmd, data, len, reply_dest());
 }
 
 void proto_reply_ok(uint8_t seq, uint16_t cmd) { proto_reply(seq, cmd, nullptr, 0); }
 
 void proto_reply_err(uint8_t seq, uint16_t cmd, uint8_t status) {
   if (seq == 0) return;
-  enqueue_frame(FLAG_ERROR, seq, cmd, &status, 1);
+  enqueue_frame(FLAG_ERROR, seq, cmd, &status, 1, reply_dest());
 }
 
 void proto_send_event(uint16_t cmd, const uint8_t* data, uint16_t len) {
@@ -210,7 +233,7 @@ uint32_t proto_dropped_events() { return dropped; }
 // Handlers for WIFI, NET, BLE, and related modules can block for seconds
 // (e.g. TCP connect, BLE connect) and share state with socket polling.
 // To avoid blocking rx_task, all such handlers run exclusively on net_task.
-struct Req { uint16_t cmd; uint8_t seq; uint16_t len; uint8_t* buf; };
+struct Req { uint16_t cmd; uint8_t seq; uint8_t origin; uint16_t len; uint8_t* buf; };
 static QueueHandle_t netq;
 
 static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
@@ -239,6 +262,7 @@ static void net_task(void*) {
   for (;;) {
     // Wake at least every 2 ms to poll sockets / scan completion.
     if (xQueueReceive(netq, &r, pdMS_TO_TICKS(2)) == pdTRUE) {
+      origin_net = r.origin;  // reply_dest() routes this request's replies
       net_dispatch(r.cmd, r.seq, r.buf, r.len);
       free(r.buf);
       // A continuously-fed queue never hits the 2 ms timeout above, so yield
@@ -254,8 +278,9 @@ static void net_task(void*) {
   }
 }
 
-static void net_enqueue(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
-  Req r = { cmd, seq, len, nullptr };
+static void net_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
+                        const uint8_t* p, uint16_t len) {
+  Req r = { cmd, seq, origin, len, nullptr };
   if (len) {
     r.buf = (uint8_t*)malloc(len);
     if (!r.buf) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
@@ -278,7 +303,9 @@ struct RxState {
 static RxState rxstate[2];  // [LINK_USB], [LINK_BLE]
 static uint8_t rxframe[MAX_FRAME];
 
-static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
+static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
+                     const uint8_t* p, uint16_t len) {
+  origin_rx = origin;  // reply_dest() routes inline handlers' replies
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
     // Fast handlers: run inline on rx_task.
@@ -296,7 +323,7 @@ static void dispatch(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) 
     // Everything else is a slow / stateful handler (WIFI/NET/ESPNOW/BLE/RMT/
     // ONEWIRE/FS/OTA/TWAI/I2S/ETH/CAM) — hand off to net_task, which replies
     // ST_UNKNOWN_CMD for any module it doesn't recognise.
-    default:        net_enqueue(cmd, seq, p, len); break;
+    default:        net_enqueue(cmd, seq, origin, p, len); break;
   }
 }
 
@@ -348,7 +375,7 @@ static void handle_encoded(uint8_t origin, const uint8_t* enc, uint16_t enclen) 
   uint8_t seq = rxframe[1];
   uint16_t cmd = rd16(rxframe + 2);
   if (handle_auth(origin, seq, cmd, rxframe + 4, n - 6)) return;
-  dispatch(seq, cmd, rxframe + 4, n - 6);
+  dispatch(origin, seq, cmd, rxframe + 4, n - 6);
 }
 
 static void pump_bytes(uint8_t origin, const uint8_t* chunk, int n) {
@@ -423,6 +450,6 @@ void proto_init() {
 void proto_start() {
   // Radio stacks (Wi-Fi/BT) live on core 0; keep the bridge on the app core.
   xTaskCreatePinnedToCore(tx_task, "bridge_tx", 4096, nullptr, 12, nullptr, BRIDGE_CORE);
-  xTaskCreatePinnedToCore(rx_task, "bridge_rx", 8192, nullptr, 10, nullptr, BRIDGE_CORE);
-  xTaskCreatePinnedToCore(net_task, "bridge_net", 8192, nullptr, 9, nullptr, BRIDGE_CORE);
+  xTaskCreatePinnedToCore(rx_task, "bridge_rx", 8192, nullptr, 10, &rx_task_h, BRIDGE_CORE);
+  xTaskCreatePinnedToCore(net_task, "bridge_net", 8192, nullptr, 9, &net_task_h, BRIDGE_CORE);
 }
