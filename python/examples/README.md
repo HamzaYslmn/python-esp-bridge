@@ -27,6 +27,8 @@ Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
 | `pwm_servo.py` | LEDC PWM fade + hobby servo sweep |
 | `i2c_scan.py` | I2C bus scan |
 | `spi_transfer.py` | full-duplex SPI (flash JEDEC ID) |
+| `uart_loopback.py` | second UART for GPS/modems/serial devices (loopback demo) |
+| `touch_read.py` | capacitive touch pads: poll, then board-pushed touch events |
 | `rtos_concurrency.py` | FreeRTOS task split: fast lane stays ~ms while radio blocks (+ live OLED) |
 | `async_fanout.py` | `AsyncBridge`: `await` calls and fan out concurrent I/O with `asyncio.gather` |
 | `shared_connection.py` | `espbridge.connect()`: one shared, thread-safe link many threads use — easy integration |
@@ -43,6 +45,7 @@ Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
 | `stepper_move.py` | A4988/DRV8825 stepper with trapezoidal ramps + free-run |
 | `can_dump.py` | CAN bus monitor + periodic frame (TWAI, needs a transceiver) |
 | `i2s_record.py` | record an I2S MEMS mic to a WAV file on the host |
+| `custom_driver.py` | **write your own driver in ~20 lines** — class + `register_driver` → `esp.lm75()` |
 
 These drivers are pure Python over the bridge's primitives — **your own device
 is the same pattern, no firmware change**. See
@@ -56,7 +59,9 @@ is the same pattern, no firmware change**. See
 | `nvs_counter.py` | persistent key/value storage in the ESP32's flash |
 | `fs_logger.py` | LittleFS files: append a log on the board, read it back |
 | `deep_sleep.py` | deep sleep + timer wake (see chip notes in the main README) |
+| `power_profiles.py` | battery vs performance: CPU clock, BLE link profile, heap — one call |
 | `ota_update.py` | **reflash the firmware over USB or Bluetooth** — no boot button |
+| `mcp_server.py` | run the bridge as an MCP server so an AI agent can drive the board |
 
 ## wireless/ — Bluetooth link, ESP-NOW, multiple boards, link speed
 
@@ -66,8 +71,10 @@ is the same pattern, no firmware change**. See
 | `ble_scan.py` | BLE advertisement scan (ESP32 as scanner, over USB) |
 | `espnow_pair.py` | **two-board ESP-NOW chat, fully wireless** — Bluetooth to the board, ESP-NOW between boards, delivery ACKs |
 | `espnow_broadcast.py` | ESP-NOW broadcast over a Bluetooth-connected bridge: one sender, any number of listeners, RSSI per packet |
+| `espnow_pingpong.py` | two boards, zero cables: host on two BLE links, ESP-NOW ping/pong between the boards |
 | `multi_device.py` | several boards, addressed by persistent name |
-| `benchmark.py` | latency + throughput, first over USB then over Bluetooth |
+| `usb_vs_ble_benchmark.py` | latency + throughput, first over USB then over Bluetooth |
+| `stress_test.py` | soak test: sustained, concurrent, multi-radio (Wi-Fi + BLE + ESP-NOW) load |
 
 Bridges advertise as `espbridge_<mac>` (or `espbridge_<mac>_<name>` once you
 `espbridge set-name`), so `espbridge scan --ble` finds and labels every board.
@@ -80,6 +87,7 @@ The Bluetooth password defaults to `espbridge`; change it by passing it to
 | example | shows |
 |---|---|
 | `wifi_scan.py` | Wi-Fi scan through the ESP32 radio |
+| `wifi_ap.py` | the ESP32 as a Wi-Fi access point (coexists with ESP-NOW and STA) |
 | `tcp_through_bridge.py` | join Wi-Fi, HTTP + raw TCP through the ESP32 |
 | `udp_through_bridge.py` | UDP datagrams through the ESP32 |
 
@@ -101,3 +109,23 @@ One folder per ecosystem — existing code from these libraries runs unchanged:
 | [`compat/luma/oled.py`](compat/luma/) | **luma.oled** display library |
 | [`compat/smbus/read_register.py`](compat/smbus/) | **smbus2**-style I2C register access |
 | [`compat/rpi_gpio/blink.py`](compat/rpi_gpio/) | **RPi.GPIO**-style scripts, only the import changes |
+
+## Staying connected — stability tips
+
+- **Long-running scripts: use the managed link.** `espbridge.connect(keepalive=5)`
+  pings the board every 5 s and transparently reconnects after an unplug,
+  reset, or brown-out — your code keeps using the same object
+  (`shared_connection.py` shows the pattern).
+- **Address boards by name, not port.** USB COM numbers hop; a stored name
+  doesn't. Name each board once (`espbridge -p COM7 set-name sensors`), then
+  `Bridge(name="sensors")` finds it on any port — or over Bluetooth with
+  `Bridge(ble="sensors")`.
+- **Re-attach without rebooting.** Opening the serial port resets the board by
+  default; pass `Bridge(reset_on_open=False)` to reconnect to the running
+  firmware with all peripheral state intact.
+- **One BLE session, kept open**, beats connect/disconnect cycles — the OS can
+  hold a closing Bluetooth connection for a few seconds, which makes rapid
+  reconnects flaky.
+- **Don't bring Wi-Fi up over a Bluetooth session on the classic ESP32** — the
+  firmware refuses with `NO_MEM` rather than letting the radio starve the BLE
+  link. Use USB (or an S3) for workflows that need both at once.
