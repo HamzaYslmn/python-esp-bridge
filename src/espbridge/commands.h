@@ -11,7 +11,7 @@
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 11
-#define FW_VERSION_PATCH 4
+#define FW_VERSION_PATCH 5
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
