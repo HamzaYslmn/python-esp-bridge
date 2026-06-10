@@ -88,14 +88,18 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 
   // ESP-NOW requires the Wi-Fi driver to be running, even if not associated.
   // Bring up STA mode if the radio is completely off — unless that would
-  // starve a live BLE session (the driver costs ~50 KB; Bluedroid dies under
-  // ~8 KB free): refuse with a clean error instead of killing the link.
+  // starve a live BLE session (a first driver start costs ~52 KB, a restart
+  // ~33 KB; Bluedroid dies under ~8 KB free): refuse with a clean error
+  // instead of killing the link.
   if (WiFi.getMode() == WIFI_MODE_NULL) {
-    if (link_ble_authed() && ESP.getFreeHeap() < ESPNOW_UP_BLE_MIN_HEAP) {
+    uint32_t need = wifi_driver_resident() ? ESPNOW_REUP_BLE_MIN_HEAP
+                                           : ESPNOW_UP_BLE_MIN_HEAP;
+    if (link_ble_authed() && ESP.getFreeHeap() < need) {
       proto_reply_err(seq, cmd, ST_NO_MEM);
       return;
     }
     WiFi.mode(WIFI_STA);
+    wifi_mark_driver_resident();
   }
 
   uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
@@ -180,10 +184,15 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       handle_init(seq, cmd, p, len);
       break;
 
-    case 0x02:  // DEINIT — shuts down ESP-NOW but leaves the Wi-Fi mode unchanged (STA or AP may still be in use)
+    case 0x02:  // DEINIT — and release the radio if ESP-NOW was its only user
       esp_now_deinit();
       inited = false;
       ff_outstanding = 0;
+      // Turning the radio off reclaims ~50 KB of driver heap. This matters
+      // most over BLE: nothing resets the board between Bluetooth sessions,
+      // so a driver left resident would pin the heap near the Bluedroid
+      // floor and cripple every later BLE session. STA/AP owners keep it.
+      if (!wifi_link_in_use()) WiFi.mode(WIFI_MODE_NULL);
       proto_reply_ok(seq, cmd);
       break;
 

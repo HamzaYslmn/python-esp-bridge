@@ -31,17 +31,14 @@ with Bridge(ble=board, password="espbridge") as esp:
         lambda src, data, rssi: print(f"\r[{src} {rssi}dBm] {data.decode(errors='replace')}\n> ", end="")
     )
 
-    if peer is None:
-        print("listening — re-run with the peer's MAC to also send. Ctrl+C to quit.")
-        try:
+    try:
+        if peer is None:
+            print("listening — re-run with the peer's MAC to also send. Ctrl+C to quit.")
             while True:
                 time.sleep(1)
-        except KeyboardInterrupt:
-            sys.exit(0)
 
-    esp.espnow.add_peer(peer)
-    print(f"chatting with {peer} — type a line and press Enter. Ctrl+C to quit.")
-    try:
+        esp.espnow.add_peer(peer)
+        print(f"chatting with {peer} — type a line and press Enter. Ctrl+C to quit.")
         while True:
             line = input("> ")
             if not line:
@@ -51,3 +48,7 @@ with Bridge(ble=board, password="espbridge") as esp:
                 print("  (no ACK — peer offline or on another channel?)")
     except KeyboardInterrupt:
         pass
+    finally:
+        # Free the Wi-Fi driver (~50 KB) before exiting: over BLE nothing
+        # resets the board, and a resident driver cripples later BLE sessions.
+        esp.espnow.end()

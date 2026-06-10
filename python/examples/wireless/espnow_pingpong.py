@@ -56,3 +56,7 @@ with Bridge(ble=sel_a.mac, password="espbridge") as a, \
         time.sleep(0.5)
 
     print("ping/pong over ESP-NOW while both boards stay on the BLE link — coex works.")
+    # Free both Wi-Fi drivers (~50 KB each) before exiting: over BLE nothing
+    # resets the boards, and a resident driver cripples later BLE sessions.
+    a.espnow.end()
+    b.espnow.end()

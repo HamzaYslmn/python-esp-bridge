@@ -25,15 +25,26 @@ with Bridge(ble=board, password="espbridge") as esp:
     mac = esp.espnow.begin()
     print(f"connected over Bluetooth: {esp.info.name or esp.info.mac}")
     print(f"ESP-NOW up on {mac} — {'broadcasting' if sending else 'listening'}")
+    if not sending:
+        print("waiting for broadcasts — run `uv run espnow_broadcast.py send` "
+              "in another terminal to give this listener something to hear")
 
-    if sending:
-        n = 0
-        while True:
-            n += 1
-            esp.espnow.broadcast(f"tick {n}".encode())
-            print(f"sent: tick {n}")
-            time.sleep(1)
-    else:
-        while True:
-            src, data, rssi = esp.espnow.read()  # blocks until a packet arrives
-            print(f"[{src} {rssi}dBm] {data.decode(errors='replace')}")
+    try:
+        if sending:
+            n = 0
+            while True:
+                n += 1
+                esp.espnow.broadcast(f"tick {n}".encode())
+                print(f"sent: tick {n}")
+                time.sleep(1)
+        else:
+            while True:
+                src, data, rssi = esp.espnow.read()  # blocks until a packet arrives
+                print(f"[{src} {rssi}dBm] {data.decode(errors='replace')}")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Free the Wi-Fi driver (~50 KB) before exiting. Over BLE nothing
+        # resets the board between sessions, so a driver left resident would
+        # leave ~8 KB of heap and cripple every later Bluetooth session.
+        esp.espnow.end()

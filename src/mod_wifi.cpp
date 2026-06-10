@@ -17,6 +17,11 @@ static bool sta_started = false;
 // IMPORTANT: never set WIFI_PS_NONE while Bluetooth is active — the SW radio
 // arbiter becomes unstable and packet loss increases dramatically.
 bool wifi_is_active() { return WiFi.getMode() != WIFI_MODE_NULL; }
+bool wifi_link_in_use() { return sta_started || ap_active; }
+
+static bool driver_resident = false;
+bool wifi_driver_resident() { return driver_resident; }
+void wifi_mark_driver_resident() { driver_resident = true; }
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
   uint8_t buf[5] = {0};
@@ -88,14 +93,17 @@ static bool take_str(const uint8_t*& p, uint16_t& left, char* out, uint8_t cap) 
 }
 
 // Refuse a Wi-Fi bring-up that would starve a live BLE session (see
-// WIFI_UP_BLE_MIN_HEAP). A clean ST_NO_MEM beats the alternative: the radio
-// allocates ~50 KB, Bluedroid hits its ~8 KB floor, and the BLE link dies
-// mid-command. USB sessions are unaffected.
+// WIFI_UP_BLE_MIN_HEAP / WIFI_REUP_BLE_MIN_HEAP). A clean ST_NO_MEM beats the
+// alternative: the radio allocates ~50 KB, Bluedroid hits its ~8 KB floor,
+// and the BLE link dies mid-command. USB sessions are unaffected.
 static bool wifi_heap_ok(uint8_t seq, uint16_t cmd) {
-  if (link_ble_authed() && ESP.getFreeHeap() < WIFI_UP_BLE_MIN_HEAP) {
+  uint32_t need = wifi_driver_resident() ? WIFI_REUP_BLE_MIN_HEAP
+                                         : WIFI_UP_BLE_MIN_HEAP;
+  if (link_ble_authed() && ESP.getFreeHeap() < need) {
     proto_reply_err(seq, cmd, ST_NO_MEM);
     return false;
   }
+  wifi_mark_driver_resident();  // every caller proceeds to raise the radio
   return true;
 }
 

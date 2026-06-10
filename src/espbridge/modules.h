@@ -51,6 +51,12 @@ void wifi_poll();
 void net_poll();
 
 bool wifi_is_active();    // used by ADC2-conflict guard
+bool wifi_link_in_use();  // STA started or AP active — the radio has an owner besides ESP-NOW
+// The IDF Wi-Fi driver keeps ~18 KB resident once it has been started, even
+// after the radio is turned back off — restarts cost less than first starts,
+// and the BLE heap guards must use the matching margin.
+bool wifi_driver_resident();
+void wifi_mark_driver_resident();
 
 // True if `pin` is an ADC2 channel — ADC2 shares hardware with the Wi-Fi radio,
 // so reads on these pins fail/return garbage while Wi-Fi is active. Shared by the

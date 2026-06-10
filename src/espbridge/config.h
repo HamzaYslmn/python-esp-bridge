@@ -228,8 +228,13 @@
 // Bluedroid stops delivering notifications below ~8 KB free — a radio-up
 // command would kill the BLE link mid-session. Below these margins (driver
 // cost + the Bluedroid floor) the handlers refuse with ST_NO_MEM instead.
-#define WIFI_UP_BLE_MIN_HEAP   62000
-#define ESPNOW_UP_BLE_MIN_HEAP 59000
+// Once the driver has been started and stopped, ~18 KB of it stays resident
+// (IDF behaviour), so a RESTART costs ~33 KB — the *_REUP_* margins apply
+// then, or ESP-NOW could never come back up in the same power cycle.
+#define WIFI_UP_BLE_MIN_HEAP     62000
+#define WIFI_REUP_BLE_MIN_HEAP   47000
+#define ESPNOW_UP_BLE_MIN_HEAP   59000
+#define ESPNOW_REUP_BLE_MIN_HEAP 42000
 
 #define NET_MAX_SOCKETS 8
 #define NET_WINDOW      4096   // per-socket credit window (bytes)
