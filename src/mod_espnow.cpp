@@ -227,8 +227,8 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       // defaults to window 65535 (always listening — most reliable under BLE
       // coex); battery boards can shrink it. window 0 = RX off, TX still works.
       NEED(4);
-      uint16_t window   = p[0] | p[1] << 8;
-      uint16_t interval = p[2] | p[3] << 8;
+      uint16_t window   = rd16(p);
+      uint16_t interval = rd16(p + 2);
       esp_err_t e = esp_now_set_wake_window(window);
       if (e == ESP_OK && interval) e = esp_wifi_connectionless_module_set_wake_interval(interval);
       if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }

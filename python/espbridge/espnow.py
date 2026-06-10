@@ -128,7 +128,7 @@ class EspNow:
             raise ValueError(f"window_ms must be 0..65535, got {window_ms}")
         if interval_ms is not None and not 1 <= interval_ms <= 65535:
             raise ValueError(f"interval_ms must be 1..65535, got {interval_ms}")
-        payload = window_ms.to_bytes(2, "little") + (interval_ms or 0).to_bytes(2, "little")
+        payload = window_ms.to_bytes(2, "big") + (interval_ms or 0).to_bytes(2, "big")
         self._b.request(C.ESPNOW_POWER_SAVE, payload)
 
     def set_pmk(self, pmk: bytes) -> None:

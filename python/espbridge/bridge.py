@@ -860,7 +860,8 @@ class Bridge:
         radio wakes ~2x/s instead of ~70-130x/s, and command RTT rises to
         ~0.3-1 s. Centrals apply relaxed parameters quickly but may take
         5-10 s to re-grant fast ones. Per-connection — reconnects start back
-        in performance."""
+        in performance. "battery" also raises :attr:`timeout` to at least
+        5 s so requests keep margin over the slower link."""
         modes = {"performance": 0, "battery": 1}
         if mode not in modes:
             raise ValueError(f"mode must be one of {sorted(modes)}, got {mode!r}")
@@ -880,7 +881,9 @@ class Bridge:
         try:
             self.link_power(mode)
             applied["ble_link"] = mode
-        except RemoteError:  # not a BLE session (no central connected)
+        except RemoteError as e:
+            if e.status is not C.Status.NOT_INIT:  # NOT_INIT = no BLE central
+                raise
             applied["ble_link"] = None
         return applied
 

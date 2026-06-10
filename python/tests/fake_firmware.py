@@ -381,7 +381,7 @@ class FakeFirmware:
             if len(p) != 4:
                 self._reply_err(seq, cmd, C.Status.BAD_ARGS)
             else:
-                self.espnow_ps = tuple(struct.unpack("<HH", p))
+                self.espnow_ps = tuple(struct.unpack(">HH", p))
                 self._reply(seq, cmd)
         elif cmd == C.ESPNOW_DEL_PEER:
             self.espnow_peers.pop(p[:6], None)
