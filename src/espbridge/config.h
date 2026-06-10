@@ -223,18 +223,32 @@
 #define SERIAL_RX_BUF  8704
 #define SERIAL_TX_BUF  1024
 
-// Bringing the radio up costs real heap (measured on classic ESP32: ESP-NOW's
-// Wi-Fi driver ~52 KB; a full AP/STA ~55 KB). With a BLE central connected,
-// Bluedroid stops delivering notifications below ~8 KB free — a radio-up
-// command would kill the BLE link mid-session. Below these margins (driver
-// cost + the Bluedroid floor) the handlers refuse with ST_NO_MEM instead.
-// Once the driver has been started and stopped, ~18 KB of it stays resident
-// (IDF behaviour), so a RESTART costs ~33 KB — the *_REUP_* margins apply
-// then, or ESP-NOW could never come back up in the same power cycle.
-#define WIFI_UP_BLE_MIN_HEAP     62000
-#define WIFI_REUP_BLE_MIN_HEAP   47000
-#define ESPNOW_UP_BLE_MIN_HEAP   59000
-#define ESPNOW_REUP_BLE_MIN_HEAP 42000
+// Bringing the radio up costs real heap (measured on classic ESP32, core
+// 3.3.6: first driver start ~52 KB; ~18 KB stays resident after a stop, so a
+// restart costs ~33 KB). With a BLE central connected the handlers refuse a
+// bring-up that would land below a ~6 KB working floor (ST_NO_MEM) instead of
+// letting the link starve. Wi-Fi + BLE + ESP-NOW all-at-once fits and is
+// allowed — measured surviving a 30 s three-radio soak at ~4 KB min free —
+// but expect large transfers to fail cleanly with NO_MEM while that thin.
+// Operations on an ALREADY-RUNNING driver (scan, connect, softAP) only cost
+// ~4-8 KB, so they get the much smaller WARM margin — this is what lets a
+// BLE session run Wi-Fi and ESP-NOW at the same time.
+// All margins are user-overridable (-D or #define before the library).
+#ifndef WIFI_UP_BLE_MIN_HEAP
+#define WIFI_UP_BLE_MIN_HEAP     58000
+#endif
+#ifndef WIFI_REUP_BLE_MIN_HEAP
+#define WIFI_REUP_BLE_MIN_HEAP   39000
+#endif
+#ifndef ESPNOW_UP_BLE_MIN_HEAP
+#define ESPNOW_UP_BLE_MIN_HEAP   58000
+#endif
+#ifndef ESPNOW_REUP_BLE_MIN_HEAP
+#define ESPNOW_REUP_BLE_MIN_HEAP 39000
+#endif
+#ifndef RADIO_WARM_BLE_MIN_HEAP
+#define RADIO_WARM_BLE_MIN_HEAP  8000
+#endif
 
 #define NET_MAX_SOCKETS 8
 #define NET_WINDOW      4096   // per-socket credit window (bytes)

@@ -73,6 +73,7 @@ is the same pattern, no firmware change**. See
 | `espnow_broadcast.py` | ESP-NOW broadcast over a Bluetooth-connected bridge: one sender, any number of listeners, RSSI per packet |
 | `espnow_pingpong.py` | two boards, zero cables: host on two BLE links, ESP-NOW ping/pong between the boards |
 | `multi_device.py` | several boards, addressed by persistent name |
+| `coex_all_radios.py` | **BLE + Wi-Fi AP + ESP-NOW simultaneously** on one classic ESP32 |
 | `usb_vs_ble_benchmark.py` | latency + throughput, first over USB then over Bluetooth |
 | `stress_test.py` | soak test: sustained, concurrent, multi-radio (Wi-Fi + BLE + ESP-NOW) load |
 

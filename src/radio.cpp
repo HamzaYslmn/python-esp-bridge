@@ -13,18 +13,23 @@ static bool driver_resident = false;
 
 bool radio_acquire(uint8_t user) {
   // Refuse an acquire that would starve a live BLE session (margins in
-  // config.h). A clean ST_NO_MEM beats the alternative: the radio allocates
-  // tens of KB, Bluedroid hits its ~8 KB floor, and the BLE link dies
-  // mid-command. ESP-NOW joining an already-up radio costs ~nothing and is
-  // exempt; STA/AP work allocates real heap (netif, DHCP, buffers) even on
-  // a warm driver, so those are guarded in every state. USB-only sessions
-  // are never guarded.
-  if (!(user == RADIO_ESPNOW && WiFi.getMode() != WIFI_MODE_NULL)) {
-    uint32_t need = (user == RADIO_ESPNOW)
+  // config.h) — a clean ST_NO_MEM beats the radio eating the heap out from
+  // under Bluedroid mid-command. Three cost tiers, matched to what the
+  // acquire actually allocates:
+  //   driver down:  full bring-up (~52 KB first, ~33 KB restart)
+  //   driver up, ESP-NOW: joins the running driver for free — no guard
+  //   driver up, STA/AP/scan: ~4-8 KB (netif, DHCP, scan results)
+  // USB-only sessions are never guarded. All three radios CAN run at once;
+  // the tiers just keep the BLE link alive while they come up.
+  uint32_t need;
+  if (WiFi.getMode() == WIFI_MODE_NULL) {
+    need = (user == RADIO_ESPNOW)
         ? (driver_resident ? ESPNOW_REUP_BLE_MIN_HEAP : ESPNOW_UP_BLE_MIN_HEAP)
         : (driver_resident ? WIFI_REUP_BLE_MIN_HEAP   : WIFI_UP_BLE_MIN_HEAP);
-    if (link_ble_authed() && ESP.getFreeHeap() < need) return false;
+  } else {
+    need = (user == RADIO_ESPNOW) ? 0 : RADIO_WARM_BLE_MIN_HEAP;
   }
+  if (need && link_ble_authed() && ESP.getFreeHeap() < need) return false;
   driver_resident = true;  // every successful caller proceeds to raise the radio
   users |= user;
   return true;

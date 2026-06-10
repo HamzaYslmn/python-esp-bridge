@@ -50,6 +50,7 @@ void wifi_poll() {
   if (n < 0) {  // WIFI_SCAN_FAILED
     uint8_t zero = 0;
     proto_send_event(WIFI_SCAN_DONE, &zero, 1);
+    radio_release(0);  // scan held no bit: power off unless someone owns the radio
     return;
   }
   uint8_t count = n > 255 ? 255 : (uint8_t)n;
@@ -70,6 +71,9 @@ void wifi_poll() {
   }
   proto_send_event(WIFI_SCAN_DONE, &count, 1);
   WiFi.scanDelete();
+  // The scan raised the radio without claiming a user bit; give the driver
+  // heap back unless STA/AP/ESP-NOW still owns the radio.
+  radio_release(0);
 }
 
 // Read a length-prefixed string from the payload at position *p.
@@ -95,6 +99,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (!radio_acquire(0)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       WiFi.mode(radio_held(RADIO_AP) ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
+        radio_release(0);  // scan never started: don't leave an unowned radio up
         proto_reply_err(seq, cmd, ST_WIFI);
         return;
       }

@@ -322,7 +322,11 @@ Hosts must treat the tail as optional for compatibility with older firmware.
   Wi-Fi driver comes up lazily on the first Wi-Fi/ESP-NOW command, so a
   BLE-only board never pays its heap. The SW coex arbiter shares the radio
   with BLE; power save stays at the IDF default `WIFI_PS_MIN_MODEM` — never
-  `WIFI_PS_NONE` while BT is active.
+  `WIFI_PS_NONE` while BT is active. **BLE + Wi-Fi + ESP-NOW all at once is
+  supported**: heap guards (margins in `config.h`, overridable with `-D`)
+  refuse a bring-up with `ST_NO_MEM` only when it would genuinely starve the
+  BLE link. With all three radios up the board runs heap-thin — expect
+  large transfers (FS/OTA/NVS blobs) to fail cleanly with `NO_MEM` there.
 - **Wi-Fi scan vs ESP-NOW**: a scan hops channels, so ESP-NOW packets are
   dropped while one is running.
 - **IDF logs become `SYS_LOG` events**: the Wi-Fi/BT stacks log through

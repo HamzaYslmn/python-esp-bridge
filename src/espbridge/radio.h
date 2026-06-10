@@ -14,12 +14,13 @@
 #define RADIO_ESPNOW 0x04
 
 // Claim `user`'s radio bit, heap-guarded: with an authed BLE central,
-// returns false when the acquire would push the heap below the Bluedroid
-// floor (caller replies ST_NO_MEM). ESP-NOW on an already-up radio is
-// exempt; STA/AP acquires are guarded even on a warm driver. user = 0 runs
-// the guard without claiming a bit (Wi-Fi scan: the radio comes up but
-// nothing holds it). Does not change the Wi-Fi mode — the caller raises
-// the mode it needs.
+// returns false when the acquire's actual cost (full driver bring-up when
+// the radio is off; a few KB for STA/AP/scan on a warm driver; nothing for
+// ESP-NOW joining a warm driver) would starve the link — caller replies
+// ST_NO_MEM. Wi-Fi + BLE + ESP-NOW all running at once is supported.
+// user = 0 runs the guard without claiming a bit (Wi-Fi scan: the radio
+// comes up but nothing holds it). Does not change the Wi-Fi mode — the
+// caller raises the mode it needs.
 bool radio_acquire(uint8_t user);
 
 // Release `user`'s bit; powers the radio off (WIFI_MODE_NULL) to reclaim
