@@ -157,6 +157,7 @@ def test_cpu_freq_round_trip(bridge, fw):
 def test_link_power_modes(bridge, fw):
     bridge.link_power("battery")
     assert fw.link_power_mode == 1
+    assert bridge.timeout >= 5.0  # battery RTT can reach ~1 s; floor raised automatically
     bridge.link_power("performance")
     assert fw.link_power_mode == 0
     with pytest.raises(ValueError):

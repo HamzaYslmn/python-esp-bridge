@@ -1,15 +1,18 @@
 """ESP-NOW broadcast, fully wireless — Bluetooth to the boards, ESP-NOW between them.
 
 Scans for every board advertising the bridge service, connects to each over
-Bluetooth (no USB cables; default password "espbridge"), and makes them all
-broadcast to ff:ff:ff:ff:ff:ff and listen — boards in range just talk:
+Bluetooth (no USB cables; default password "espbridge"), puts them in the
+battery power profile, and makes them all broadcast to ff:ff:ff:ff:ff:ff and
+listen — boards in range just talk:
 
     uv run espnow_broadcast.py                # find and run every board
     uv run espnow_broadcast.py relays spare2  # only these (name or MAC)
 
-Each board hears every other board's ticks (never its own — ESP-NOW does not
-loop broadcasts back to the sender). With one board it still broadcasts and
-listens, so it pairs up with any other board in range running this script.
+power_mode("battery") = 80 MHz CPU + relaxed BLE link (radio wakes ~2x/s
+instead of ~130x/s) — and ESP-NOW delivery actually improves, because a
+relaxed BLE link leaves more radio time for the Wi-Fi side. Messages just
+arrive in ~0.5 s batches instead of instantly. A board never hears its own
+broadcasts; with one board it still pairs up with any other board in range.
 """
 import sys
 import time
@@ -25,9 +28,10 @@ try:
     for sel in picks:
         esp = Bridge(ble=sel, password="espbridge")
         boards.append(esp)
-        mac = esp.espnow.begin()
+        mac = esp.espnow.begin()       # set up at full speed...
+        esp.power_mode("battery")      # ...then relax the radio
         me = esp.info.name or mac
-        print(f"{me}: Bluetooth link up, ESP-NOW on {mac}")
+        print(f"{me}: Bluetooth link up (battery profile), ESP-NOW on {mac}")
         esp.espnow.on_receive(
             lambda src, data, rssi, me=me:
                 print(f"{me} heard [{src} {rssi}dBm] {data.decode(errors='replace')}")

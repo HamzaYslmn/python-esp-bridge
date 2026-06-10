@@ -865,6 +865,8 @@ class Bridge:
         if mode not in modes:
             raise ValueError(f"mode must be one of {sorted(modes)}, got {mode!r}")
         self.request(C.SYS_LINK_POWER, bytes([modes[mode]]))
+        if mode == "battery" and self.timeout < 5.0:
+            self.timeout = 5.0  # RTT reaches ~1 s at latency 4; keep request margin
 
     def power_mode(self, mode: str) -> dict:
         """One-call power profile: "battery" = 80 MHz CPU + relaxed BLE link;
