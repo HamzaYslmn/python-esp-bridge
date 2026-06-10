@@ -167,8 +167,22 @@
 // 0x00 frame delimiter appended by tx_task.
 #define ENC_BUF_SIZE   (MAX_FRAME + (MAX_FRAME / 254) + 2)
 
-#define SERIAL_RX_BUF  4096
+// RX ring must absorb the host's pipelined burst while a slow inline handler
+// (e.g. an 80 ms I2C scan) blocks rx_task. The Python serial transport caps
+// waited in-flight bytes at 6400 — three max-size wire frames, enough to keep
+// the full-duplex line saturated — and the ring holds that cap plus one more
+// frame, so it can't overflow; UART overflow/framing errors are counted
+// (SYS_FREE_HEAP).
+#define SERIAL_RX_BUF  8704
 #define SERIAL_TX_BUF  2048
+
+// Bringing the radio up costs real heap (measured on classic ESP32: ESP-NOW's
+// Wi-Fi driver ~52 KB; a full AP/STA ~55 KB). With a BLE central connected,
+// Bluedroid stops delivering notifications below ~8 KB free — a radio-up
+// command would kill the BLE link mid-session. Below these margins (driver
+// cost + the Bluedroid floor) the handlers refuse with ST_NO_MEM instead.
+#define WIFI_UP_BLE_MIN_HEAP   62000
+#define ESPNOW_UP_BLE_MIN_HEAP 59000
 
 #define NET_MAX_SOCKETS 8
 #define NET_WINDOW      4096   // per-socket credit window (bytes)

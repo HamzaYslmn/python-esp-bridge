@@ -125,20 +125,17 @@ class BleTransport:
     needs_auth = True   # firmware requires SYS_AUTH before other commands
     usb_chip = None
     # Max unacknowledged fire-and-forget bytes before Bridge.send() inserts a
-    # ping fence. The firmware buffers BLE writes in a LINK_RX_BUF stream
-    # buffer that drains only as fast as commands execute; BLE delivers
+    # ping fence. The firmware buffers BLE writes in a LINK_RX_BUF (6400 B)
+    # stream buffer that drains only as fast as commands execute; BLE delivers
     # faster than a 1 KB I2C write executes (~23 ms at 400 kHz), so an
     # unthrottled burst overflows it and frames are dropped (-> host timeout).
-    # These defaults fit one max-size frame; Bridge._tune_flow_window() raises
-    # both to 8192 on fw >= 0.5.1 (bigger LINK_RX_BUF, ~3 frames pipeline).
-    burst_window = 4096
-    # Same cap, applied to *waited* requests too: pipelined/concurrent requests
-    # (several threads, or large echoes) would otherwise flood the same buffer
-    # because the slow BLE notify reply-path can't complete them fast enough.
-    # Bounds in-flight bytes to ~one frame past this, well under LINK_RX_BUF.
-    # Serial leaves this unset: it drains at line rate and self-paces, so
-    # capping it would needlessly throttle its pipelining.
-    max_inflight = 4096
+    # 4300 = LINK_RX_BUF minus one max-size frame; two frames pipeline, which
+    # already saturates BLE (the central's write rate is the bottleneck).
+    burst_window = 4300
+    # Same cap on *waited* requests: pipelined/concurrent requests (several
+    # threads, or large echoes) would otherwise flood the same buffer because
+    # the slow BLE notify reply-path can't drain it fast enough.
+    max_inflight = 4300
 
     def __init__(self, address: str, *, connect_timeout: float = 10.0):
         _require_bleak()

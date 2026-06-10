@@ -227,7 +227,6 @@ class Bridge:
                 if self._matches(name, mac):
                     if upgrade_baud and getattr(self._t, "has_baud", True):
                         self._upgrade_baud(baud, target_baud)
-                    self._tune_flow_window()
                     self.reset_on_exit = reset_on_exit
                     if probing and name is None and mac is None:
                         others = ", ".join(l for _, l, _ in candidates
@@ -480,16 +479,6 @@ class Bridge:
             self._reconnect(current)
         return False
 
-    def _tune_flow_window(self) -> None:
-        """Widen the BLE in-flight window on firmware that can take it.
-
-        fw >= 0.5.1 grew LINK_RX_BUF to 10240; that minus one max-size frame
-        (8192) lets ~3 requests pipeline, where the class default fits one and
-        serializes every round trip. Older firmware keeps the defaults."""
-        assert self.info is not None
-        if getattr(self._t, "max_inflight", None) and self.info.fw_version >= (0, 5, 1):
-            self._t.max_inflight = self._t.burst_window = 8192
-
     def _start_reader(self) -> None:
         self._reader = threading.Thread(target=self._read_loop, daemon=True,
                                         name="espbridge-reader")
@@ -669,10 +658,11 @@ class Bridge:
         them has incremented the counter (which would let them all write at
         once and overflow the buffer).
 
-        Only transports that expose `max_inflight` (BLE) ever block here;
-        serial transports only account the bytes so that send()'s fence
-        works correctly. After a wait timeout the method falls through rather
-        than deadlocking — the firmware buffer can absorb one extra frame."""
+        The cap is the transport's `max_inflight` — sized to the firmware's
+        link RX buffer minus one max frame, so a pipelined burst can't
+        overflow it while a slow handler blocks the RX pump. After a wait
+        timeout the method falls through rather than deadlocking — the
+        firmware buffer can absorb one extra frame."""
         with self._flow:
             window = getattr(self._t, "max_inflight", None)
             if window and self._ready.is_set():
@@ -808,14 +798,18 @@ class Bridge:
 
     def free_heap(self) -> dict:
         """Heap stats from the board: ``{"free", "min_free", "largest_block",
-        "dropped_events"}`` in bytes (plus ``"link_rx_dropped"`` on fw >= 0.3.2).
-        Handy for spotting memory pressure or a leak over time."""
+        "dropped_events"}`` in bytes, plus ``"link_rx_dropped"`` (fw >= 0.3.2,
+        BLE RX overflow bytes) and ``"serial_rx_errors"`` (fw >= 0.5.2,
+        corrupted frames received on the USB link). Handy for spotting memory
+        pressure, a leak, or link-level loss over time."""
         v = self.request(C.SYS_FREE_HEAP)
         free, min_free, largest, dropped = struct.unpack_from(">4I", v)
         out = {"free": free, "min_free": min_free, "largest_block": largest,
                "dropped_events": dropped}
-        if len(v) >= 20:  # firmware >= 0.3.2 adds this field: bytes dropped by the BLE link RX buffer
+        if len(v) >= 20:  # fw >= 0.3.2: bytes dropped by the BLE link RX buffer
             out["link_rx_dropped"] = struct.unpack_from(">I", v, 16)[0]
+        if len(v) >= 24:  # fw >= 0.5.2: UART RX error events (overflow/framing)
+            out["serial_rx_errors"] = struct.unpack_from(">I", v, 20)[0]
         return out
 
     def deep_sleep(self, seconds: float = 0, *, wake_pin: int | None = None,

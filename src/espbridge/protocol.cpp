@@ -367,11 +367,19 @@ static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
   return false;
 }
 
+// Corrupt frames received on the USB serial link (bad COBS, short, CRC fail).
+// One lost or flipped byte lands here — exposed via SYS_FREE_HEAP so a host
+// retry warning can be traced to actual line corruption instead of guesswork.
+static uint32_t serial_rx_errors = 0;
+uint32_t link_serial_rx_errors() { return serial_rx_errors; }
+
 static void handle_encoded(uint8_t origin, const uint8_t* enc, uint16_t enclen) {
   uint16_t n = cobs_decode(enc, enclen, rxframe);
-  if (n < 6) return;  // minimum valid frame: 4-byte header + 2-byte CRC; drop shorter frames silently
-  uint16_t crc = rd16(rxframe + n - 2);
-  if (crc16_ccitt(rxframe, n - 2) != crc) return;  // CRC mismatch: frame is corrupted; drop it and let the host retry on timeout
+  if (n < 6 || crc16_ccitt(rxframe, n - 2) != rd16(rxframe + n - 2)) {
+    // Corrupted frame: drop it and let the host retry on timeout.
+    if (origin == LINK_USB) serial_rx_errors++;
+    return;
+  }
   uint8_t seq = rxframe[1];
   uint16_t cmd = rd16(rxframe + 2);
   if (handle_auth(origin, seq, cmd, rxframe + 4, n - 6)) return;
@@ -387,8 +395,12 @@ static void pump_bytes(uint8_t origin, const uint8_t* chunk, int n) {
       rx.len = 0;
       rx.overflow = false;
     } else {
-      if (rx.len < sizeof(rx.acc)) rx.acc[rx.len++] = b;
-      else rx.overflow = true;  // accumulator full; discard bytes until the next 0x00 frame delimiter
+      if (rx.len < sizeof(rx.acc)) {
+        rx.acc[rx.len++] = b;
+      } else {  // accumulator full (e.g. a lost delimiter merged two frames); discard until the next 0x00
+        if (!rx.overflow && origin == LINK_USB) serial_rx_errors++;
+        rx.overflow = true;
+      }
     }
   }
 }

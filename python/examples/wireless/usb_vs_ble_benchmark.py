@@ -12,9 +12,9 @@ Speed knobs, in order of impact:
   2. Pipelining — request() is thread-safe and the protocol allows 255
      requests in flight; issuing from several threads hides round-trip latency.
   3. Batching — one big payload (MAX_PAYLOAD=2048) beats many small ones.
-  4. Firmware version — fw >= 0.5.1 negotiates a 15 ms BLE connection interval
-     + 251-byte LL packets after auth, routes replies only to the requesting
-     link, and lets ~3 BLE frames pipeline (older firmware: one at a time).
+  4. BLE link tuning — after auth the firmware negotiates a 15 ms connection
+     interval + 251-byte LL packets, routes replies only to the requesting
+     link, and lets ~3 BLE frames pipeline.
 """
 import argparse
 import statistics
@@ -108,7 +108,7 @@ def main() -> None:
         print("=" * 22, "Bluetooth", "=" * 21)
         try:
             with Bridge(ble=True, password=args.password, timeout=10.0) as esp:
-                # fw >= 0.5.1 negotiates fast params post-auth; wait for the
+                # The firmware negotiates fast params post-auth; wait for the
                 # central to grant them so numbers reflect steady state.
                 time.sleep(1.5)
                 bench_bridge(esp, ping_count=50)  # BLE pings are ~15x slower

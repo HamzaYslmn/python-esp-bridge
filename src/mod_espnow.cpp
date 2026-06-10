@@ -13,6 +13,7 @@
 //    (no STA association, no active AP).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/link.h"
 
 #if BRIDGE_HAS_ESPNOW
 
@@ -86,8 +87,16 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
   uint8_t channel = p[0], flags = p[1];
 
   // ESP-NOW requires the Wi-Fi driver to be running, even if not associated.
-  // Bring up STA mode if the radio is completely off.
-  if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+  // Bring up STA mode if the radio is completely off — unless that would
+  // starve a live BLE session (the driver costs ~50 KB; Bluedroid dies under
+  // ~8 KB free): refuse with a clean error instead of killing the link.
+  if (WiFi.getMode() == WIFI_MODE_NULL) {
+    if (link_ble_authed() && ESP.getFreeHeap() < ESPNOW_UP_BLE_MIN_HEAP) {
+      proto_reply_err(seq, cmd, ST_NO_MEM);
+      return;
+    }
+    WiFi.mode(WIFI_STA);
+  }
 
   uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
   if (flags & 0x01) proto |= WIFI_PROTOCOL_LR;

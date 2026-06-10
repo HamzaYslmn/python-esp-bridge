@@ -37,6 +37,7 @@ bool link_ble_enabled();    // link_ble_init() succeeded
 bool link_ble_connected();  // a BLE central is currently connected
 bool link_ble_authed();     // ...and presented the correct password
 uint32_t link_ble_rx_dropped();  // bytes lost to RX buffer overflow (diagnostics)
+uint32_t link_serial_rx_errors();  // UART overflow/framing error events (0 on native USB)
 void link_ble_set_authed(bool v);
 const char* link_ble_password();
 

@@ -212,14 +212,15 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
-    case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped
-      uint8_t buf[20];
+    case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped, serial_errs
+      uint8_t buf[24];
       wr32(buf, ESP.getFreeHeap());
       wr32(buf + 4, ESP.getMinFreeHeap());
       wr32(buf + 8, heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       wr32(buf + 12, proto_dropped_events());
-      wr32(buf + 16, link_ble_rx_dropped());  // BLE RX drop counter added in fw 0.3.2 (host added length checks at the same time)
-      proto_reply(seq, cmd, buf, 20);
+      wr32(buf + 16, link_ble_rx_dropped());    // added fw 0.3.2; host length-checks
+      wr32(buf + 20, link_serial_rx_errors());  // added fw 0.5.2; host length-checks
+      proto_reply(seq, cmd, buf, 24);
       break;
     }
 

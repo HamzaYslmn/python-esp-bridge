@@ -3,6 +3,7 @@
 // proto_send_event so that tx_task remains the sole serial writer.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/link.h"
 #include <WiFi.h>
 
 static bool scanning = false;
@@ -86,6 +87,18 @@ static bool take_str(const uint8_t*& p, uint16_t& left, char* out, uint8_t cap) 
   return true;
 }
 
+// Refuse a Wi-Fi bring-up that would starve a live BLE session (see
+// WIFI_UP_BLE_MIN_HEAP). A clean ST_NO_MEM beats the alternative: the radio
+// allocates ~50 KB, Bluedroid hits its ~8 KB floor, and the BLE link dies
+// mid-command. USB sessions are unaffected.
+static bool wifi_heap_ok(uint8_t seq, uint16_t cmd) {
+  if (link_ble_authed() && ESP.getFreeHeap() < WIFI_UP_BLE_MIN_HEAP) {
+    proto_reply_err(seq, cmd, ST_NO_MEM);
+    return false;
+  }
+  return true;
+}
+
 void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WIFI, op);
   switch (op) {
@@ -93,6 +106,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       // Channel-hopping during a scan disrupts ESP-NOW: peers on other channels
       // cannot be reached while the radio sweeps. See PROTOCOL.md for details.
       if (scanning) { proto_reply_err(seq, cmd, ST_BUSY); return; }
+      if (!wifi_heap_ok(seq, cmd)) return;
       WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
         proto_reply_err(seq, cmd, ST_WIFI);
@@ -110,6 +124,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         proto_reply_err(seq, cmd, ST_BAD_ARGS);
         return;
       }
+      if (!wifi_heap_ok(seq, cmd)) return;
       WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       WiFi.begin(ssid, pass[0] ? pass : nullptr);
       sta_started = true;
@@ -152,6 +167,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       }
       uint8_t channel = q[0] ? q[0] : 1;
       uint8_t max_conn = q[1] ? q[1] : 4;
+      if (!wifi_heap_ok(seq, cmd)) return;
       WiFi.mode(sta_started ? WIFI_MODE_APSTA : WIFI_MODE_AP);
       if (!WiFi.softAP(ssid, pass[0] ? pass : nullptr, channel, 0, max_conn)) {
         proto_reply_err(seq, cmd, ST_WIFI);

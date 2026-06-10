@@ -33,6 +33,7 @@ GPIO, ADC/DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE, ESP-NOW, RMT,
 
 - **arduino-esp32 core 3.x** (Boards Manager → "esp32 by Espressif Systems").
   The 3.x LEDC/String APIs are required; it will not build on 2.x.
+  Tested with **3.3.6** (classic ESP32, Minimal SPIFFS partition scheme).
 - No external libraries — Bluetooth uses the bundled Bluedroid stack.
   Note: core 3.3.x ships NimBLE (not Bluedroid) on S3/C3/C6, so the Bluetooth
   link is currently classic-ESP32 only; other chips build USB-only
@@ -65,6 +66,12 @@ OTA (`espbridge.ota`, USB *or* Bluetooth) updates the firmware binary itself —
 the cable-free complement to the link for deployed boards. It needs the OTA
 partition above; on Huge APP there's no OTA slot, so `esp.ota` replies
 `unsupported` (expected, not a bug).
+
+> **Compile-speed tip:** arduino-cli caches the build per FQBN, and the
+> partition scheme is part of the FQBN — alternating schemes between compiles
+> throws the sketch cache away each time (~minutes per build). Pick one scheme
+> for all your boards, compile once, then `arduino-cli upload -p <port>` per
+> board reuses the cached binaries.
 
 ## Optional peripherals (compile-time)
 

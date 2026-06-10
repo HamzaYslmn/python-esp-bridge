@@ -349,6 +349,12 @@ ESP-NOW works everywhere; no DAC on S3/C3/C6/H2). Capabilities are reported by t
 firmware at connect time, so the Python API fails fast with a clear error for
 anything your chip lacks.
 
+Tested with **arduino-esp32 core 3.3.6** on classic ESP32 (CP2102), flashed
+with the **Minimal SPIFFS** partition scheme (1.9 MB app + OTA — the firmware
+is ~95% of that slot; `Huge APP` also works if you don't need OTA). Verified:
+USB at 1.5 Mbaud, the BLE link, ESP-NOW, and Wi-Fi/BLE/ESP-NOW coexistence —
+see `python/examples/wireless/stress_test.py` for the soak/coex suite used.
+
 > **Bluetooth note:** arduino-esp32 core 3.x ships the NimBLE host on
 > S3/C3/C6/H2 — the bridge's Bluetooth code (BLE link + `esp.ble`) speaks
 > Bluedroid, so on those chips the firmware currently builds USB-only.

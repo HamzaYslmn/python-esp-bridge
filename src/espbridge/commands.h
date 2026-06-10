@@ -6,7 +6,7 @@
 #define PROTOCOL_VERSION 1
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 5
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 2
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -106,7 +106,7 @@ enum ChipModel : uint8_t {
 #define SYS_INFO        CMD(MOD_SYS, 0x02)  // -> proto u8|fw[3]|model u8|rev u8|mac[6]|caps u32|gpio_count u8|flash_mb u8|name_len u8|name
 #define SYS_SET_BAUD    CMD(MOD_SYS, 0x03)  // baud u32 (reply sent at old baud, then switch)
 #define SYS_RESET       CMD(MOD_SYS, 0x04)
-#define SYS_FREE_HEAP   CMD(MOD_SYS, 0x05)  // -> free u32|min_free u32|largest u32|dropped_events u32
+#define SYS_FREE_HEAP   CMD(MOD_SYS, 0x05)  // -> free u32|min_free u32|largest u32|dropped_events u32|ble_rx_dropped u32|serial_rx_errors u32
 #define SYS_SET_NAME    CMD(MOD_SYS, 0x06)  // payload = device name (0..32 bytes), persisted in NVS
 #define SYS_AUTH        CMD(MOD_SYS, 0x07)  // payload = password; required over BLE before any other cmd
 #define SYS_SLEEP       CMD(MOD_SYS, 0x08)  // mode u8 (0 deep,1 light)|us u64|wake_pin i8 (-1 none)|wake_level u8

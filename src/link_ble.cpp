@@ -52,12 +52,13 @@ void bt_prepare_ble_only() {
 #endif
 }
 
-// RX stream buffer (host-to-board). Holds ~3 max-size wire frames (2058 B
-// each) plus slack, so the host can pipeline that many; the Python side's BLE
-// max_inflight is this minus one frame (8192) on fw >= 0.5.1. Kept lean — on a
-// classic ESP32 with Wi-Fi + Bluedroid + ESP-NOW every KB here is one the radio
-// stack loses.
-#define LINK_RX_BUF 10240
+// RX stream buffer (host-to-board). The Python side caps in-flight bytes at
+// 4300 — two max-size wire frames, which already saturates BLE (the central's
+// per-connection-event write rate is the bottleneck, not in-flight count) —
+// and the ring holds that cap plus one more frame, so it can't overflow.
+// Kept lean: on a classic ESP32 with Wi-Fi + Bluedroid + ESP-NOW every KB
+// here is one the radio stack loses.
+#define LINK_RX_BUF 6400
 
 static bool enabled = false;
 static volatile bool connected = false;
