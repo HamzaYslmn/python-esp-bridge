@@ -132,6 +132,20 @@ def register_system(mcp, mgr) -> None:
         """esp_sleep_wakeup_cause_t of the last boot (0 reset, 4 timer, 7 gpio, ...)."""
         return {"wake_cause": mgr.bridge().wake_cause()}
 
+    @mcp.tool
+    @guarded
+    def system_cpu_freq(mhz: int) -> dict:
+        """Set the CPU clock (80/160/240 MHz; 80 = battery floor with radios on)."""
+        return {"cpu_mhz": mgr.bridge().cpu_freq(mhz)}
+
+    @mcp.tool
+    @guarded
+    def system_power_mode(mode: str) -> dict:
+        """Apply a power profile: 'battery' (80 MHz CPU + relaxed BLE link) or
+        'performance' (240 MHz + fast BLE link). ESP-NOW RX duty is separate —
+        see espnow_power_save."""
+        return mgr.bridge().power_mode(mode)
+
 
 # ---- gpio --------------------------------------------------------------------
 

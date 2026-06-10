@@ -212,6 +212,26 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
     }
 
+    case 0x0A: {  // CPU_FREQ: mhz u8 (80|160|240) -> mhz u8
+      NEED(1);
+      uint8_t mhz = p[0];
+      // 80 MHz is the floor while any radio is on; APB stays 80 MHz so UART
+      // and peripheral clocks are unaffected.
+      if (mhz != 80 && mhz != 160 && mhz != 240) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      if (!setCpuFrequencyMhz(mhz)) { proto_reply_err(seq, cmd, ST_IO); return; }
+      uint8_t now = (uint8_t)getCpuFrequencyMhz();
+      proto_reply(seq, cmd, &now, 1);
+      break;
+    }
+
+    case 0x0B: {  // LINK_POWER: mode u8 (0=performance, 1=battery) — BLE conn params
+      NEED(1);
+      if (p[0] > 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      if (!link_ble_power(p[0] == 1)) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
+      proto_reply_ok(seq, cmd);
+      break;
+    }
+
     case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped, serial_errs
       uint8_t buf[24];
       wr32(buf, ESP.getFreeHeap());

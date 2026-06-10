@@ -841,6 +841,47 @@ class Bridge:
         the cause is cheap, even where entering sleep isn't supported."""
         return self.request(C.SYS_WAKE_CAUSE)[0]
 
+    def cpu_freq(self, mhz: int) -> int:
+        """Set the CPU clock to 80, 160 or 240 MHz; returns the new frequency.
+
+        80 MHz is the floor while any radio (Wi-Fi/BLE) is active and roughly
+        halves CPU power vs 240. UART and peripheral clocks ride the APB bus,
+        which stays at 80 MHz — baud rates and timings are unaffected."""
+        if mhz not in (80, 160, 240):
+            raise ValueError(f"mhz must be 80, 160 or 240, got {mhz}")
+        return self.request(C.SYS_CPU_FREQ, bytes([mhz]))[0]
+
+    def link_power(self, mode: str = "battery") -> None:
+        """BLE link radio profile (needs a connected BLE central).
+
+        "performance" (the default after every connect) tunes the connection
+        interval down to the central's floor (7.5-15 ms) for lowest latency.
+        "battery" asks for a 100 ms interval with slave latency 4: the idle
+        radio wakes ~2x/s instead of ~70-130x/s, and command RTT rises to
+        ~0.3-1 s. Centrals apply relaxed parameters quickly but may take
+        5-10 s to re-grant fast ones. Per-connection — reconnects start back
+        in performance."""
+        modes = {"performance": 0, "battery": 1}
+        if mode not in modes:
+            raise ValueError(f"mode must be one of {sorted(modes)}, got {mode!r}")
+        self.request(C.SYS_LINK_POWER, bytes([modes[mode]]))
+
+    def power_mode(self, mode: str) -> dict:
+        """One-call power profile: "battery" = 80 MHz CPU + relaxed BLE link;
+        "performance" = 240 MHz + fast BLE link. Returns what was applied.
+
+        The BLE part is skipped silently on USB sessions. ESP-NOW receive duty
+        is its own (third) knob — see :meth:`espnow.EspNow.power_save`."""
+        if mode not in ("performance", "battery"):
+            raise ValueError(f"mode must be 'performance' or 'battery', got {mode!r}")
+        applied = {"cpu_mhz": self.cpu_freq(80 if mode == "battery" else 240)}
+        try:
+            self.link_power(mode)
+            applied["ble_link"] = mode
+        except RemoteError:  # not a BLE session (no central connected)
+            applied["ble_link"] = None
+        return applied
+
     @staticmethod
     def _sleep_args(mode: int, seconds: float, wake_pin: int | None,
                     wake_level: int) -> bytes:

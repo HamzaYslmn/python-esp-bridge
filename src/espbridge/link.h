@@ -45,6 +45,7 @@ const char* link_ble_password();
 // it sends one MTU-sized chunk per pass while link_ble_writable() and moves
 // on to the other link the moment this one is congested or down.
 bool link_ble_up();        // a central is connected (frames may be in flight)
+bool link_ble_power(bool battery);  // conn-params profile; false when no central is connected
 bool link_ble_writable();  // ...and the BT stack can take a notification now
 // Send at most one MTU-sized notification from data; returns bytes consumed
 // (0 when not writable).

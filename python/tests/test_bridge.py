@@ -147,6 +147,33 @@ def test_free_heap_reports_link_rx_drops(bridge):
     assert bridge.free_heap()["link_rx_dropped"] == 0
 
 
+def test_cpu_freq_round_trip(bridge, fw):
+    assert bridge.cpu_freq(80) == 80
+    assert fw.cpu_mhz == 80
+    with pytest.raises(ValueError):
+        bridge.cpu_freq(120)
+
+
+def test_link_power_modes(bridge, fw):
+    bridge.link_power("battery")
+    assert fw.link_power_mode == 1
+    bridge.link_power("performance")
+    assert fw.link_power_mode == 0
+    with pytest.raises(ValueError):
+        bridge.link_power("turbo")
+
+
+def test_power_mode_battery_applies_both(bridge, fw):
+    assert bridge.power_mode("battery") == {"cpu_mhz": 80, "ble_link": "battery"}
+    assert (fw.cpu_mhz, fw.link_power_mode) == (80, 1)
+    assert bridge.power_mode("performance") == {"cpu_mhz": 240, "ble_link": "performance"}
+
+
+def test_power_mode_skips_ble_on_usb_session(bridge, fw):
+    fw.ble_central = False  # firmware replies NOT_INIT to LINK_POWER
+    assert bridge.power_mode("battery") == {"cpu_mhz": 80, "ble_link": None}
+
+
 def test_gpio_edge_events_dispatch(bridge, fw):
     got = []
     done = threading.Event()

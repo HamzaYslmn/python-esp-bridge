@@ -92,6 +92,9 @@ class FakeFirmware:
 
         self.sleeps: list[tuple[int, int, int, int]] = []  # (mode, duration_us, wake_pin, wake_level)
         self.wake_cause = 0
+        self.cpu_mhz = 240
+        self.ble_central = True  # set False to model a USB session (LINK_POWER -> NOT_INIT)
+        self.link_power_mode: int | None = None
 
         self.ota_size: int | None = None
         self.ota_data = bytearray()
@@ -480,6 +483,22 @@ class FakeFirmware:
                 self._reply(seq, cmd, bytes([self.wake_cause]))
         elif cmd == C.SYS_WAKE_CAUSE:
             self._reply(seq, cmd, bytes([self.wake_cause]))
+        elif cmd == C.SYS_CPU_FREQ:
+            if p[0] not in (80, 160, 240):
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            else:
+                self.cpu_mhz = p[0]
+                self._reply(seq, cmd, bytes([p[0]]))
+        elif cmd == C.SYS_LINK_POWER:
+            # The real firmware replies NOT_INIT when no BLE central is
+            # connected; the fake models a BLE session by default.
+            if p[0] > 1:
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            elif not self.ble_central:
+                self._reply_err(seq, cmd, C.Status.NOT_INIT)
+            else:
+                self.link_power_mode = p[0]
+                self._reply(seq, cmd)
 
         # ---- NVS ----
         elif cmd == C.NVS_SET:

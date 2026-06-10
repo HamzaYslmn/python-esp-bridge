@@ -11,7 +11,7 @@
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 11
-#define FW_VERSION_PATCH 2
+#define FW_VERSION_PATCH 3
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -118,6 +118,8 @@ enum ChipModel : uint8_t {
                                             // deep: replies OK, flushes, sleeps (link drops; board reboots on wake)
                                             // light: replies AFTER waking -> cause u8
 #define SYS_WAKE_CAUSE  CMD(MOD_SYS, 0x09)  // -> cause u8 (esp_sleep_wakeup_cause_t: 0 power-on/reset, 2 ext0, 3 ext1, 4 timer, 7 gpio)
+#define SYS_CPU_FREQ    CMD(MOD_SYS, 0x0A)  // mhz u8 (80|160|240) -> mhz u8 (80 is the floor with any radio on; APB stays 80 MHz)
+#define SYS_LINK_POWER  CMD(MOD_SYS, 0x0B)  // mode u8 (0=performance, 1=battery) — BLE conn interval/latency profile
 #define SYS_READY       CMD(MOD_SYS, 0x80)  // event at boot; payload = same as SYS_INFO
 #define SYS_LOG         CMD(MOD_SYS, 0x81)  // event: level u8|msg
 

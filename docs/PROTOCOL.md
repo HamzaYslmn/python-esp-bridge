@@ -240,6 +240,19 @@ OK, flushes, then powers down — the board reboots on wake. Light sleep
 replies *after* waking with the cause. `SYS_WAKE_CAUSE` reports the last
 boot's wake reason. Gated on `CAP_SLEEP` (see IRAM note below).
 
+### Power (SYS 0x0A/0x0B)
+
+`SYS_CPU_FREQ` (`mhz u8` ∈ 80/160/240 → granted `mhz u8`) scales the CPU
+clock; 80 MHz is the floor while any radio is on, and APB stays at 80 MHz so
+UART/peripheral timings are unaffected. `SYS_LINK_POWER` (`mode u8`) switches
+the BLE connection-parameter profile: 0 = performance (the post-auth ladder,
+7.5–15 ms interval), 1 = battery (50–100 ms interval, slave latency 4 — the
+idle radio wakes ~2×/s instead of ~70–130×/s; RTT rises to ~0.3–1 s).
+Centrals apply relaxed parameters quickly but may take 5–10 s to re-grant
+fast ones. Replies `ST_NOT_INIT` when no BLE central is connected.
+Per-connection; reconnects start back in performance. ESP-NOW receive duty
+is the third knob: `ESPNOW_POWER_SAVE`.
+
 ### ETH (module 0x53) and CAM (module 0x73) — compile-time opt-ins
 
 Disabled by default (build flags `-DBRIDGE_ENABLE_ETH=1` /
