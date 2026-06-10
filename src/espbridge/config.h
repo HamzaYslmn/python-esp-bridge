@@ -217,8 +217,11 @@
 // the full-duplex line saturated — and the ring holds that cap plus one more
 // frame, so it can't overflow; UART overflow/framing errors are counted
 // (SYS_FREE_HEAP).
+// TX ring is small on purpose: tx_task's per-link cursor refills it every
+// pass (~1 ms), so it only needs to bridge wake-up latency, not hold whole
+// frames (1024 B = ~6 ms of drain at 1.5 Mbaud).
 #define SERIAL_RX_BUF  8704
-#define SERIAL_TX_BUF  2048
+#define SERIAL_TX_BUF  1024
 
 // Bringing the radio up costs real heap (measured on classic ESP32: ESP-NOW's
 // Wi-Fi driver ~52 KB; a full AP/STA ~55 KB). With a BLE central connected,
@@ -235,6 +238,13 @@
 // concurrent slow requests can be in flight from a multi-threaded host before
 // one is rejected with ST_BUSY; the cost is just queue slots (Req structs).
 #define SLOWQ_DEPTH     32
+
+// Depth of EACH per-link outbound frame queue (bridge_tx drains one stream
+// per link with non-blocking writes). Replies wait up to 250 ms for a slot;
+// events are dropped (and counted) when their link's queue is full. In-flight
+// replies are bounded by the host's flow-control window (~3 frames), so 16
+// slots is mostly event headroom.
+#define TXQ_DEPTH       16
 
 // rx_task / slow_task yield a scheduler tick at least this often even under
 // continuous traffic. Without it a busy high-priority bridge task starves the

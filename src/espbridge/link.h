@@ -41,8 +41,14 @@ uint32_t link_serial_rx_errors();  // UART overflow/framing error events (0 on n
 void link_ble_set_authed(bool v);
 const char* link_ble_password();
 
-// TX: notify the connected client, chunked to MTU. tx_task only.
-void link_ble_write(const uint8_t* data, uint16_t len);
+// TX (tx_task only) — non-blocking chunk interface. tx_task owns the pacing:
+// it sends one MTU-sized chunk per pass while link_ble_writable() and moves
+// on to the other link the moment this one is congested or down.
+bool link_ble_up();        // a central is connected (frames may be in flight)
+bool link_ble_writable();  // ...and the BT stack can take a notification now
+// Send at most one MTU-sized notification from data; returns bytes consumed
+// (0 when not writable).
+uint16_t link_ble_write_chunk(const uint8_t* data, uint16_t len);
 
 // RX: drain bytes written by the BLE client into buf; returns bytes copied.
 uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen);

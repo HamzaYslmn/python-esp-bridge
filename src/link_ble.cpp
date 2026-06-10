@@ -78,12 +78,14 @@ static volatile uint32_t rx_dropped = 0;  // bytes lost to RX buffer overflow
 // we only advertise a preferred interval passively (setMin/MaxPreferred);
 // Windows ignores it and sits at ~20 ms.
 // After SYS_AUTH — the last handshake step, so connect-time setup is provably
-// done — we tune in a strict sequence, each step kicked off by the previous
-// one's completion event: (1) ask 7.5 ms, (2) fall back to 7.5-15 ms if
-// rejected, (3) data-length extension to 251-byte PDUs. Drops round trips from
-// ~40 ms to ~15 ms on Windows.
+// done — we tune in a strict ladder, each step kicked off by the previous
+// one's completion event. Centrals that accept a range grant its MAXIMUM, so
+// the ladder widens the range one notch per rejection to find the central's
+// true floor: (1) 7.5 ms, (2) 7.5-11.25 ms, (3) 7.5-15 ms, then (4) data
+// length extension to 251-byte PDUs. RTT = 2x the granted interval.
 static esp_bd_addr_t peer_bda;  // central's address, captured at connect
-static volatile uint8_t tune_state = 0;  // 0 idle, 1 asked 7.5ms, 2 asked range, 3 done
+static volatile uint8_t tune_state = 0;  // 0 idle; 1..3 ladder step asked; 4 DLE/done
+static const uint16_t tune_max_int[] = {0x06, 0x09, 0x0C};  // 7.5 / 11.25 / 15 ms
 
 static void request_conn_params(uint16_t min_int, uint16_t max_int) {
   esp_ble_conn_update_params_t p = {};
@@ -179,11 +181,11 @@ static void link_gap_evt(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* p
              (int)param->update_conn_params.latency,
              (int)param->update_conn_params.timeout * 10);
     proto_log(1, msg);
-    if (tune_state == 1 && param->update_conn_params.status != 0) {
-      tune_state = 2;  // 7.5 ms rejected: settle for anything in 7.5-15 ms
-      request_conn_params(0x06, 0x0C);
-    } else if (tune_state == 1 || tune_state == 2) {
-      tune_state = 3;  // parameters settled: now (and only now) ask for DLE
+    if (tune_state >= 1 && tune_state <= 2 && param->update_conn_params.status != 0) {
+      tune_state++;  // rejected: widen the range one notch and retry
+      request_conn_params(0x06, tune_max_int[tune_state - 1]);
+    } else if (tune_state >= 1 && tune_state <= 3) {
+      tune_state = 4;  // parameters settled: now (and only now) ask for DLE
       esp_ble_gap_set_pkt_data_len(peer_bda, 251);
     }
   } else if (event == ESP_GAP_BLE_SET_PKT_LENGTH_COMPLETE_EVT) {
@@ -277,34 +279,27 @@ void link_ble_set_authed(bool v) {
   // Kick off post-auth link tuning (see tune_state); link_gap_evt() drives the
   // rest. The central resolves each request async; rejection leaves defaults.
   tune_state = 1;
-  request_conn_params(0x06, 0x06);  // ask for the spec minimum, 7.5 ms
+  request_conn_params(0x06, tune_max_int[0]);  // start at the spec minimum, 7.5 ms
 }
 const char* link_ble_password() { return link_password; }
 void* link_ble_server() { return server; }
 
-void link_ble_write(const uint8_t* data, uint16_t len) {
-  if (!enabled || !connected || tx_chr == nullptr) return;
-  uint16_t chunk_max = att_mtu > 3 ? att_mtu - 3 : 20;
-  uint8_t burst = 0;
-  while (len > 0) {
-    // Congestion-driven flow control: if Bluedroid's TX queue is full,
-    // spin-wait for it to drain rather than sending a notification that
-    // would be silently dropped. We cap the wait at 250 ms; if it is still
-    // congested after that, something is seriously wrong and the host's
-    // pending request will time out and retry anyway.
-    for (uint16_t waited = 0; congested && connected && waited < 250; waited++)
-      vTaskDelay(1);
-    if (!connected) return;
-    uint16_t n = len < chunk_max ? len : chunk_max;
-    tx_chr->setValue((uint8_t*)data, n);
-    tx_chr->notify();
-    data += n;
-    len -= n;
-    if (++burst >= 8 && len > 0) {  // yield briefly every 8 chunks so the radio and slow tasks can run
-      burst = 0;
-      vTaskDelay(1);
-    }
-  }
+bool link_ble_up() { return enabled && connected && tx_chr != nullptr; }
+
+// Congestion-driven flow control: when Bluedroid's TX queue is full
+// (ESP_GATTS_CONGEST_EVT), a notification would be silently discarded —
+// so tx_task just skips this link until the congestion clears, instead of
+// the old behaviour of spin-waiting up to 250 ms (which stalled the serial
+// link's frames behind it).
+bool link_ble_writable() { return link_ble_up() && !congested; }
+
+uint16_t link_ble_write_chunk(const uint8_t* data, uint16_t len) {
+  if (!link_ble_writable() || len == 0) return 0;
+  uint16_t chunk = att_mtu > 3 ? att_mtu - 3 : 20;
+  if (len < chunk) chunk = len;
+  tx_chr->setValue((uint8_t*)data, chunk);
+  tx_chr->notify();
+  return chunk;
 }
 
 uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen) {
@@ -322,7 +317,9 @@ uint32_t link_ble_rx_dropped() { return 0; }
 bool link_ble_authed() { return false; }
 void link_ble_set_authed(bool) {}
 const char* link_ble_password() { return ""; }
-void link_ble_write(const uint8_t*, uint16_t) {}
+bool link_ble_up() { return false; }
+bool link_ble_writable() { return false; }
+uint16_t link_ble_write_chunk(const uint8_t*, uint16_t) { return 0; }
 uint16_t link_ble_read(uint8_t*, uint16_t) { return 0; }
 void* link_ble_server() { return nullptr; }
 

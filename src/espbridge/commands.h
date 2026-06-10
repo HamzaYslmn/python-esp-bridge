@@ -10,7 +10,7 @@
 // above stays the hard compatibility gate; this one signals feature parity.
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 10
+#define FW_VERSION_MINOR 11
 #define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):

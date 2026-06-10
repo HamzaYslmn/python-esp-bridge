@@ -140,7 +140,7 @@ on core 0 while command N+1 executes on core 1.
 
 | task          | core | prio | role |
 |---------------|------|------|------|
-| `bridge_tx`   | 0    | 12   | sole link writer; drains the outbound frame queue (yields to the radio stacks, prio 19+) |
+| `bridge_tx`   | 0    | 12   | sole link writer; drains one outbound frame queue **per link** with non-blocking writes, so a stalled link (BLE congestion, full serial ring) never delays the other (yields to the radio stacks, prio 19+) |
 | `bridge_rx`   | 1    | 10   | decodes frames; runs fast handlers (SYS/GPIO/ADC/DAC/TOUCH/PWM/I2C/SPI/UART/NVS/MCPWM, plus 1-Wire — its IRQ-masking bit slots must stay off the radio core) inline; pumps GPIO edge + UART RX events |
 | `bridge_slow` | 0    | 9    | owns all Wi-Fi/NET/ESP-NOW/BLE + FS/OTA/RMT/TWAI/I2S/camera state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
 

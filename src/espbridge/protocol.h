@@ -1,7 +1,9 @@
 // python-esp-bridge — frame codec, FreeRTOS task plumbing, dispatch.
 //
 // Task model (core placement: see the task-layout note in config.h):
-//   tx_task   — CORE_RADIO: sole link writer; drains the outbound frame queue.
+//   tx_task   — CORE_RADIO: sole link writer; drains one outbound frame queue
+//               PER LINK with non-blocking writes, so a stalled link (BLE
+//               congestion, full serial ring) never delays the other link.
 //   rx_task   — CORE_APP: decodes frames; runs fast handlers (SYS/GPIO/analog/
 //               PWM/I2C/SPI/UART/NVS/MCPWM and the IRQ-masking 1-Wire) inline;
 //               pumps GPIO edge + UART RX events.

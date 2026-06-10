@@ -46,31 +46,56 @@ static const uint16_t crc16_table[256] = {
   0x6E17, 0x7E36, 0x4E55, 0x5E74, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0,
 };
 
-uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
-  uint16_t crc = 0xFFFF;
+// Incremental form: feed any number of pieces, starting from 0xFFFF.
+static uint16_t crc16_step(uint16_t crc, const uint8_t* data, uint16_t len) {
   for (uint16_t i = 0; i < len; i++)
     crc = (uint16_t)(crc << 8) ^ crc16_table[(uint8_t)((crc >> 8) ^ data[i])];
   return crc;
 }
 
+uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
+  return crc16_step(0xFFFF, data, len);
+}
+
 // ---- COBS (Consistent Overhead Byte Stuffing) ---------------------------------
-// cobs_encode: encodes in-place to out; returns the encoded byte count.
+// Incremental encoder: header, payload and CRC are fed straight into the
+// output buffer in pieces, so frames are encoded without an intermediate
+// "logical frame" scratch buffer (2 KB of DRAM that coex needs more).
 // out must be sized at least len + len/254 + 1 (worst-case overhead).
-static uint16_t cobs_encode(const uint8_t* in, uint16_t len, uint8_t* out) {
-  uint16_t ri = 0, wi = 1, code_i = 0;
-  uint8_t code = 1;
-  while (ri < len) {
-    if (in[ri] == 0) {
-      out[code_i] = code;
-      code = 1; code_i = wi++;
-      ri++;
+struct CobsEnc {
+  uint8_t* out;
+  uint16_t wi;      // next write index
+  uint16_t code_i;  // index of the pending code byte
+  uint8_t code;
+};
+
+static void cobs_begin(CobsEnc& e, uint8_t* out) {
+  e.out = out;
+  e.wi = 1;
+  e.code_i = 0;
+  e.code = 1;
+}
+
+static void cobs_feed(CobsEnc& e, const uint8_t* d, uint16_t n) {
+  for (uint16_t i = 0; i < n; i++) {
+    if (d[i] == 0) {
+      e.out[e.code_i] = e.code;
+      e.code = 1;
+      e.code_i = e.wi++;
     } else {
-      out[wi++] = in[ri++];
-      if (++code == 0xFF) { out[code_i] = code; code = 1; code_i = wi++; }
+      e.out[e.wi++] = d[i];
+      if (++e.code == 0xFF) {
+        e.out[e.code_i] = e.code;
+        e.code = 1;
+        e.code_i = e.wi++;
+      }
     }
   }
-  out[code_i] = code;
-  return wi;
+}
+
+static uint16_t cobs_end(CobsEnc& e) {
+  e.out[e.code_i] = e.code;
+  return e.wi;
 }
 
 // cobs_decode: decodes in to out; returns decoded byte count, or 0 on malformed input.
@@ -85,17 +110,30 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
   return wi;
 }
 
-// ---- outbound queue + tx task ---------------------------------------------------
-// dest controls where each frame is sent:
-//   DEST_ALL  — serial always; BLE as well when the client is authenticated.
-//   LINK_BLE  — BLE only; used for the pre-authentication SYS_AUTH exchange.
+// ---- outbound per-link streams + tx task ------------------------------------------
+// dest controls routing at enqueue time:
+//   DEST_ALL  — a copy to every link that is up (serial always; BLE when authed).
+//   LINK_USB / LINK_BLE — that link only (replies; the pre-auth SYS_AUTH exchange).
 #define DEST_ALL 0xFF
 
-struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t dest; uint8_t* buf; };
+struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t* buf; };
 
-static QueueHandle_t txq;
-static std::atomic<bool> tx_busy{false};       // tx_task busy-with-a-frame flag (read by proto_tx_flush)
-static std::atomic<uint32_t> dropped{0};       // frames dropped across all producer tasks
+// One outbound stream per link: its own frame queue plus a write cursor over
+// the encoded wire bytes of the frame in flight. tx_task advances both
+// streams with NON-BLOCKING writes only — serial gets exactly what fits its
+// TX ring, BLE gets one MTU chunk when the BT stack isn't congested — so a
+// stalled link (congested radio, full ring, slow baud) delays its own frames
+// and never the other link's. The old single-queue design serialized them:
+// one congested BLE notify could hold a USB reply hostage for 250 ms.
+struct TxStream {
+  QueueHandle_t q;
+  uint8_t wire[ENC_BUF_SIZE];   // encoded frame in flight
+  volatile uint16_t len;        // 0 = stream idle (polled by proto_tx_flush)
+  uint16_t pos;                 // bytes already handed to the link driver
+};
+static TxStream tx_usb, tx_ble;
+static TaskHandle_t tx_task_h;  // enqueue_frame notifies it out of its idle wait
+static std::atomic<uint32_t> dropped{0};  // frames dropped across all producer tasks
 
 // Reply routing: a reply goes back only on the link its request came from.
 // Broadcasting to serial during a BLE session blocks tx_task ~180 ms on a 2 KB
@@ -113,11 +151,9 @@ static uint8_t reply_dest() {
   return DEST_ALL;  // unknown task (shouldn't happen): fall back to broadcast
 }
 
-static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
-                          const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
-  if (!txq) { dropped++; return; }  // proto_log_hook_install() may call this before proto_init()
-  if (len > MAX_PAYLOAD) { dropped++; return; }
-  Frame f = { flags, seq, cmd, len, dest, nullptr };
+static void queue_copy(TxStream& s, uint8_t flags, uint8_t seq, uint16_t cmd,
+                       const uint8_t* data, uint16_t len) {
+  Frame f = { flags, seq, cmd, len, nullptr };
   if (len) {
     f.buf = (uint8_t*)malloc(len);
     if (!f.buf) { dropped++; return; }
@@ -127,41 +163,100 @@ static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
   // allow a short wait if the queue is temporarily full.
   // Events (seq == 0): best-effort — drop immediately if the queue is full.
   TickType_t wait = seq != 0 ? pdMS_TO_TICKS(250) : 0;
-  if (xQueueSend(txq, &f, wait) != pdTRUE) {
+  if (xQueueSend(s.q, &f, wait) != pdTRUE) {
     free(f.buf);
     dropped++;
   }
 }
 
-static void tx_task(void*) {
-  static uint8_t logical[MAX_FRAME];
-  static uint8_t encoded[ENC_BUF_SIZE];
+static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
+                          const uint8_t* data, uint16_t len, uint8_t dest = DEST_ALL) {
+  if (!tx_usb.q) { dropped++; return; }  // proto_log_hook_install() may call this before proto_init()
+  if (len > MAX_PAYLOAD) { dropped++; return; }
+  // Each link gets its own copy and drains it at its own pace — a broadcast
+  // event to a slow link can back up only that link's queue.
+  if (dest == LINK_USB || dest == DEST_ALL)
+    queue_copy(tx_usb, flags, seq, cmd, data, len);
+  if (dest == LINK_BLE || (dest == DEST_ALL && link_ble_authed()))
+    queue_copy(tx_ble, flags, seq, cmd, data, len);
+  if (tx_task_h) xTaskNotifyGive(tx_task_h);  // wake the drainer (latched if it isn't waiting)
+}
+
+// Dequeue the next frame of `s` (if any) and encode it into the stream's wire
+// buffer — header, payload and CRC fed incrementally, no scratch copy. tx_task only.
+static void stream_load(TxStream& s) {
   Frame f;
-  for (;;) {
-    if (xQueueReceive(txq, &f, portMAX_DELAY) != pdTRUE) continue;
-    tx_busy = true;
-    logical[0] = f.flags;
-    logical[1] = f.seq;
-    wr16(logical + 2, f.cmd);
-    if (f.len) memcpy(logical + 4, f.buf, f.len);
-    free(f.buf);
-    wr16(logical + 4 + f.len, crc16_ccitt(logical, 4 + f.len));
-    uint16_t n = cobs_encode(logical, 4 + f.len + 2, encoded);
-    encoded[n++] = 0x00;
-    if (f.dest == LINK_USB) {
-      Serial.write(encoded, n);
-    } else if (f.dest == LINK_BLE) {
-      link_ble_write(encoded, n);
-    } else {  // DEST_ALL: events / boot banner
-      // With a BLE client attached, copy to serial only if it fits the TX ring
-      // now — blocking into the idle 115200-baud UART would stall the BLE frames
-      // behind it. USB-only keeps the blocking write (there the UART is the
-      // requester's link, so back-pressure is correct pacing).
-      if (!link_ble_authed() || Serial.availableForWrite() >= (int)n)
-        Serial.write(encoded, n);
-      if (link_ble_authed()) link_ble_write(encoded, n);
+  if (xQueueReceive(s.q, &f, 0) != pdTRUE) return;
+  uint8_t hdr[4] = { f.flags, f.seq, (uint8_t)(f.cmd >> 8), (uint8_t)f.cmd };
+  uint16_t crc = crc16_step(0xFFFF, hdr, 4);
+  if (f.len) crc = crc16_step(crc, f.buf, f.len);
+  uint8_t tail[2] = { (uint8_t)(crc >> 8), (uint8_t)crc };
+  CobsEnc e;
+  cobs_begin(e, s.wire);
+  cobs_feed(e, hdr, 4);
+  if (f.len) cobs_feed(e, f.buf, f.len);
+  free(f.buf);
+  cobs_feed(e, tail, 2);
+  uint16_t n = cobs_end(e);
+  s.wire[n++] = 0x00;
+  s.pos = 0;
+  s.len = n;
+}
+
+// Advance one stream without blocking; returns true if any bytes moved.
+static bool usb_progress() {
+  if (tx_usb.len == 0) stream_load(tx_usb);
+  if (tx_usb.len == 0) return false;
+  int room = Serial.availableForWrite();
+  if (room <= 0) return false;  // TX ring full: the UART drains it at line rate
+  uint16_t n = tx_usb.len - tx_usb.pos;
+  if ((int)n > room) n = (uint16_t)room;
+  Serial.write(tx_usb.wire + tx_usb.pos, n);  // fits the ring: never blocks
+  tx_usb.pos += n;
+  if (tx_usb.pos == tx_usb.len) tx_usb.len = 0;
+  return true;
+}
+
+static bool ble_progress() {
+  if (tx_ble.len == 0) stream_load(tx_ble);
+  if (tx_ble.len == 0) return false;
+  if (!link_ble_up()) {
+    // Central gone: discard the frame in flight and everything queued behind
+    // it — they can never be delivered, and holding them would leak into the
+    // next session.
+    tx_ble.len = 0;
+    Frame f;
+    while (xQueueReceive(tx_ble.q, &f, 0) == pdTRUE) {
+      free(f.buf);
+      dropped++;
     }
-    tx_busy = false;
+    return false;
+  }
+  uint16_t n = link_ble_write_chunk(tx_ble.wire + tx_ble.pos, tx_ble.len - tx_ble.pos);
+  if (n == 0) return false;  // BT stack congested: skip, retry next pass
+  tx_ble.pos += n;
+  if (tx_ble.pos == tx_ble.len) tx_ble.len = 0;
+  return true;
+}
+
+static void tx_task(void*) {
+  uint16_t spins = 0;
+  for (;;) {
+    bool moved = usb_progress();
+    moved = ble_progress() || moved;
+    if (!moved) {
+      spins = 0;
+      if (tx_usb.len == 0 && tx_ble.len == 0) {
+        // Fully idle: sleep until enqueue_frame notifies (latched, so a
+        // notify that races this wait is not lost).
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+      } else {
+        vTaskDelay(1);  // a link is stalled (ring full / congested): poll soon
+      }
+    } else if (++spins >= RX_YIELD_EVERY) {
+      spins = 0;
+      vTaskDelay(1);  // sustained progress: keep the idle task alive
+    }
   }
 }
 
@@ -213,7 +308,7 @@ static int bridge_vprintf(const char* fmt, va_list ap) {
   // esp_log appends CR/LF; strip it since SYS_LOG delivers one line at a time.
   size_t L = n < 0 ? 0 : (n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
   while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
-  if (L) proto_log(1, line);  // no-op before proto_init() (txq guard)
+  if (L) proto_log(1, line);  // no-op before proto_init() (tx queue guard)
   return n;
 #endif
 }
@@ -223,7 +318,9 @@ void proto_log_hook_install() {
 }
 
 void proto_tx_flush() {
-  while (uxQueueMessagesWaiting(txq) > 0 || tx_busy) vTaskDelay(1);
+  // Drain the SERIAL stream only — callers (the baud switch) care about bytes
+  // still headed for the UART; the BLE stream is unaffected by a baud change.
+  while (uxQueueMessagesWaiting(tx_usb.q) > 0 || tx_usb.len) vTaskDelay(1);
   Serial.flush();
 }
 
@@ -456,11 +553,12 @@ static void rx_task(void*) {
 }
 
 // ---- init / start -----------------------------------------------------------------
-// proto_init: create the TX and net-task queues. Must be called before any
-// proto_* function. proto_start: spawn the three bridge tasks; call at the
-// end of setup() after all other init is done.
+// proto_init: create the per-link TX queues and the slow-handler queue. Must
+// be called before any proto_* function. proto_start: spawn the three bridge
+// tasks; call at the end of setup() after all other init is done.
 void proto_init() {
-  txq = xQueueCreate(48, sizeof(Frame));
+  tx_usb.q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
+  tx_ble.q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
   slowq = xQueueCreate(SLOWQ_DEPTH, sizeof(Req));
 }
 
@@ -469,7 +567,7 @@ void proto_start() {
   // TX and the blocking handlers ride the radio core, RX + fast handlers own
   // the app core, so reply N transmits while command N+1 executes.
   xTaskCreatePinnedToCore(tx_task, "bridge_tx", TX_TASK_STACK, nullptr,
-                          TX_TASK_PRIO, nullptr, TX_TASK_CORE);
+                          TX_TASK_PRIO, &tx_task_h, TX_TASK_CORE);
   xTaskCreatePinnedToCore(rx_task, "bridge_rx", RX_TASK_STACK, nullptr,
                           RX_TASK_PRIO, &rx_task_h, RX_TASK_CORE);
   xTaskCreatePinnedToCore(slow_task, "bridge_slow", SLOW_TASK_STACK, nullptr,
