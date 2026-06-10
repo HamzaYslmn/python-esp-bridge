@@ -854,14 +854,11 @@ class Bridge:
     def link_power(self, mode: str = "battery") -> None:
         """BLE link radio profile (needs a connected BLE central).
 
-        "performance" (the default after every connect) tunes the connection
-        interval down to the central's floor (7.5-15 ms) for lowest latency.
-        "battery" asks for a 100 ms interval with slave latency 4: the idle
-        radio wakes ~2x/s instead of ~70-130x/s, and command RTT rises to
-        ~0.3-1 s. Centrals apply relaxed parameters quickly but may take
-        5-10 s to re-grant fast ones. Per-connection — reconnects start back
-        in performance. "battery" also raises :attr:`timeout` to at least
-        5 s so requests keep margin over the slower link."""
+        "performance" (the default after every connect) = lowest latency.
+        "battery" relaxes the connection interval for far fewer radio wakeups
+        at ~0.3-1 s command RTT, and raises :attr:`timeout` to at least 5 s
+        to keep request margin. Per-connection — reconnects start back in
+        performance. Measured numbers: docs/PROTOCOL.md, "Power"."""
         modes = {"performance": 0, "battery": 1}
         if mode not in modes:
             raise ValueError(f"mode must be one of {sorted(modes)}, got {mode!r}")

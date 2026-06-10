@@ -288,9 +288,8 @@ void* link_ble_server() { return server; }
 bool link_ble_power(bool battery) {
   if (!link_ble_up()) return false;
   if (battery) {
-    // 50-100 ms interval + slave latency 4: idle radio wakeups drop from
-    // ~66/s (15 ms) to ~2/s. Latency only skips events when the board has
-    // nothing to send, so a busy link still uses every event.
+    // 50-100 ms interval + slave latency 4 (latency only skips events when
+    // the board has nothing to send, so a busy link stays responsive).
     tune_state = 4;  // park the fast ladder so GAP events don't re-tighten
     request_conn_params(0x28, 0x50, 4);
   } else {

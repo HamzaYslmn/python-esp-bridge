@@ -13,7 +13,7 @@
 //    (no STA association, no active AP).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
-#include "espbridge/link.h"
+#include "espbridge/radio.h"
 
 #if BRIDGE_HAS_ESPNOW
 
@@ -34,8 +34,6 @@ static bool inited = false;
 static SemaphoreHandle_t tx_done_sem;
 static std::atomic<uint8_t> ff_outstanding{0};       // fire-and-forget sends in flight
 static std::atomic<uint8_t> sync_status{1};          // last sync result (0 = ACKed)
-
-bool espnow_is_active() { return inited; }
 
 static void on_tx_done(const uint8_t* dst_mac, esp_now_send_status_t status) {
   if (ff_outstanding > 0) {
@@ -86,21 +84,12 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
   NEED(2);
   uint8_t channel = p[0], flags = p[1];
 
-  // ESP-NOW requires the Wi-Fi driver to be running, even if not associated.
-  // Bring up STA mode if the radio is completely off — unless that would
-  // starve a live BLE session (a first driver start costs ~52 KB, a restart
-  // ~33 KB; Bluedroid dies under ~8 KB free): refuse with a clean error
-  // instead of killing the link.
-  if (WiFi.getMode() == WIFI_MODE_NULL) {
-    uint32_t need = wifi_driver_resident() ? ESPNOW_REUP_BLE_MIN_HEAP
-                                           : ESPNOW_UP_BLE_MIN_HEAP;
-    if (link_ble_authed() && ESP.getFreeHeap() < need) {
-      proto_reply_err(seq, cmd, ST_NO_MEM);
-      return;
-    }
-    WiFi.mode(WIFI_STA);
-    wifi_mark_driver_resident();
-  }
+  // ESP-NOW requires the Wi-Fi driver running and sends through the STA
+  // interface, even when not associated. radio_acquire applies the BLE heap
+  // guard before any bring-up.
+  if (!radio_acquire(RADIO_ESPNOW)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
+  if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);
+  else if (WiFi.getMode() == WIFI_MODE_AP) WiFi.mode(WIFI_MODE_APSTA);
 
   uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
   if (flags & 0x01) proto |= WIFI_PROTOCOL_LR;
@@ -118,7 +107,7 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 
   if (!inited) {
     esp_err_t e = esp_now_init();
-    if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+    if (e != ESP_OK) { radio_release(RADIO_ESPNOW); proto_reply_err(seq, cmd, map_err(e)); return; }
     // Max wake window: with Wi-Fi idle the coex arbiter favours BLE and
     // connectionless power save gates the receiver — broadcasts (single-shot,
     // never retried) land in dead air for seconds at a time without this.
@@ -188,15 +177,11 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       handle_init(seq, cmd, p, len);
       break;
 
-    case 0x02:  // DEINIT — and release the radio if ESP-NOW was its only user
+    case 0x02:  // DEINIT — radio powers off unless STA or AP still holds it
       esp_now_deinit();
       inited = false;
       ff_outstanding = 0;
-      // Turning the radio off reclaims ~50 KB of driver heap. This matters
-      // most over BLE: nothing resets the board between Bluetooth sessions,
-      // so a driver left resident would pin the heap near the Bluedroid
-      // floor and cripple every later BLE session. STA/AP owners keep it.
-      if (!wifi_link_in_use()) WiFi.mode(WIFI_MODE_NULL);
+      radio_release(RADIO_ESPNOW);
       proto_reply_ok(seq, cmd);
       break;
 
@@ -223,9 +208,7 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x07: {  // POWER_SAVE: wake window u16 ms | wake interval u16 ms (0 = keep)
-      // RF listens for `window` ms at the start of every `interval`. INIT
-      // defaults to window 65535 (always listening — most reliable under BLE
-      // coex); battery boards can shrink it. window 0 = RX off, TX still works.
+      // RF listens `window` ms per `interval`; 0 = RX off (TX still works).
       NEED(4);
       uint16_t window   = rd16(p);
       uint16_t interval = rd16(p + 2);
@@ -242,8 +225,6 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 }
 
 #else  // !BRIDGE_HAS_ESPNOW
-
-bool espnow_is_active() { return false; }
 
 UNSUPPORTED_STUB(espnow_handle, MOD_ESPNOW)
 

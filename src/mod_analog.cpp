@@ -1,6 +1,7 @@
 // ADC (oneshot reads), DAC (write + cosine generator), TOUCH.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/radio.h"
 #include <esp32-hal-adc.h>
 
 #if BRIDGE_HAS_DAC
@@ -62,7 +63,7 @@ static void adc_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) 
     }
     case 0x02:    // READ -> raw u16
     case 0x03: {  // READ_MV -> millivolts u16
-      if (pin_is_adc2(pin) && wifi_is_active()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
+      if (pin_is_adc2(pin) && radio_active()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       uint8_t buf[2];
       wr16(buf, op == 0x02 ? (uint16_t)analogRead(pin)
                            : (uint16_t)analogReadMilliVolts(pin));

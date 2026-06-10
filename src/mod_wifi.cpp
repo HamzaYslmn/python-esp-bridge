@@ -3,25 +3,18 @@
 // proto_send_event so that tx_task remains the sole serial writer.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
-#include "espbridge/link.h"
+#include "espbridge/radio.h"
 #include <WiFi.h>
 
 static bool scanning = false;
-static bool ap_active = false;
-static bool sta_started = false;
 
 // Radio stays off until the host sends its first Wi-Fi command.
 // This matters on BLE-only boards: the Wi-Fi driver costs several KB of heap,
-// and we only pay that cost if Wi-Fi is actually used.
+// and we only pay that cost if Wi-Fi is actually used. Ownership and heap
+// guards live in radio.cpp; this module just claims RADIO_STA / RADIO_AP.
 // Power-save and coex settings are left at IDF defaults.
 // IMPORTANT: never set WIFI_PS_NONE while Bluetooth is active — the SW radio
 // arbiter becomes unstable and packet loss increases dramatically.
-bool wifi_is_active() { return WiFi.getMode() != WIFI_MODE_NULL; }
-bool wifi_link_in_use() { return sta_started || ap_active; }
-
-static bool driver_resident = false;
-bool wifi_driver_resident() { return driver_resident; }
-void wifi_mark_driver_resident() { driver_resident = true; }
 
 static void on_wifi_event(WiFiEvent_t event, WiFiEventInfo_t info) {
   uint8_t buf[5] = {0};
@@ -92,21 +85,6 @@ static bool take_str(const uint8_t*& p, uint16_t& left, char* out, uint8_t cap) 
   return true;
 }
 
-// Refuse a Wi-Fi bring-up that would starve a live BLE session (see
-// WIFI_UP_BLE_MIN_HEAP / WIFI_REUP_BLE_MIN_HEAP). A clean ST_NO_MEM beats the
-// alternative: the radio allocates ~50 KB, Bluedroid hits its ~8 KB floor,
-// and the BLE link dies mid-command. USB sessions are unaffected.
-static bool wifi_heap_ok(uint8_t seq, uint16_t cmd) {
-  uint32_t need = wifi_driver_resident() ? WIFI_REUP_BLE_MIN_HEAP
-                                         : WIFI_UP_BLE_MIN_HEAP;
-  if (link_ble_authed() && ESP.getFreeHeap() < need) {
-    proto_reply_err(seq, cmd, ST_NO_MEM);
-    return false;
-  }
-  wifi_mark_driver_resident();  // every caller proceeds to raise the radio
-  return true;
-}
-
 void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WIFI, op);
   switch (op) {
@@ -114,8 +92,8 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       // Channel-hopping during a scan disrupts ESP-NOW: peers on other channels
       // cannot be reached while the radio sweeps. See PROTOCOL.md for details.
       if (scanning) { proto_reply_err(seq, cmd, ST_BUSY); return; }
-      if (!wifi_heap_ok(seq, cmd)) return;
-      WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
+      if (!radio_acquire(0)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
+      WiFi.mode(radio_held(RADIO_AP) ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
         proto_reply_err(seq, cmd, ST_WIFI);
         return;
@@ -132,19 +110,18 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         proto_reply_err(seq, cmd, ST_BAD_ARGS);
         return;
       }
-      if (!wifi_heap_ok(seq, cmd)) return;
-      WiFi.mode(ap_active ? WIFI_MODE_APSTA : WIFI_MODE_STA);
+      if (!radio_acquire(RADIO_STA)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
+      WiFi.mode(radio_held(RADIO_AP) ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       WiFi.begin(ssid, pass[0] ? pass : nullptr);
-      sta_started = true;
       proto_reply_ok(seq, cmd);
       break;
     }
 
     case 0x03:  // DISCONNECT
-      WiFi.disconnect(true /*wifioff if no AP*/, false);
-      sta_started = false;
-      // Turn the radio off entirely to reclaim heap, unless another user (AP or ESP-NOW) still needs it.
-      if (!ap_active && !espnow_is_active()) WiFi.mode(WIFI_MODE_NULL);
+      // wifioff=false: radio_release decides the power-off; dropping STA mode
+      // here would kill the STA interface a co-resident ESP-NOW rides on.
+      WiFi.disconnect(false, false);
+      radio_release(RADIO_STA);  // radio powers off unless AP or ESP-NOW still holds it
       proto_reply_ok(seq, cmd);
       break;
 
@@ -175,13 +152,16 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       }
       uint8_t channel = q[0] ? q[0] : 1;
       uint8_t max_conn = q[1] ? q[1] : 4;
-      if (!wifi_heap_ok(seq, cmd)) return;
-      WiFi.mode(sta_started ? WIFI_MODE_APSTA : WIFI_MODE_AP);
+      if (!radio_acquire(RADIO_AP)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
+      // Keep the STA interface up alongside the AP when anything needs it —
+      // ESP-NOW sends through WIFI_IF_STA and dies in pure-AP mode.
+      WiFi.mode(radio_held(RADIO_STA) || radio_held(RADIO_ESPNOW)
+                    ? WIFI_MODE_APSTA : WIFI_MODE_AP);
       if (!WiFi.softAP(ssid, pass[0] ? pass : nullptr, channel, 0, max_conn)) {
+        radio_release(RADIO_AP);
         proto_reply_err(seq, cmd, ST_WIFI);
         return;
       }
-      ap_active = true;
       uint32_t ip = (uint32_t)WiFi.softAPIP();
       proto_reply(seq, cmd, (uint8_t*)&ip, 4);
       break;
@@ -189,8 +169,7 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x06:  // AP_STOP
       WiFi.softAPdisconnect(true);
-      ap_active = false;
-      if (!sta_started && !espnow_is_active()) WiFi.mode(WIFI_MODE_NULL);
+      radio_release(RADIO_AP);
       proto_reply_ok(seq, cmd);
       break;
 

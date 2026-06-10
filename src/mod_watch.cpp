@@ -12,6 +12,7 @@
 //     table is only ever touched from one task and needs no mutex.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
+#include "espbridge/radio.h"
 #include <esp32-hal-adc.h>
 #include <esp_timer.h>
 
@@ -60,7 +61,7 @@ static bool sample(const Watch& w, int32_t& out) {
   switch (w.source) {
     case SRC_ADC_RAW:
     case SRC_ADC_MV:
-      if (pin_is_adc2(w.arg) && wifi_is_active()) return false;
+      if (pin_is_adc2(w.arg) && radio_active()) return false;
       out = (w.source == SRC_ADC_RAW) ? (int32_t)analogRead(w.arg)
                                       : (int32_t)analogReadMilliVolts(w.arg);
       return true;
