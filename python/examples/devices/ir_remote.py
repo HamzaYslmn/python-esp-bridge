@@ -8,12 +8,15 @@ with Bridge() as esp:
     tx = IrSender(esp, pin=4)
     last = None
     print("point a remote at the receiver (Ctrl+C to quit)...")
-    while True:
-        code = rx.receive(timeout_ms=10_000)
-        if code == "repeat":
-            print("  (held)")
-        elif code:
-            last = code
-            print(f"addr=0x{code[0]:02X} cmd=0x{code[1]:02X}")
-            if input("  Enter = replay, anything else = keep listening: ") == "":
-                tx.send_nec(*last)
+    try:
+        while True:
+            code = rx.receive(timeout_ms=10_000)
+            if code == "repeat":
+                print("  (held)")
+            elif code:
+                last = code
+                print(f"addr=0x{code[0]:02X} cmd=0x{code[1]:02X}")
+                if input("  Enter = replay, anything else = keep listening: ") == "":
+                    tx.send_nec(*last)
+    except KeyboardInterrupt:
+        pass

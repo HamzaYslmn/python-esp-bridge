@@ -18,3 +18,4 @@ with Bridge() as esp:
         sock.sendto(b"hello from python-esp-bridge", TARGET)
         data, addr = sock.recvfrom(timeout=5)
         print(f"reply from {addr}: {data!r}")
+    esp.wifi.disconnect()    # powers the radio off, reclaiming ~50 KB of heap

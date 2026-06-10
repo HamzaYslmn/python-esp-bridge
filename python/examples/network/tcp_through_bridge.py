@@ -22,3 +22,5 @@ with Bridge() as esp:
     with esp.net.tcp_connect("httpbin.io", 80) as sock:
         sock.send(b"HEAD / HTTP/1.0\r\nHost: httpbin.io\r\n\r\n")
         print(sock.recv(timeout=10).decode(errors="replace").splitlines()[0])
+
+    esp.wifi.disconnect()    # powers the radio off, reclaiming ~50 KB of heap

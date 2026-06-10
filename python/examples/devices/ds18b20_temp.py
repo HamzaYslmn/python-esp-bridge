@@ -8,7 +8,10 @@ with Bridge() as esp:
     roms = DS18B20.discover(esp, pin=4)
     print(f"found {len(roms)} sensor(s): {roms}")
     probes = [DS18B20(esp, 4, rom) for rom in roms]
-    while True:
-        for p in probes:
-            print(f"{p.rom[:8]}…  {p.read():6.2f} C")
-        time.sleep(1)
+    try:
+        while True:
+            for p in probes:
+                print(f"{p.rom[:8]}…  {p.read():6.2f} C")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass

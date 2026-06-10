@@ -5,16 +5,16 @@ docs/PROTOCOL.md):
 
     bridge_tx   — owns the serial port, drains the outbound frame queue
     bridge_rx   — executes FAST commands inline: GPIO/ADC/DAC/PWM/I2C/SPI/UART
-    bridge_net  — owns Wi-Fi/NET/BLE; slow blocking calls live ONLY here
+    bridge_slow  — owns Wi-Fi/NET/BLE; slow blocking calls live ONLY here
 
 You don't start tasks yourself — you *exploit* them: requests sent from
 different Python threads are correlated by sequence number, so fast traffic
-overtakes slow traffic on the wire. A TCP connect that blocks bridge_net for
+overtakes slow traffic on the wire. A TCP connect that blocks bridge_slow for
 seconds costs GPIO/ADC traffic nothing.
 
 This demo drives all three tasks at once and proves the fast lane stays fast:
 
-    thread A: blocking network operations (bridge_net task)
+    thread A: blocking network operations (bridge_slow task)
     thread B: PWM breathing LED           (bridge_rx task)
     thread C: live OLED status redraws    (bridge_rx task, over I2C)
     main:     latency-samples ping+ADC    (bridge_rx task)
@@ -49,14 +49,14 @@ ADC_PIN = 34
 
 
 def slow_network_work(esp: Bridge, stop: threading.Event) -> None:
-    """Keep the bridge_net task busy with seconds-long blocking calls."""
+    """Keep the bridge_slow task busy with seconds-long blocking calls."""
     if SSID:
         print("[net] joining Wi-Fi ...")
         st = esp.wifi.connect(SSID, PASSWORD)
         print(f"[net] connected: {st.ip}")
         while not stop.is_set():
             try:
-                # TCP connect blocks bridge_net for up to 5 s — fast lane unaffected.
+                # TCP connect blocks bridge_slow for up to 5 s — fast lane unaffected.
                 with esp.net.tcp_connect("example.com", 80) as s:
                     s.send(b"HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n")
                     s.recv(timeout=10)
@@ -68,7 +68,7 @@ def slow_network_work(esp: Bridge, stop: threading.Event) -> None:
         print("[net] no SSID given — using Wi-Fi scans as the slow workload")
         while not stop.is_set():
             try:
-                nets = esp.wifi.scan()       # several seconds inside bridge_net
+                nets = esp.wifi.scan()       # several seconds inside bridge_slow
                 print(f"[net] scan finished: {len(nets)} networks")
             except BridgeError as e:
                 print(f"[net] scan failed: {e}")
@@ -100,7 +100,7 @@ def breathing_led(esp: Bridge, stop: threading.Event) -> None:
 
 def oled_status(esp: Bridge, stop: threading.Event) -> None:
     """Live OLED redraws over I2C — also bridge_rx, so the screen keeps updating
-    while the network task blocks bridge_net. Skips cleanly if there's no panel."""
+    while the network task blocks bridge_slow. Skips cleanly if there's no panel."""
     try:
         from espbridge.drivers.oled import OLED
     except ImportError:

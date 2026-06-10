@@ -22,9 +22,12 @@ with Bridge() as esp:
 
 print("board is asleep; reconnecting after it wakes...")
 time.sleep(12)
-with Bridge() as esp:
-    # The board woke itself on the 10 s timer and rebooted. Note: opening the
-    # USB port pulses the ESP32 auto-reset, so wake_cause() now reads power-on
-    # (0); on a battery board with no host toggling DTR/RTS it reads 4 (timer).
-    print(f"back! board responsive again — {esp.info.chip.name}, "
-          f"wake cause {esp.wake_cause()} (USB reset masks the timer cause)")
+# reset_on_open=False: re-attach WITHOUT pulsing the auto-reset line. The
+# default open would reboot the board again and overwrite the wake cause
+# with power-on (0); this way wake_cause() still reads 4 (the 10 s timer).
+with Bridge(reset_on_open=False) as esp:
+    print(f"back! {esp.info.chip.name} woke itself — "
+          f"wake cause {esp.wake_cause()} (4 = timer)")
+
+# Lighter option: esp.light_sleep(5) pauses the CPU but keeps RAM and all
+# peripheral state, and the same connection resumes when the board wakes.
