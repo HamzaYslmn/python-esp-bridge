@@ -4,10 +4,10 @@
 // above 3200"); this module samples each rule on a background task and pushes a
 // WATCH_EVT only when the rule's state changes. Two design points the bridge
 // cares about:
-//   * Non-interrupt: sampling happens in watch_poll() on net_task, never in an
+//   * Non-interrupt: sampling happens in watch_poll() on slow_task, never in an
 //     ISR, so the application/main loop is never interrupted (unlike GPIO edge
 //     watches, which use attachInterrupt).
-//   * Lock-free: WATCH_ADD/REMOVE/CLEAR/LIST are routed to net_task (via the
+//   * Lock-free: WATCH_ADD/REMOVE/CLEAR/LIST are routed to slow_task (via the
 //     net request queue) — the same task that runs watch_poll() — so the rule
 //     table is only ever touched from one task and needs no mutex.
 #include "espbridge/protocol.h"

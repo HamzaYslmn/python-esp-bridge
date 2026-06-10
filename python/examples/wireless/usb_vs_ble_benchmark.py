@@ -46,7 +46,9 @@ def bench_throughput(esp: Bridge, seconds: float = 2.0, workers: int = 1) -> flo
         nonlocal done, failed
         while time.perf_counter() < deadline:
             try:
-                esp.request(C.SYS_PING, payload, timeout=10.0)
+                # 3s is ~100x a worst-case BLE round trip; short enough that a
+                # lost frame costs a brief stall + retry, not a wedged window.
+                esp.request(C.SYS_PING, payload, timeout=3.0)
             except BridgeTimeoutError:
                 with lock:
                     failed += 1

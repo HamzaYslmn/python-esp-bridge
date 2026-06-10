@@ -2,7 +2,7 @@
 // basic GATT client supporting a single simultaneous connection.
 // Uses the Bluedroid BLE library bundled with arduino-esp32 core 3.x.
 //
-// Command handlers run on net_task. Bluedroid internal callbacks (scan results,
+// Command handlers run on slow_task. Bluedroid internal callbacks (scan results,
 // GATT writes, connect/disconnect) run on BT stack tasks. Both paths only
 // enqueue data via proto_send_event — tx_task is the sole serial writer.
 #include "espbridge/protocol.h"

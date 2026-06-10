@@ -1,5 +1,5 @@
 // TWAI (CAN) via IDF driver. Needs an external transceiver (SN65HVD230/TJA1050).
-// RX frames pushed as TWAI_RX_EVT from twai_poll() on net_task.
+// RX frames pushed as TWAI_RX_EVT from twai_poll() on slow_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 

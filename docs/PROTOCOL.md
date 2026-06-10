@@ -131,14 +131,22 @@ UDP is drop-newest on overflow (datagrams are lossy by nature).
 
 ## Firmware task architecture (FreeRTOS)
 
-The firmware is built on FreeRTOS tasks, pinned to the app core (the Wi-Fi/BT
-stacks own core 0 on dual-core chips):
+The firmware is built on FreeRTOS tasks spread across both cores of a
+dual-core ESP32, grouped by domain. Core 0 ("radio core" — where ESP-IDF pins
+the Wi-Fi/BT stacks) also carries the TX path and the blocking handlers that
+mostly call into those stacks; core 1 ("app core") runs RX and every handler
+that touches a peripheral bus, away from radio interrupts. Reply N transmits
+on core 0 while command N+1 executes on core 1.
 
-| task         | prio | role |
-|--------------|------|------|
-| `bridge_tx`  | 12   | sole serial writer; drains the outbound frame queue |
-| `bridge_rx`  | 10   | decodes frames; runs fast handlers (SYS/GPIO/ADC/DAC/TOUCH/PWM/I2C/SPI/UART) inline; pumps GPIO edge + UART RX events |
-| `bridge_net` | 9    | owns all Wi-Fi/NET/ESP-NOW/BLE state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
+| task          | core | prio | role |
+|---------------|------|------|------|
+| `bridge_tx`   | 0    | 12   | sole link writer; drains the outbound frame queue (yields to the radio stacks, prio 19+) |
+| `bridge_rx`   | 1    | 10   | decodes frames; runs fast handlers (SYS/GPIO/ADC/DAC/TOUCH/PWM/I2C/SPI/UART/NVS/MCPWM, plus 1-Wire — its IRQ-masking bit slots must stay off the radio core) inline; pumps GPIO edge + UART RX events |
+| `bridge_slow` | 0    | 9    | owns all Wi-Fi/NET/ESP-NOW/BLE + FS/OTA/RMT/TWAI/I2S/camera state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
+
+With `EspBridge.begin(..., exclusive=false)` the sketch's `loop()` keeps
+running on core 1 (prio 1) next to `bridge_rx`, so user code gets the app
+core's slack while the bridge serves the host.
 
 Consequences visible to the host:
 
@@ -309,5 +317,7 @@ Hosts must treat the tail as optional for compatibility with older firmware.
   link compiled in: `CAP_SLEEP` is absent and FS offers LittleFS only.
   Building with `BRIDGE_ENABLE_BLE 0` frees the BT IRAM and restores SD,
   SDMMC and sleep. Other chips are unaffected.
-- **A long RMT capture or FS/OTA burst runs on the same task as Wi-Fi/NET**:
-  it can delay those replies (never GPIO/I2C/SPI, which stay on the rx task).
+- **A long RMT capture or FS/OTA burst runs on the same task as Wi-Fi/NET**
+  (`bridge_slow`): it can delay those replies — never GPIO/I2C/SPI/1-Wire,
+  which run on the rx task. Conversely, a 1-Wire ROM search (~tens of ms)
+  briefly delays other fast commands, like an I2C scan does.

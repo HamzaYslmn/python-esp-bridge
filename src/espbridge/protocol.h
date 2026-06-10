@@ -1,18 +1,20 @@
 // python-esp-bridge — frame codec, FreeRTOS task plumbing, dispatch.
 //
-// Task model (radio stacks run on core 0; bridge tasks pinned to core 1):
-//   tx_task   — sole Serial writer; drains the outbound frame queue.
-//   rx_task   — decodes frames; runs fast handlers (SYS/GPIO/analog/PWM/
-//               I2C/SPI/UART) inline; pumps GPIO edge + UART RX events.
-//   net_task  — owns Wi-Fi/NET/BLE state; executes their (possibly blocking)
-//               handlers from a request queue and polls sockets/scan results.
+// Task model (core placement: see the task-layout note in config.h):
+//   tx_task   — CORE_RADIO: sole link writer; drains the outbound frame queue.
+//   rx_task   — CORE_APP: decodes frames; runs fast handlers (SYS/GPIO/analog/
+//               PWM/I2C/SPI/UART/NVS/MCPWM and the IRQ-masking 1-Wire) inline;
+//               pumps GPIO edge + UART RX events.
+//   slow_task — CORE_RADIO: owns Wi-Fi/NET/ESP-NOW/BLE + FS/OTA/cam state;
+//               executes their (possibly blocking) handlers from a request
+//               queue and polls sockets/scan results.
 // proto_reply*/proto_send_event are therefore safe from ANY task or callback.
 #pragma once
 #include <Arduino.h>
 #include "config.h"
 
 void proto_init();    // create queues (before any proto_* call)
-void proto_start();   // spawn tx/rx/net tasks (end of setup())
+void proto_start();   // spawn the tx/rx/slow tasks (end of setup())
 
 // Route IDF log output (Wi-Fi/BT stacks) away from UART0 — which IS the
 // protocol link — into SYS_LOG events. Install first thing in setup().

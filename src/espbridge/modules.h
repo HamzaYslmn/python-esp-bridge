@@ -4,7 +4,7 @@
 
 // All handlers share the same signature: handle(op, seq, payload, len).
 // Fast handlers (GPIO, I2C, SPI, etc.) run inline on rx_task.
-// Slow or stateful handlers (Wi-Fi, NET, BLE, etc.) run on net_task, where
+// Slow or stateful handlers (Wi-Fi, NET, BLE, etc.) run on slow_task, where
 // they may block for extended periods without stalling frame reception.
 void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void gpio_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
@@ -23,13 +23,13 @@ void fs_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void nvs_handle_cmd(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
-void twai_poll();  // net_task: driver RX queue -> TWAI_RX_EVT
+void twai_poll();  // slow_task: driver RX queue -> TWAI_RX_EVT
 void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
-void watch_poll();  // net_task: evaluate polled watch rules -> WATCH_EVT
+void watch_poll();  // slow_task: evaluate polled watch rules -> WATCH_EVT
 
 // Generates a handler body that returns ST_UNSUPPORTED for every op.
 // Use in the #else branch of a chip-capability guard so that all declared
@@ -44,7 +44,7 @@ void gpio_init();
 void wifi_init();
 
 // Pollers are called in a tight loop and must never block.
-// gpio_poll/uart_poll run on rx_task; wifi_poll/net_poll run on net_task.
+// gpio_poll/uart_poll run on rx_task; wifi_poll/net_poll run on slow_task.
 void gpio_poll();
 void uart_poll();
 void wifi_poll();

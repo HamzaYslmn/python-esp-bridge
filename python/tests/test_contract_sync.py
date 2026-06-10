@@ -17,8 +17,8 @@ from espbridge import constants as C
 
 HEADER = Path(__file__).resolve().parents[2] / "src" / "espbridge" / "commands.h"
 
-# Firmware-only constants with no Python mirror (firmware version is intentionally
-# decoupled from the package version, and these scalars aren't used host-side).
+# FW_VERSION_* have no constants.py mirror — they are checked against the
+# package version instead (test_version_lockstep below).
 _FW_ONLY = {"FW_VERSION_MAJOR", "FW_VERSION_MINOR", "FW_VERSION_PATCH"}
 
 # Plain protocol scalars that must match exactly.
@@ -107,3 +107,27 @@ def test_status_code_matches(name):
 @pytest.mark.parametrize("name", sorted(n for n in _INTS if n.startswith("CAP_")))
 def test_capability_bit_matches(name):
     assert C.Cap[name[4:]].value == _INTS[name]
+
+
+def test_version_lockstep():
+    """Firmware, Arduino library, and Python package all carry ONE version.
+
+    A host reads SYS_INFO and knows exactly which release the firmware came
+    from — no separate compatibility table. PROTOCOL_VERSION stays the hard
+    wire-compatibility gate; the release version signals feature parity."""
+    import espbridge
+
+    fw = (_INTS["FW_VERSION_MAJOR"], _INTS["FW_VERSION_MINOR"], _INTS["FW_VERSION_PATCH"])
+    fw_str = ".".join(map(str, fw))
+
+    root = HEADER.parents[2]
+    lib = re.search(r"^version=(\S+)$",
+                    (root / "library.properties").read_text(encoding="utf-8"),
+                    re.MULTILINE).group(1)
+    pyproject = re.search(r'^version = "([^"]+)"$',
+                          (root / "python" / "pyproject.toml").read_text(encoding="utf-8"),
+                          re.MULTILINE).group(1)
+
+    assert fw_str == lib == pyproject == espbridge.__version__, (
+        f"version drift: firmware={fw_str} library.properties={lib} "
+        f"pyproject={pyproject} __version__={espbridge.__version__}")

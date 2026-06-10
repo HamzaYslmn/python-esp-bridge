@@ -1,4 +1,4 @@
-// FS: LittleFS + SD file/dir operations, data streamed in <=2 KB chunks. Runs on net_task (blocking I/O).
+// FS: LittleFS + SD file/dir operations, data streamed in <=2 KB chunks. Runs on slow_task (blocking I/O).
 // Filesystem IDs: 0 = LittleFS, 1 = SD over SPI (uses its own bus BRIDGE_SPI_HOST1 — do NOT share with mod_spi host 1), 2 = SD_MMC.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"

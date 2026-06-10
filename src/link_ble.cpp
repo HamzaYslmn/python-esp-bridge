@@ -300,7 +300,7 @@ void link_ble_write(const uint8_t* data, uint16_t len) {
     tx_chr->notify();
     data += n;
     len -= n;
-    if (++burst >= 8 && len > 0) {  // yield briefly every 8 chunks so RX and net tasks can run
+    if (++burst >= 8 && len > 0) {  // yield briefly every 8 chunks so the radio and slow tasks can run
       burst = 0;
       vTaskDelay(1);
     }

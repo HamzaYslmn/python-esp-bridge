@@ -154,12 +154,56 @@
   #define BRIDGE_NATIVE_USB 0
 #endif
 
-// Bridge tasks run on the app core; radio stacks own core 0 on dual-core chips.
+// ---- task layout ------------------------------------------------------------
+// Dual-core ESP32: ESP-IDF pins the Wi-Fi/Bluetooth stacks to core 0 (PRO_CPU);
+// core 1 (APP_CPU) is the application core. The bridge spreads its three tasks
+// across both cores, grouped by domain:
+//
+//   CORE_RADIO (0): Wi-Fi/BT stacks (fixed)
+//                   bridge_tx   — replies/events out: pure encode-and-write,
+//                                 no timing constraints, yields to the radio
+//                                 (prio 12 vs 19+)
+//                   bridge_slow — blocking handlers (Wi-Fi/NET/ESP-NOW/BLE/
+//                                 FS/OTA/...): mostly calls into the stacks
+//                                 that live on this core anyway
+//
+//   CORE_APP   (1): bridge_rx   — frame pump + fast inline handlers (GPIO/
+//                                 I2C/SPI/ADC/NVS/... and 1-Wire, whose
+//                                 IRQ-masking bit slots must never run on
+//                                 the radio core)
+//                   user loop() — when EspBridge.begin(..., exclusive=false)
+//
+// Net effect: reply N transmits on core 0 while command N+1 executes on
+// core 1, slow handlers no longer compete with the link fast path, and
+// nothing timing-sensitive shares a core with radio interrupts.
+//
+// Opt-out — pin ALL bridge tasks to a single core with a build flag:
+//   arduino-cli compile ... --build-property "build.extra_flags=-DBRIDGE_SINGLE_CORE=1"
+// BRIDGE_SINGLE_CORE=1 keeps the radio core completely untouched (the layout
+// of firmware <= 0.5.2). BRIDGE_SINGLE_CORE=0 moves the whole bridge onto
+// the radio core, leaving core 1 entirely to the sketch — pair it with
+// EspBridge.begin(..., exclusive=false); the trade-off is that bus timing
+// (1-Wire especially) then shares a core with radio interrupts.
 #if CONFIG_FREERTOS_UNICORE
-  #define BRIDGE_CORE 0
+  #define CORE_RADIO 0
+  #define CORE_APP   0
+#elif defined(BRIDGE_SINGLE_CORE)
+  #define CORE_RADIO BRIDGE_SINGLE_CORE
+  #define CORE_APP   BRIDGE_SINGLE_CORE
 #else
-  #define BRIDGE_CORE 1
+  #define CORE_RADIO 0
+  #define CORE_APP   1
 #endif
+
+#define TX_TASK_CORE     CORE_RADIO
+#define TX_TASK_PRIO     12
+#define TX_TASK_STACK    4096
+#define RX_TASK_CORE     CORE_APP
+#define RX_TASK_PRIO     10
+#define RX_TASK_STACK    8192
+#define SLOW_TASK_CORE   CORE_RADIO
+#define SLOW_TASK_PRIO   9
+#define SLOW_TASK_STACK  8192
 
 // Logical frame layout: 4-byte header + payload (up to MAX_PAYLOAD) + 2-byte CRC.
 #define MAX_FRAME      (4 + MAX_PAYLOAD + 2)
@@ -187,12 +231,12 @@
 #define NET_MAX_SOCKETS 8
 #define NET_WINDOW      4096   // per-socket credit window (bytes)
 
-// Depth of the queue feeding bridge_net (slow handlers). Deeper = more
+// Depth of the queue feeding bridge_slow (blocking handlers). Deeper = more
 // concurrent slow requests can be in flight from a multi-threaded host before
 // one is rejected with ST_BUSY; the cost is just queue slots (Req structs).
-#define NETQ_DEPTH      32
+#define SLOWQ_DEPTH     32
 
-// rx_task / net_task yield a scheduler tick at least this often even under
+// rx_task / slow_task yield a scheduler tick at least this often even under
 // continuous traffic. Without it a busy high-priority bridge task starves the
 // core's idle task and trips the idle Task-WDT — a reset that looks like a
 // random stall under sustained load. Cost: ~1 ms per this many messages.

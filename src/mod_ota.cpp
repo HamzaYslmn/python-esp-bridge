@@ -1,7 +1,7 @@
 // OTA: reflash the device over the link (serial or BLE) using Arduino's Update.h, streaming bytes into the inactive app slot.
 // Requires a partition table with two app slots (e.g. "Minimal SPIFFS").
 // The "Huge APP" partition layout has only one app slot, so OTA_BEGIN will reply ST_UNSUPPORTED on that layout.
-// Runs on net_task because flash writes block the CPU.
+// Runs on slow_task because flash writes block the CPU.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 

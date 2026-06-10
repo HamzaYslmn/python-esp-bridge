@@ -41,16 +41,29 @@ GPIO, ADC/DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE, ESP-NOW, RMT,
 
 ## API
 
-`EspBridge.begin(password = "espbridge", ble = true)` — start the bridge. It
-spins up the FreeRTOS task model (separate TX / RX / network tasks so a
-blocking TCP or BLE connect never stalls GPIO/I2C/SPI) and **does not return**:
-it deletes the Arduino loop task to hand its 8 KB stack back to the heap, which
-a classic ESP32 running Wi-Fi + Bluedroid needs badly.
+`EspBridge.begin(password = "espbridge", ble = true, exclusive = true)` —
+start the bridge. It spins up the FreeRTOS task model (separate TX / RX /
+blocking-handler tasks so a blocking TCP or BLE connect never stalls
+GPIO/I2C/SPI) and, by default, **does not return**: it deletes the Arduino
+loop task to hand its 8 KB stack back to the heap, which a classic ESP32
+running Wi-Fi + Bluedroid needs badly.
+
+On dual-core chips the bridge uses **both cores**, grouped by domain: core 0
+(the radio core) carries the Wi-Fi/BT stacks plus the TX path and the
+blocking handlers that call into those stacks; core 1 (the app core) runs RX
+and every bus-touching handler — including 1-Wire, whose IRQ-masking bit
+timing must stay away from radio interrupts. Reply N transmits on core 0
+while command N+1 executes on core 1. See `src/espbridge/config.h` for the
+named per-task core/priority/stack table.
 
 - `password` — secret a Bluetooth client must send via `SYS_AUTH` before any
   command is accepted (`""` = open access). USB never asks for a password.
 - `ble` — start the Bluetooth link. Pass `false` for USB-only at runtime
   (ignored on builds compiled without BLE).
+- `exclusive` — pass `false` to make `begin()` return so `loop()` keeps
+  running and the sketch can do its own work (on core 1, next to the command
+  handlers) while the bridge serves the host. Costs the 8 KB loop stack —
+  fine for USB-only boards; with BLE + Wi-Fi active the default is safer.
 
 ## Partition scheme (pick one)
 
@@ -88,7 +101,10 @@ arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app \
 ```
 
 Flags: `BRIDGE_ENABLE_ETH=1` (RMII or SPI W5500), `BRIDGE_ENABLE_CAM=1`
-(OV-series + PSRAM on esp32/s2/s3), `BRIDGE_ENABLE_BLE=0` (USB-only build).
+(OV-series + PSRAM on esp32/s2/s3), `BRIDGE_ENABLE_BLE=0` (USB-only build),
+`BRIDGE_SINGLE_CORE=<0|1>` (pin all bridge tasks to one core instead of the
+default dual-core layout: `1` leaves the radio core untouched, `0` leaves
+core 1 entirely to the sketch — pair with `begin(..., exclusive=false)`).
 
 **Classic-ESP32 IRAM trade-off:** Wi-Fi + Bluedroid fill the chip's instruction
 RAM, so the default classic build ships without SD-card support (LittleFS still

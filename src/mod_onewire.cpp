@@ -1,7 +1,8 @@
 // 1-Wire bit-timing primitives. Higher-level logic (ROM search, CRC, device
 // drivers) runs host-side to keep firmware simple.
-// Each bit slot masks IRQs for up to 70 µs, so these run on net_task to avoid
-// starving time-critical tasks.
+// Each bit slot masks IRQs for up to 70 µs, so these run INLINE on rx_task
+// (the app core): masking interrupts on the radio core — where slow_task
+// lives — would violate the BT controller's real-time deadlines.
 // Wiring: 4.7 kΩ pull-up to 3V3 required.
 // power=1 on OW_WRITE drives the line high push-pull after the last byte,
 // supplying parasite power to bus-powered devices.

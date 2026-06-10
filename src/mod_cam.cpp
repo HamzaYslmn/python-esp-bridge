@@ -1,7 +1,7 @@
 // Camera support via esp32-camera. Opt-in with BRIDGE_ENABLE_CAM; requires PSRAM (checked at INIT time).
 // Supported chips: ESP32, S2, S3. The host sends a full pin map (use presets from espbridge.camera).
 // One frame is captured and held in PSRAM, then read back in <=2 KB chunks.
-// Produces JPEG snapshots only — not streaming video. Runs on net_task.
+// Produces JPEG snapshots only — not streaming video. Runs on slow_task.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 

@@ -1298,7 +1298,7 @@ wheels = [
 
 [[package]]
 name = "python-esp-bridge"
-version = "0.9.1"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "bleak" },

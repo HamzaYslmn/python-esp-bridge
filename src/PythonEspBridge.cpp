@@ -26,7 +26,7 @@ static const char* reset_reason_str() {
   }
 }
 
-void EspBridgeClass::begin(const char* password, bool ble) {
+void EspBridgeClass::begin(const char* password, bool ble, bool exclusive) {
   // Redirect all IDF Wi-Fi and Bluetooth log output to SYS_LOG protocol events
   // instead of writing raw bytes to UART0. Raw IDF log bytes on UART0 would
   // be interpreted as protocol frame data and corrupt every frame they land in.
@@ -37,6 +37,12 @@ void EspBridgeClass::begin(const char* password, bool ble) {
   Serial.setRxBufferSize(SERIAL_RX_BUF);   // must be called before Serial.begin(); the default 256-byte buffer is far too small for protocol frames
   Serial.setTxBufferSize(SERIAL_TX_BUF);
   Serial.begin(115200);
+  // The RX interrupt defaults to firing at 120 of the 128 hardware FIFO
+  // bytes — at 1.5 Mbaud that is ~53 µs of interrupt-latency margin, and a
+  // single spike under concurrent load overruns the FIFO and corrupts a
+  // host->board frame (measured: ~1e-3/op at 12-thread mixed load, zero at
+  // 921600). Fire at 64 bytes instead: identical throughput, 8x the margin.
+  Serial.setRxFIFOFull(64);
 #else
   Serial.setRxBufferSize(SERIAL_RX_BUF);
   Serial.begin();                          // native USB CDC — baud rate argument is ignored by the USB driver
@@ -45,7 +51,7 @@ void EspBridgeClass::begin(const char* password, bool ble) {
   proto_init();
   gpio_init();
   wifi_init();
-  proto_start();   // spawn the bridge_tx, bridge_rx, and bridge_net FreeRTOS tasks
+  proto_start();   // spawn the bridge_tx, bridge_rx, and bridge_slow FreeRTOS tasks
 
   { char msg[64];
     snprintf(msg, sizeof(msg), "boot: last reset = %s", reset_reason_str());
@@ -70,8 +76,9 @@ void EspBridgeClass::begin(const char* password, bool ble) {
   proto_send_event(SYS_READY, info, n);
 
   // The bridge runs entirely in its own FreeRTOS tasks (tx, rx, net).
-  // Delete the Arduino loop task to reclaim its 8 KB stack for the heap.
-  // This is not just tidiness: Bluedroid stops delivering notifications when
-  // free heap drops below roughly 8 KB, which silently kills the BLE link.
-  vTaskDelete(nullptr);  // never returns
+  // Default: delete the Arduino loop task to reclaim its 8 KB stack for the
+  // heap. This is not just tidiness: Bluedroid stops delivering notifications
+  // when free heap drops below roughly 8 KB, which silently kills the BLE
+  // link. With exclusive=false the sketch keeps loop() for its own work.
+  if (exclusive) vTaskDelete(nullptr);  // never returns
 }

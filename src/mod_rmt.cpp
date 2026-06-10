@@ -1,6 +1,6 @@
 // RMT pulse-train TX and RX (arduino-esp32 3.x HAL). Device-level protocol
 // decoding stays host-side; this module only moves raw symbols.
-// Handlers run on net_task: TX blocks until the frame is sent, RECV blocks up
+// Handlers run on slow_task: TX blocks until the frame is sent, RECV blocks up
 // to the caller-supplied timeout.
 // Wire symbol format: u16 big-endian, bit 15 = level, bits 14..0 = duration in
 // RMT ticks (1..0x7FFF). Two symbols pack into one rmt_data_t hardware word;

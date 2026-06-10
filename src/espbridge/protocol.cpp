@@ -101,15 +101,15 @@ static std::atomic<uint32_t> dropped{0};       // frames dropped across all prod
 // Broadcasting to serial during a BLE session blocks tx_task ~180 ms on a 2 KB
 // reply into the idle 115200-baud UART — the old BLE throughput ceiling.
 // Handlers don't carry the origin, but a reply is always enqueued from the task
-// that dispatched it (rx_task inline, net_task queued), so a per-task origin set
+// that dispatched it (rx_task inline, slow_task queued), so a per-task origin set
 // at dispatch time suffices.
-static TaskHandle_t rx_task_h, net_task_h;
-static uint8_t origin_rx = DEST_ALL, origin_net = DEST_ALL;
+static TaskHandle_t rx_task_h, slow_task_h;
+static uint8_t origin_rx = DEST_ALL, origin_slow = DEST_ALL;
 
 static uint8_t reply_dest() {
   TaskHandle_t t = xTaskGetCurrentTaskHandle();
   if (t == rx_task_h) return origin_rx;
-  if (t == net_task_h) return origin_net;
+  if (t == slow_task_h) return origin_slow;
   return DEST_ALL;  // unknown task (shouldn't happen): fall back to broadcast
 }
 
@@ -229,14 +229,15 @@ void proto_tx_flush() {
 
 uint32_t proto_dropped_events() { return dropped; }
 
-// ---- net-task request queue ------------------------------------------------------
+// ---- blocking-handler queue (bridge_slow) -----------------------------------------
 // Handlers for WIFI, NET, BLE, and related modules can block for seconds
 // (e.g. TCP connect, BLE connect) and share state with socket polling.
-// To avoid blocking rx_task, all such handlers run exclusively on net_task.
+// To avoid blocking rx_task, all such handlers run exclusively on slow_task —
+// which lives on CORE_RADIO, next to the stacks most of them call into.
 struct Req { uint16_t cmd; uint8_t seq; uint8_t origin; uint16_t len; uint8_t* buf; };
-static QueueHandle_t netq;
+static QueueHandle_t slowq;
 
-static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
+static void slow_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
     case MOD_WIFI:   wifi_handle(op, seq, p, len); break;
@@ -244,7 +245,6 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
     case MOD_ESPNOW: espnow_handle(op, seq, p, len); break;
     case MOD_BLE:    ble_handle(op, seq, p, len); break;
     case MOD_RMT:    rmt_handle(op, seq, p, len); break;
-    case MOD_ONEWIRE: onewire_handle(op, seq, p, len); break;
     case MOD_FS:     fs_handle(op, seq, p, len); break;
     case MOD_OTA:    ota_handle(op, seq, p, len); break;
     case MOD_TWAI:   twai_handle(op, seq, p, len); break;
@@ -256,14 +256,14 @@ static void net_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t l
   }
 }
 
-static void net_task(void*) {
+static void slow_task(void*) {
   Req r;
   uint16_t spins = 0;
   for (;;) {
     // Wake at least every 2 ms to poll sockets / scan completion.
-    if (xQueueReceive(netq, &r, pdMS_TO_TICKS(2)) == pdTRUE) {
-      origin_net = r.origin;  // reply_dest() routes this request's replies
-      net_dispatch(r.cmd, r.seq, r.buf, r.len);
+    if (xQueueReceive(slowq, &r, pdMS_TO_TICKS(2)) == pdTRUE) {
+      origin_slow = r.origin;  // reply_dest() routes this request's replies
+      slow_dispatch(r.cmd, r.seq, r.buf, r.len);
       free(r.buf);
       // A continuously-fed queue never hits the 2 ms timeout above, so yield
       // periodically to keep the idle task (and its Task-WDT) alive.
@@ -278,7 +278,7 @@ static void net_task(void*) {
   }
 }
 
-static void net_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
+static void slow_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
                         const uint8_t* p, uint16_t len) {
   Req r = { cmd, seq, origin, len, nullptr };
   if (len) {
@@ -286,7 +286,7 @@ static void net_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
     if (!r.buf) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
     memcpy(r.buf, p, len);
   }
-  if (xQueueSend(netq, &r, 0) != pdTRUE) {
+  if (xQueueSend(slowq, &r, 0) != pdTRUE) {
     free(r.buf);
     proto_reply_err(seq, cmd, ST_BUSY);
   }
@@ -320,10 +320,15 @@ static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
     case MOD_UART:  uart_handle(op, seq, p, len); break;
     case MOD_NVS:   nvs_handle_cmd(op, seq, p, len); break;
     case MOD_MCPWM: mcpwm_handle(op, seq, p, len); break;
+    // 1-Wire is inline by necessity, not speed: its bit-banged slots mask
+    // interrupts for up to 70 µs, which must never happen on the radio core
+    // where slow_task lives (the BT controller has hard real-time deadlines).
+    // Worst op is a ROM search (~tens of ms) — same class as an I2C scan.
+    case MOD_ONEWIRE: onewire_handle(op, seq, p, len); break;
     // Everything else is a slow / stateful handler (WIFI/NET/ESPNOW/BLE/RMT/
-    // ONEWIRE/FS/OTA/TWAI/I2S/ETH/CAM) — hand off to net_task, which replies
+    // FS/OTA/TWAI/I2S/ETH/CAM) — hand off to slow_task, which replies
     // ST_UNKNOWN_CMD for any module it doesn't recognise.
-    default:        net_enqueue(cmd, seq, origin, p, len); break;
+    default:        slow_enqueue(cmd, seq, origin, p, len); break;
   }
 }
 
@@ -456,12 +461,17 @@ static void rx_task(void*) {
 // end of setup() after all other init is done.
 void proto_init() {
   txq = xQueueCreate(48, sizeof(Frame));
-  netq = xQueueCreate(NETQ_DEPTH, sizeof(Req));
+  slowq = xQueueCreate(SLOWQ_DEPTH, sizeof(Req));
 }
 
 void proto_start() {
-  // Radio stacks (Wi-Fi/BT) live on core 0; keep the bridge on the app core.
-  xTaskCreatePinnedToCore(tx_task, "bridge_tx", 4096, nullptr, 12, nullptr, BRIDGE_CORE);
-  xTaskCreatePinnedToCore(rx_task, "bridge_rx", 8192, nullptr, 10, &rx_task_h, BRIDGE_CORE);
-  xTaskCreatePinnedToCore(net_task, "bridge_net", 8192, nullptr, 9, &net_task_h, BRIDGE_CORE);
+  // Both cores work on dual-core chips — see the task-layout note in config.h:
+  // TX and the blocking handlers ride the radio core, RX + fast handlers own
+  // the app core, so reply N transmits while command N+1 executes.
+  xTaskCreatePinnedToCore(tx_task, "bridge_tx", TX_TASK_STACK, nullptr,
+                          TX_TASK_PRIO, nullptr, TX_TASK_CORE);
+  xTaskCreatePinnedToCore(rx_task, "bridge_rx", RX_TASK_STACK, nullptr,
+                          RX_TASK_PRIO, &rx_task_h, RX_TASK_CORE);
+  xTaskCreatePinnedToCore(slow_task, "bridge_slow", SLOW_TASK_STACK, nullptr,
+                          SLOW_TASK_PRIO, &slow_task_h, SLOW_TASK_CORE);
 }

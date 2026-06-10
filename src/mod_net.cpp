@@ -51,7 +51,7 @@ static void closed_event(uint8_t handle, uint8_t reason) {
 
 void net_poll() {
   // This buffer lives on the stack (not in static BSS) deliberately.
-  // net_task has an 8 KB stack, so 519 bytes here is comfortably within budget,
+  // slow_task has an 8 KB stack, so 519 bytes here is comfortably within budget,
   // and keeping it off the BSS leaves that RAM available for the heap —
   // Wi-Fi + BLE coexistence leaves very little heap to spare.
   uint8_t buf[1 + 6 + NET_CHUNK];  // worst case: UDP header + chunk
