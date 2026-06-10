@@ -68,6 +68,7 @@ class FakeFirmware:
         self.espnow_peers: dict[bytes, bytes | None] = {}  # peer MAC -> LMK (None = unencrypted)
         self.espnow_sent: list[tuple[bytes, bytes]] = []   # list of (dest_mac, payload) tuples
         self.espnow_deliver = True  # controls the delivery-ACK flag returned in ESPNOW_SEND replies
+        self.espnow_ps: tuple[int, int] | None = None  # (wake window ms, wake interval ms; 0 = keep)
 
         self.rmt_pins: dict[int, tuple[int, int]] = {}  # pin -> (direction, tick_hz)
         self.rmt_tx: list[tuple[int, list[tuple[int, int]]]] = []  # (pin, symbol_list) for each RMT_TX call
@@ -372,6 +373,12 @@ class FakeFirmware:
                 self._reply_err(seq, cmd, C.Status.BAD_ARGS)
             else:
                 self.espnow_peers[p[:6]] = p[8:24] if len(p) == 24 else None
+                self._reply(seq, cmd)
+        elif cmd == C.ESPNOW_POWER_SAVE:
+            if len(p) != 4:
+                self._reply_err(seq, cmd, C.Status.BAD_ARGS)
+            else:
+                self.espnow_ps = tuple(struct.unpack("<HH", p))
                 self._reply(seq, cmd)
         elif cmd == C.ESPNOW_DEL_PEER:
             self.espnow_peers.pop(p[:6], None)

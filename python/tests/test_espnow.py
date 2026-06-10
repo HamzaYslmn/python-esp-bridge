@@ -60,6 +60,22 @@ def test_set_pmk_length_validated_host_side(bridge, fw):
     assert fw.espnow_pmk == b"\x01" * 16
 
 
+def test_power_save_packs_window_and_interval(bridge, fw):
+    bridge.espnow.begin()
+    bridge.espnow.power_save(50, 200)
+    assert fw.espnow_ps == (50, 200)
+    bridge.espnow.power_save(65535)  # interval omitted -> 0 (keep current)
+    assert fw.espnow_ps == (65535, 0)
+
+
+def test_power_save_validates_ranges(bridge):
+    bridge.espnow.begin()
+    with pytest.raises(ValueError):
+        bridge.espnow.power_save(65536)
+    with pytest.raises(ValueError):
+        bridge.espnow.power_save(50, 0)
+
+
 # ---- peers -----------------------------------------------------------------------
 
 def test_add_and_remove_peer(bridge, fw):

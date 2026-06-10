@@ -11,7 +11,7 @@
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 11
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 2
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -265,6 +265,7 @@ enum ChipModel : uint8_t {
 #define ESPNOW_DEL_PEER CMD(MOD_ESPNOW, 0x05) // mac[6]
 #define ESPNOW_SEND     CMD(MOD_ESPNOW, 0x06) // mac[6]|data (<=250). seq!=0 -> delivered u8 (1=peer ACKed);
                                               // seq==0: fire-and-forget, result via ESPNOW_SEND_EVT
+#define ESPNOW_POWER_SAVE CMD(MOD_ESPNOW, 0x07) // wake window u16 ms|wake interval u16 ms (0=keep)
 #define ESPNOW_RX_EVT   CMD(MOD_ESPNOW, 0x80) // src_mac[6]|rssi i8|data..
 #define ESPNOW_SEND_EVT CMD(MOD_ESPNOW, 0x81) // dst_mac[6]|status u8 (seq==0 sends only; best-effort)
 

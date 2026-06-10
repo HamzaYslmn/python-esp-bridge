@@ -714,6 +714,15 @@ def register_espnow(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
+    def espnow_power_save(window_ms: int, interval_ms: int | None = None) -> str:
+        """Connectionless power save: RF listens window_ms at the start of every
+        interval_ms. Default after begin is 65535 (always listening, most
+        reliable); shrink for battery boards. window 0 = RX off, TX still works."""
+        mgr.bridge().espnow.power_save(window_ms, interval_ms)
+        return f"wake window {window_ms} ms" + (f", interval {interval_ms} ms" if interval_ms else "")
+
+    @mcp.tool
+    @guarded
     def espnow_end() -> str:
         """Stop ESP-NOW (peers are forgotten)."""
         mgr.bridge().espnow.end()

@@ -112,6 +112,25 @@ class EspNow:
         self._b.request(C.ESPNOW_DEINIT)
         self._bcast_added = False
 
+    def power_save(self, window_ms: int, interval_ms: int | None = None) -> None:
+        """Trade receive reliability for radio power.
+
+        The receiver listens for window_ms at the start of every interval_ms.
+        begin() defaults to window 65535 — always listening, the most reliable
+        setting and the right one for powered boards (especially alongside an
+        active BLE link). Battery boards can shrink it, e.g.
+        ``power_save(50, 200)`` keeps RF on 25% of the time; packets arriving
+        outside the window are lost, so senders should repeat or sync up.
+        window 0 turns RX off entirely (sending still works).
+        interval_ms None keeps the current interval.
+        """
+        if not 0 <= window_ms <= 65535:
+            raise ValueError(f"window_ms must be 0..65535, got {window_ms}")
+        if interval_ms is not None and not 1 <= interval_ms <= 65535:
+            raise ValueError(f"interval_ms must be 1..65535, got {interval_ms}")
+        payload = window_ms.to_bytes(2, "little") + (interval_ms or 0).to_bytes(2, "little")
+        self._b.request(C.ESPNOW_POWER_SAVE, payload)
+
     def set_pmk(self, pmk: bytes) -> None:
         """Set the 16-byte Primary Master Key (do this before adding encrypted peers)."""
         if len(pmk) != 16:

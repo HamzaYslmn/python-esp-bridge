@@ -119,6 +119,10 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
   if (!inited) {
     esp_err_t e = esp_now_init();
     if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+    // Max wake window: with Wi-Fi idle the coex arbiter favours BLE and
+    // connectionless power save gates the receiver — broadcasts (single-shot,
+    // never retried) land in dead air for seconds at a time without this.
+    esp_now_set_wake_window(65535);
     if (!tx_done_sem) tx_done_sem = xSemaphoreCreateBinary();
     esp_now_register_recv_cb(on_recv);
     esp_now_register_send_cb(on_send);
@@ -217,6 +221,20 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x06:  // SEND
       handle_send(seq, cmd, p, len);
       break;
+
+    case 0x07: {  // POWER_SAVE: wake window u16 ms | wake interval u16 ms (0 = keep)
+      // RF listens for `window` ms at the start of every `interval`. INIT
+      // defaults to window 65535 (always listening — most reliable under BLE
+      // coex); battery boards can shrink it. window 0 = RX off, TX still works.
+      NEED(4);
+      uint16_t window   = p[0] | p[1] << 8;
+      uint16_t interval = p[2] | p[3] << 8;
+      esp_err_t e = esp_now_set_wake_window(window);
+      if (e == ESP_OK && interval) e = esp_wifi_connectionless_module_set_wake_interval(interval);
+      if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+      proto_reply_ok(seq, cmd);
+      break;
+    }
 
     default:
       proto_reply_err(seq, cmd, ST_UNKNOWN_CMD);

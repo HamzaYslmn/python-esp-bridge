@@ -264,6 +264,7 @@ Connectionless ESP32-to-ESP32 messaging (≤250 B per packet), gated on the
 | `ESPNOW_ADD_PEER` 0x04 | `mac[6]` \| `channel u8` (0 = follow) \| `encrypt u8` \| `[lmk[16]]` | ok |
 | `ESPNOW_DEL_PEER` 0x05 | `mac[6]` | ok |
 | `ESPNOW_SEND` 0x06 | `mac[6]` \| `data..` (≤250 B) | `delivered u8` (1 = peer's radio ACKed) |
+| `ESPNOW_POWER_SAVE` 0x07 | `wake window u16 ms` \| `wake interval u16 ms` (0 = keep) | ok |
 | `ESPNOW_RX_EVT` 0x80 | `src_mac[6]` \| `rssi i8` \| `data..` | event |
 | `ESPNOW_SEND_EVT` 0x81 | `dst_mac[6]` \| `status u8` (0 = delivered) | event |
 
@@ -279,6 +280,13 @@ the board is associated to a Wi-Fi network (or running an AP), ESP-NOW
 warning is emitted) — switching would drop the association. All peers must
 share a channel to hear each other. Encryption: `ESPNOW_SET_PMK` once, then
 per-peer 16-byte LMKs (both sides must match).
+
+`ESPNOW_POWER_SAVE` controls connectionless power save: RF listens for
+`window` ms at the start of every `interval`. `ESPNOW_INIT` defaults the
+window to 65535 (always listening) — without it, the coex arbiter hands the
+radio to BLE while Wi-Fi is idle and unACKed broadcasts vanish for seconds at
+a time. Battery boards can shrink the window; window 0 disables RX entirely
+(TX still works).
 
 ### Device identity (multi-device setups)
 
