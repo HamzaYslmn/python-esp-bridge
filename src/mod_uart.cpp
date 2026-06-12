@@ -4,7 +4,7 @@
 
 static bool uart_inited[3];
 
-static HardwareSerial* port_of(uint8_t idx) {
+static HardwareSerial* port_for_index(uint8_t idx) {
   if (idx == 1) return &Serial1;
 #if SOC_UART_NUM > 2
   if (idx == 2) return &Serial2;
@@ -15,7 +15,7 @@ static HardwareSerial* port_of(uint8_t idx) {
 void uart_poll() {
   for (uint8_t idx = 1; idx <= 2; idx++) {
     if (!uart_inited[idx]) continue;
-    HardwareSerial* u = port_of(idx);
+    HardwareSerial* u = port_for_index(idx);
     if (!u) continue;
     int avail = u->available();
     if (avail <= 0) continue;
@@ -30,7 +30,7 @@ void uart_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_UART, op);
   NEED(1);
   uint8_t idx = p[0];
-  HardwareSerial* u = port_of(idx);
+  HardwareSerial* u = port_for_index(idx);
   if (!u) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
   switch (op) {
@@ -38,7 +38,7 @@ void uart_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       NEED(7);
       if (uart_inited[idx]) u->end();
       u->setRxBufferSize(1024);
-      u->begin(rd32(p + 3), SERIAL_8N1, (int8_t)p[2], (int8_t)p[1]);  // arduino-esp32 begin() order: baud, config, rx_pin, tx_pin
+      u->begin(read_be32(p + 3), SERIAL_8N1, (int8_t)p[2], (int8_t)p[1]);  // arduino-esp32 begin() order: baud, config, rx_pin, tx_pin
       uart_inited[idx] = true;
       proto_reply_ok(seq, cmd);
       break;

@@ -12,7 +12,7 @@
 static char bridge_name[BRIDGE_NAME_MAX + 1];
 static bool name_loaded = false;
 
-static void load_name() {
+static void load_device_name() {
   if (name_loaded) return;
   Preferences prefs;
   if (prefs.begin("bridge", true)) {  // open read-only; silently absent on first boot (bridge_name stays empty)
@@ -24,7 +24,7 @@ static void load_name() {
 }
 
 const char* sys_device_name() {
-  load_name();
+  load_device_name();
   return bridge_name;
 }
 
@@ -98,12 +98,12 @@ uint16_t sys_build_info(uint8_t* out) {
 #endif
   if (psramFound())        caps |= CAP_PSRAM;
   if (link_ble_enabled()) caps |= CAP_BLE_LINK;  // runtime check — BLE transport may be enabled or disabled per build
-  wr32(p, caps); p += 4;
+  write_be32(p, caps); p += 4;
 
   *p++ = SOC_GPIO_PIN_COUNT;
   *p++ = (uint8_t)(ESP.getFlashChipSize() / (1024UL * 1024UL));
 
-  load_name();
+  load_device_name();
   uint8_t nlen = strlen(bridge_name);
   *p++ = nlen;
   memcpy(p, bridge_name, nlen); p += nlen;
@@ -125,7 +125,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x03: {  // SET_BAUD
       NEED(4);
-      uint32_t baud = rd32(p);
+      uint32_t baud = read_be32(p);
 #if BRIDGE_NATIVE_USB
       (void)baud;
       proto_reply_ok(seq, cmd);  // Native USB CDC ignores the baud rate entirely — acknowledge without acting
@@ -163,7 +163,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x08: {  // SLEEP: mode u8 (0=deep, 1=light) | us u64 | wake_pin i8 | wake_level u8
       NEED(11);
       uint8_t mode = p[0];
-      uint64_t us = ((uint64_t)rd32(p + 1) << 32) | rd32(p + 5);
+      uint64_t us = ((uint64_t)read_be32(p + 1) << 32) | read_be32(p + 5);
       int8_t wpin = (int8_t)p[9];
       uint8_t wlevel = p[10] ? 1 : 0;
       if (mode > 1 || (us == 0 && wpin < 0)) {  // reject: no wakeup source means the device would sleep forever
@@ -234,12 +234,12 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x05: {  // FREE_HEAP -> free, min_free, largest, dropped_evts, rx_dropped, serial_errs
       uint8_t buf[24];
-      wr32(buf, ESP.getFreeHeap());
-      wr32(buf + 4, ESP.getMinFreeHeap());
-      wr32(buf + 8, heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-      wr32(buf + 12, proto_dropped_events());
-      wr32(buf + 16, link_ble_rx_dropped());    // added fw 0.3.2; host length-checks
-      wr32(buf + 20, link_serial_rx_errors());  // added fw 0.5.2; host length-checks
+      write_be32(buf, ESP.getFreeHeap());
+      write_be32(buf + 4, ESP.getMinFreeHeap());
+      write_be32(buf + 8, heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+      write_be32(buf + 12, proto_dropped_events());
+      write_be32(buf + 16, link_ble_rx_dropped());    // added fw 0.3.2; host length-checks
+      write_be32(buf + 20, link_serial_rx_errors());  // added fw 0.5.2; host length-checks
       proto_reply(seq, cmd, buf, 24);
       break;
     }

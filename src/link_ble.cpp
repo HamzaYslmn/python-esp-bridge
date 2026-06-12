@@ -23,21 +23,12 @@
 #include <esp32-hal-bt.h>
 #include <freertos/stream_buffer.h>
 
-// The classic ESP32 ships with a dual-mode (Classic BT + BLE) controller,
-// and the default Arduino sdkconfig keeps both modes enabled. This firmware
-// only ever uses BLE, so we release the Classic BT memory pool back to the
-// heap before any BT stack init. We also start the controller in BLE-only
-// mode. This is important for two reasons:
-//
-//  1. Heap: Classic BT reserves a substantial chunk that Bluedroid + Wi-Fi
-//     need on this chip family (every KB matters with coex active).
-//
-//  2. Stability: if we let Bluedroid do a full dual-mode init, BTE_InitStack
-//     calls OBEX_Deinit, which dereferences a control block that was never
-//     allocated in BLE-only builds — causing a crash on core 0 at startup.
-//
-// This is a one-way operation: once released, Classic BT memory cannot be
-// reclaimed without a reboot. Nothing in this firmware uses Classic BT.
+// Classic ESP32 boots a dual-mode controller; this firmware uses only BLE, so
+// we release the Classic BT memory pool and start the controller BLE-only before
+// any BT init. Two reasons: (1) heap — Classic BT's reservation is heap that
+// Bluedroid + Wi-Fi coex need; (2) stability — a full dual-mode init runs
+// OBEX_Deinit on an unallocated control block, crashing core 0 at startup.
+// One-way: released Classic BT memory needs a reboot to reclaim.
 void bt_prepare_ble_only() {
 #if defined(CONFIG_IDF_TARGET_ESP32)
   static bool done = false;
@@ -71,18 +62,12 @@ static BLECharacteristic* tx_chr = nullptr;
 static StreamBufferHandle_t rx_buf = nullptr;
 static volatile uint32_t rx_dropped = 0;  // bytes lost to RX buffer overflow
 
-// Connection-parameter policy: hands-off at connect, tune after auth.
-// Initiating LL control procedures right after connecting races the central's
-// own setup (Windows runs MTU exchange / discovery / security then), stalling
-// the Link Layer — "up" but ATT-silent until the host times out. So at connect
-// we only advertise a preferred interval passively (setMin/MaxPreferred);
-// Windows ignores it and sits at ~20 ms.
-// After SYS_AUTH — the last handshake step, so connect-time setup is provably
-// done — we tune in a strict ladder, each step kicked off by the previous
-// one's completion event. Centrals that accept a range grant its MAXIMUM, so
-// the ladder widens the range one notch per rejection to find the central's
-// true floor: (1) 7.5 ms, (2) 7.5-11.25 ms, (3) 7.5-15 ms, then (4) data
-// length extension to 251-byte PDUs. RTT = 2x the granted interval.
+// Conn-param policy: hands-off at connect, tune after auth. Forcing LL params at
+// connect races the central's setup (MTU/discovery/security) and stalls the link
+// ATT-silent, so we only advertise a preferred interval passively. After SYS_AUTH
+// (setup provably done) we tune in a ladder, each step driven by the prior step's
+// event. Centrals grant a range's MAXIMUM, so we widen one notch per rejection to
+// find the floor: (1) 7.5, (2) 7.5-11.25, (3) 7.5-15 ms, then (4) DLE to 251 B.
 static esp_bd_addr_t peer_bda;  // central's address, captured at connect
 static volatile uint8_t tune_state = 0;  // 0 idle; 1..3 ladder step asked; 4 DLE/done
 static const uint16_t tune_max_int[] = {0x06, 0x09, 0x0C};  // 7.5 / 11.25 / 15 ms
@@ -139,11 +124,8 @@ class LinkRxCb : public BLECharacteristicCallbacks {
     size_t n = xStreamBufferSend(rx_buf, c->getData(), c->getLength(),
                                  pdMS_TO_TICKS(50));
     if (n < c->getLength()) {
-      // Do not drop bytes silently. If we discard part of a COBS frame
-      // the rx_task sees a corrupt frame, which looks like a random timeout
-      // or garbled response on the host — extremely hard to diagnose.
-      // Instead: increment rx_dropped (visible via SYS_FREE_HEAP) and
-      // emit a rate-limited warning so the problem is surfaced clearly.
+      // Never drop silently: a partial COBS frame looks like a random host-side
+      // timeout. Count it (SYS_FREE_HEAP) and emit a rate-limited warning.
       rx_dropped += c->getLength() - n;
       static uint32_t last_warn = 0;
       uint32_t now = millis();
@@ -158,20 +140,16 @@ class LinkRxCb : public BLECharacteristicCallbacks {
 };
 static LinkRxCb link_rx_cb;
 
-// Congestion handler: Bluedroid raises ESP_GATTS_CONGEST_EVT when its TX queue
-// fills up. We set the `congested` flag and pause notifications in
-// link_ble_write() until it clears. Without this, notifications sent into a
-// full queue are silently discarded, causing mysterious host timeouts when
-// the board is pipelining responses.
+// Congestion handler: on ESP_GATTS_CONGEST_EVT (Bluedroid TX queue full), set the
+// `congested` flag so link_ble_write_chunk pauses — notifications sent into a full
+// queue are silently dropped, causing mysterious timeouts when pipelining.
 static void link_gatts_evt(esp_gatts_cb_event_t event, esp_gatt_if_t,
                            esp_ble_gatts_cb_param_t* param) {
   if (event == ESP_GATTS_CONGEST_EVT) congested = param->congest.congested;
 }
 
-// GAP watch: advances the post-auth tuning sequence (see tune_state) and logs
-// each outcome, so a central rejecting fast parameters is visible instead of
-// just "BLE feels slow". tune_state stops the central's own later updates from
-// re-triggering the sequence.
+// GAP watch: advances the post-auth tuning ladder (tune_state) and logs each
+// outcome, so a central rejecting fast params is visible, not just "BLE feels slow".
 static void link_gap_evt(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
   if (event == ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT) {
     char msg[96];
@@ -199,13 +177,10 @@ static void link_gap_evt(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* p
   }
 }
 
-// Minimum free heap required before calling BLEDevice::init().
-// Bluedroid's host stack and the GATT service together need roughly this much
-// on top of the already-started BLE controller. Below this threshold,
-// BLEDevice::init() will fail deep inside operator new (bad_alloc -> abort)
-// with no recoverable error path.
-// We check the heap explicitly so we can fail gracefully: skip the BLE link,
-// log a clear reason, and leave USB serial + Wi-Fi + ESP-NOW fully functional.
+// Min free heap before BLEDevice::init(): Bluedroid + the GATT service need this
+// much atop the controller, and below it init() aborts in operator new with no
+// recoverable path. We check explicitly to fail gracefully — skip BLE, log why,
+// keep USB + Wi-Fi + ESP-NOW working.
 #define BLE_MIN_FREE_HEAP 55000
 
 void link_ble_init(const char* password) {
@@ -219,9 +194,8 @@ void link_ble_init(const char* password) {
   rx_buf = xStreamBufferCreate(LINK_RX_BUF, 1);
   if (rx_buf == nullptr) return;
 
-  // Build the BLE device name as espbridge_<mac>[_<custom name>].
-  // This matches what SYS_INFO reports, so a host can identify and address
-  // a specific board from scan results alone, without needing to connect first.
+  // Device name espbridge_<mac>[_<custom>], matching SYS_INFO so a host can
+  // identify a specific board from scan results without connecting first.
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   char devname[10 + 12 + 1 + BRIDGE_NAME_MAX + 1];
@@ -230,11 +204,8 @@ void link_ble_init(const char* password) {
   const char* custom = sys_device_name();
   if (custom[0]) snprintf(devname + n, sizeof(devname) - n, "_%s", custom);
   BLEDevice::init(devname);
-  // Set maximum TX power on all power categories (advertising, connections,
-  // default). A stronger signal means fewer link-layer retransmits, which
-  // gives a more stable link and greater range. The cost is roughly 3 mA of
-  // additional current draw — an acceptable trade-off for a wired-powered
-  // bridge board.
+  // Max TX power (adv + connections): fewer retransmits, more range, for ~3 mA
+  // — a fine trade on a wired-powered board.
   BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_DEFAULT);
   BLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
   BLEDevice::setMTU(517);
@@ -257,11 +228,8 @@ void link_ble_init(const char* password) {
   BLEAdvertising* adv = BLEDevice::getAdvertising();
   adv->addServiceUUID(BLE_LINK_SERVICE_UUID);
   adv->setScanResponse(true);  // put the full device name in the scan response (keeps the main ADV packet short)
-  // Advertise our preferred connection interval as the "Slave Connection
-  // Interval Range" AD field. Centrals read this from the advertisement
-  // before connecting, so they can apply the fast interval from the start —
-  // avoiding the need for a connection-parameter update request (which we
-  // deliberately never send; see the hands-off policy note above).
+  // Advertise the preferred conn interval (Slave Conn Interval Range AD field) so
+  // centrals apply the fast interval from connect, no update request needed.
   adv->setMinPreferred(0x06);  // 7.5 ms
   adv->setMaxPreferred(0x0C);  // 15 ms
   adv->start();
@@ -270,7 +238,6 @@ void link_ble_init(const char* password) {
 }
 
 bool link_ble_enabled() { return enabled; }
-bool link_ble_connected() { return connected; }
 uint32_t link_ble_rx_dropped() { return rx_dropped; }
 bool link_ble_authed() { return connected && authed; }
 
@@ -301,11 +268,9 @@ bool link_ble_power(bool battery) {
 
 bool link_ble_up() { return enabled && connected && tx_chr != nullptr; }
 
-// Congestion-driven flow control: when Bluedroid's TX queue is full
-// (ESP_GATTS_CONGEST_EVT), a notification would be silently discarded —
-// so tx_task just skips this link until the congestion clears, instead of
-// the old behaviour of spin-waiting up to 250 ms (which stalled the serial
-// link's frames behind it).
+// Congestion-driven flow control: while congested, a notification would be
+// dropped, so tx_task skips this link until it clears (vs. spin-waiting 250 ms,
+// which stalled the serial link behind it).
 bool link_ble_writable() { return link_ble_up() && !congested; }
 
 uint16_t link_ble_write_chunk(const uint8_t* data, uint16_t len) {
@@ -327,7 +292,6 @@ uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen) {
 void link_ble_init(const char*) {}
 void bt_prepare_ble_only() {}
 bool link_ble_enabled() { return false; }
-bool link_ble_connected() { return false; }
 uint32_t link_ble_rx_dropped() { return 0; }
 bool link_ble_authed() { return false; }
 void link_ble_set_authed(bool) {}

@@ -6,11 +6,8 @@
 #include <atomic>  // inter-task counters/flags: atomic is the correct primitive (volatile is not)
 
 // ---- CRC-16/CCITT-FALSE (table-driven) --------------------------------------
-// A 256-entry lookup table (512 B in rodata) replaces the naive per-byte
-// 8-iteration bit loop, cutting the op count to roughly 1/8 on the hot path
-// (every tx frame and every received frame). The table uses the standard
-// parameters: poly=0x1021, init=0xFFFF, no input/output reflection — results
-// are bit-identical to Python's binascii.crc_hqx(data, 0xFFFF).
+// 256-entry table (512 B rodata) replaces the per-byte bit loop on the hot path.
+// poly=0x1021, init=0xFFFF, no reflection — matches Python binascii.crc_hqx(_, 0xFFFF).
 static const uint16_t crc16_table[256] = {
   0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
   0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF,
@@ -47,21 +44,19 @@ static const uint16_t crc16_table[256] = {
 };
 
 // Incremental form: feed any number of pieces, starting from 0xFFFF.
-static uint16_t crc16_step(uint16_t crc, const uint8_t* data, uint16_t len) {
+static uint16_t crc16_update(uint16_t crc, const uint8_t* data, uint16_t len) {
   for (uint16_t i = 0; i < len; i++)
     crc = (uint16_t)(crc << 8) ^ crc16_table[(uint8_t)((crc >> 8) ^ data[i])];
   return crc;
 }
 
 uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
-  return crc16_step(0xFFFF, data, len);
+  return crc16_update(0xFFFF, data, len);
 }
 
 // ---- COBS (Consistent Overhead Byte Stuffing) ---------------------------------
-// Incremental encoder: header, payload and CRC are fed straight into the
-// output buffer in pieces, so frames are encoded without an intermediate
-// "logical frame" scratch buffer (2 KB of DRAM that coex needs more).
-// out must be sized at least len + len/254 + 1 (worst-case overhead).
+// Incremental encoder: header/payload/CRC fed straight to the output in pieces,
+// so no 2 KB scratch frame. out needs len + len/254 + 1 bytes (worst case).
 struct CobsEnc {
   uint8_t* out;
   uint16_t wi;      // next write index
@@ -69,14 +64,14 @@ struct CobsEnc {
   uint8_t code;
 };
 
-static void cobs_begin(CobsEnc& e, uint8_t* out) {
+static void cobs_enc_begin(CobsEnc& e, uint8_t* out) {
   e.out = out;
   e.wi = 1;
   e.code_i = 0;
   e.code = 1;
 }
 
-static void cobs_feed(CobsEnc& e, const uint8_t* d, uint16_t n) {
+static void cobs_enc_feed(CobsEnc& e, const uint8_t* d, uint16_t n) {
   for (uint16_t i = 0; i < n; i++) {
     if (d[i] == 0) {
       e.out[e.code_i] = e.code;
@@ -93,12 +88,13 @@ static void cobs_feed(CobsEnc& e, const uint8_t* d, uint16_t n) {
   }
 }
 
-static uint16_t cobs_end(CobsEnc& e) {
+static uint16_t cobs_enc_finish(CobsEnc& e) {
   e.out[e.code_i] = e.code;
   return e.wi;
 }
 
-// cobs_decode: decodes in to out; returns decoded byte count, or 0 on malformed input.
+// Decode in to out; returns byte count, or 0 on malformed input. In-place safe
+// (out == in): the write cursor never overtakes the read cursor.
 static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
   uint16_t ri = 0, wi = 0;
   while (ri < len) {
@@ -118,40 +114,37 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
 
 struct Frame { uint8_t flags; uint8_t seq; uint16_t cmd; uint16_t len; uint8_t* buf; };
 
-// One outbound stream per link: its own frame queue plus a write cursor over
-// the encoded wire bytes of the frame in flight. tx_task advances both
-// streams with NON-BLOCKING writes only — serial gets exactly what fits its
-// TX ring, BLE gets one MTU chunk when the BT stack isn't congested — so a
-// stalled link (congested radio, full ring, slow baud) delays its own frames
-// and never the other link's. The old single-queue design serialized them:
-// one congested BLE notify could hold a USB reply hostage for 250 ms.
+// One outbound stream per link: a frame queue + a write cursor over the wire
+// bytes in flight. tx_task advances both with non-blocking writes only (serial
+// gets what fits its TX ring, BLE one MTU chunk when uncongested), so a stalled
+// link delays only its own frames — not the other link's, as a single queue did.
 struct TxStream {
   QueueHandle_t q;
   uint8_t wire[ENC_BUF_SIZE];   // encoded frame in flight
   volatile uint16_t len;        // 0 = stream idle (polled by proto_tx_flush)
   uint16_t pos;                 // bytes already handed to the link driver
 };
-static TxStream tx_usb, tx_ble;
+static TxStream tx_usb;
+#if BRIDGE_BLE
+static TxStream tx_ble;        // ~2 KB wire buffer + queue: only on BLE builds
+#endif
 static TaskHandle_t tx_task_h;  // enqueue_frame notifies it out of its idle wait
 static std::atomic<uint32_t> dropped{0};  // frames dropped across all producer tasks
 
-// Reply routing: a reply goes back only on the link its request came from.
-// Broadcasting to serial during a BLE session blocks tx_task ~180 ms on a 2 KB
-// reply into the idle 115200-baud UART — the old BLE throughput ceiling.
-// Handlers don't carry the origin, but a reply is always enqueued from the task
-// that dispatched it (rx_task inline, slow_task queued), so a per-task origin set
-// at dispatch time suffices.
+// Reply routing: a reply returns only on its request's link (broadcasting a 2 KB
+// reply into the idle UART during a BLE session stalled tx_task ~180 ms). The
+// dispatching task identifies the origin, so a per-task origin set suffices.
 static TaskHandle_t rx_task_h, slow_task_h;
 static uint8_t origin_rx = DEST_ALL, origin_slow = DEST_ALL;
 
-static uint8_t reply_dest() {
+static uint8_t reply_destination() {
   TaskHandle_t t = xTaskGetCurrentTaskHandle();
   if (t == rx_task_h) return origin_rx;
   if (t == slow_task_h) return origin_slow;
   return DEST_ALL;  // unknown task (shouldn't happen): fall back to broadcast
 }
 
-static void queue_copy(TxStream& s, uint8_t flags, uint8_t seq, uint16_t cmd,
+static void enqueue_copy(TxStream& s, uint8_t flags, uint8_t seq, uint16_t cmd,
                        const uint8_t* data, uint16_t len) {
   Frame f = { flags, seq, cmd, len, nullptr };
   if (len) {
@@ -176,36 +169,38 @@ static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
   // Each link gets its own copy and drains it at its own pace — a broadcast
   // event to a slow link can back up only that link's queue.
   if (dest == LINK_USB || dest == DEST_ALL)
-    queue_copy(tx_usb, flags, seq, cmd, data, len);
+    enqueue_copy(tx_usb, flags, seq, cmd, data, len);
+#if BRIDGE_BLE
   if (dest == LINK_BLE || (dest == DEST_ALL && link_ble_authed()))
-    queue_copy(tx_ble, flags, seq, cmd, data, len);
+    enqueue_copy(tx_ble, flags, seq, cmd, data, len);
+#endif
   if (tx_task_h) xTaskNotifyGive(tx_task_h);  // wake the drainer (latched if it isn't waiting)
 }
 
 // Dequeue the next frame of `s` (if any) and encode it into the stream's wire
 // buffer — header, payload and CRC fed incrementally, no scratch copy. tx_task only.
-static void stream_load(TxStream& s) {
+static void load_stream_frame(TxStream& s) {
   Frame f;
   if (xQueueReceive(s.q, &f, 0) != pdTRUE) return;
   uint8_t hdr[4] = { f.flags, f.seq, (uint8_t)(f.cmd >> 8), (uint8_t)f.cmd };
-  uint16_t crc = crc16_step(0xFFFF, hdr, 4);
-  if (f.len) crc = crc16_step(crc, f.buf, f.len);
+  uint16_t crc = crc16_update(0xFFFF, hdr, 4);
+  if (f.len) crc = crc16_update(crc, f.buf, f.len);
   uint8_t tail[2] = { (uint8_t)(crc >> 8), (uint8_t)crc };
   CobsEnc e;
-  cobs_begin(e, s.wire);
-  cobs_feed(e, hdr, 4);
-  if (f.len) cobs_feed(e, f.buf, f.len);
+  cobs_enc_begin(e, s.wire);
+  cobs_enc_feed(e, hdr, 4);
+  if (f.len) cobs_enc_feed(e, f.buf, f.len);
   free(f.buf);
-  cobs_feed(e, tail, 2);
-  uint16_t n = cobs_end(e);
+  cobs_enc_feed(e, tail, 2);
+  uint16_t n = cobs_enc_finish(e);
   s.wire[n++] = 0x00;
   s.pos = 0;
   s.len = n;
 }
 
 // Advance one stream without blocking; returns true if any bytes moved.
-static bool usb_progress() {
-  if (tx_usb.len == 0) stream_load(tx_usb);
+static bool advance_usb_stream() {
+  if (tx_usb.len == 0) load_stream_frame(tx_usb);
   if (tx_usb.len == 0) return false;
   int room = Serial.availableForWrite();
   if (room <= 0) return false;  // TX ring full: the UART drains it at line rate
@@ -217,13 +212,13 @@ static bool usb_progress() {
   return true;
 }
 
-static bool ble_progress() {
-  if (tx_ble.len == 0) stream_load(tx_ble);
+#if BRIDGE_BLE
+static bool advance_ble_stream() {
+  if (tx_ble.len == 0) load_stream_frame(tx_ble);
   if (tx_ble.len == 0) return false;
   if (!link_ble_up()) {
-    // Central gone: discard the frame in flight and everything queued behind
-    // it — they can never be delivered, and holding them would leak into the
-    // next session.
+    // Central gone: drop the in-flight frame and the queue — undeliverable, and
+    // holding them would leak into the next session.
     tx_ble.len = 0;
     Frame f;
     while (xQueueReceive(tx_ble.q, &f, 0) == pdTRUE) {
@@ -238,15 +233,20 @@ static bool ble_progress() {
   if (tx_ble.pos == tx_ble.len) tx_ble.len = 0;
   return true;
 }
+static bool tx_streams_idle() { return tx_usb.len == 0 && tx_ble.len == 0; }
+#else
+static bool advance_ble_stream() { return false; }
+static bool tx_streams_idle() { return tx_usb.len == 0; }
+#endif
 
 static void tx_task(void*) {
   uint16_t spins = 0;
   for (;;) {
-    bool moved = usb_progress();
-    moved = ble_progress() || moved;
+    bool moved = advance_usb_stream();
+    moved = advance_ble_stream() || moved;
     if (!moved) {
       spins = 0;
-      if (tx_usb.len == 0 && tx_ble.len == 0) {
+      if (tx_streams_idle()) {
         // Fully idle: sleep until enqueue_frame notifies (latched, so a
         // notify that races this wait is not lost).
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
@@ -262,14 +262,14 @@ static void tx_task(void*) {
 
 void proto_reply(uint8_t seq, uint16_t cmd, const uint8_t* data, uint16_t len) {
   if (seq == 0) return;  // fire-and-forget: no reply
-  enqueue_frame(0, seq, cmd, data, len, reply_dest());
+  enqueue_frame(0, seq, cmd, data, len, reply_destination());
 }
 
 void proto_reply_ok(uint8_t seq, uint16_t cmd) { proto_reply(seq, cmd, nullptr, 0); }
 
 void proto_reply_err(uint8_t seq, uint16_t cmd, uint8_t status) {
   if (seq == 0) return;
-  enqueue_frame(FLAG_ERROR, seq, cmd, &status, 1, reply_dest());
+  enqueue_frame(FLAG_ERROR, seq, cmd, &status, 1, reply_destination());
 }
 
 void proto_send_event(uint16_t cmd, const uint8_t* data, uint16_t len) {
@@ -293,12 +293,9 @@ void proto_log_heap(const char* stage) {
 }
 
 // ---- IDF log capture ---------------------------------------------------------
-// The Wi-Fi/BT stacks emit log output via esp_log, which normally goes to
-// UART0 — the same port carrying the COBS frame stream. Those raw bytes would
-// land in the middle of frames and corrupt them. This hook redirects all IDF
-// log output into SYS_LOG events instead.
-// Note: ROM boot output and crash/panic text still go to UART0 as raw bytes;
-// they cannot be intercepted here.
+// Wi-Fi/BT stacks log via esp_log to UART0 — the COBS frame port — so raw bytes
+// would corrupt frames. This hook redirects IDF log output into SYS_LOG events.
+// (ROM boot and crash/panic text still hit UART0 raw; uninterceptable here.)
 static int bridge_vprintf(const char* fmt, va_list ap) {
 #if BRIDGE_NATIVE_USB
   return vprintf(fmt, ap);  // UART0 is free on native-USB chips: keep IDF logs
@@ -327,10 +324,9 @@ void proto_tx_flush() {
 uint32_t proto_dropped_events() { return dropped; }
 
 // ---- blocking-handler queue (bridge_slow) -----------------------------------------
-// Handlers for WIFI, NET, BLE, and related modules can block for seconds
-// (e.g. TCP connect, BLE connect) and share state with socket polling.
-// To avoid blocking rx_task, all such handlers run exclusively on slow_task —
-// which lives on CORE_RADIO, next to the stacks most of them call into.
+// WIFI/NET/BLE/etc. handlers can block for seconds (TCP/BLE connect) and share
+// state with socket polling, so they run on slow_task (on CORE_RADIO, next to
+// the stacks they call) instead of stalling rx_task.
 struct Req { uint16_t cmd; uint8_t seq; uint8_t origin; uint16_t len; uint8_t* buf; };
 static QueueHandle_t slowq;
 
@@ -359,7 +355,7 @@ static void slow_task(void*) {
   for (;;) {
     // Wake at least every 2 ms to poll sockets / scan completion.
     if (xQueueReceive(slowq, &r, pdMS_TO_TICKS(2)) == pdTRUE) {
-      origin_slow = r.origin;  // reply_dest() routes this request's replies
+      origin_slow = r.origin;  // reply_destination() routes this request's replies
       slow_dispatch(r.cmd, r.seq, r.buf, r.len);
       free(r.buf);
       // A continuously-fed queue never hits the 2 ms timeout above, so yield
@@ -390,19 +386,18 @@ static void slow_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
 }
 
 // ---- RX & dispatch (rx_task) -------------------------------------------------------
-// Each link has its own COBS accumulator because bytes from USB and BLE
-// arrive independently and may interleave.
+// Per-link COBS accumulator: USB and BLE bytes arrive independently and may
+// interleave. Frames decode in place here (cobs_decode), so no scratch buffer.
 struct RxState {
   uint8_t acc[ENC_BUF_SIZE];
   uint16_t len = 0;
   bool overflow = false;
 };
-static RxState rxstate[2];  // [LINK_USB], [LINK_BLE]
-static uint8_t rxframe[MAX_FRAME];
+static RxState rxstate[BRIDGE_BLE ? 2 : 1];  // [LINK_USB], [LINK_BLE]
 
 static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
                      const uint8_t* p, uint16_t len) {
-  origin_rx = origin;  // reply_dest() routes inline handlers' replies
+  origin_rx = origin;  // reply_destination() routes inline handlers' replies
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
     // Fast handlers: run inline on rx_task.
@@ -417,14 +412,11 @@ static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
     case MOD_UART:  uart_handle(op, seq, p, len); break;
     case MOD_NVS:   nvs_handle_cmd(op, seq, p, len); break;
     case MOD_MCPWM: mcpwm_handle(op, seq, p, len); break;
-    // 1-Wire is inline by necessity, not speed: its bit-banged slots mask
-    // interrupts for up to 70 µs, which must never happen on the radio core
-    // where slow_task lives (the BT controller has hard real-time deadlines).
-    // Worst op is a ROM search (~tens of ms) — same class as an I2C scan.
+    // 1-Wire is inline by necessity: its bit-banged slots mask interrupts up to
+    // 70 µs, which must never hit the radio core where slow_task lives.
     case MOD_ONEWIRE: onewire_handle(op, seq, p, len); break;
-    // Everything else is a slow / stateful handler (WIFI/NET/ESPNOW/BLE/RMT/
-    // FS/OTA/TWAI/I2S/ETH/CAM) — hand off to slow_task, which replies
-    // ST_UNKNOWN_CMD for any module it doesn't recognise.
+    // Everything else is slow/stateful (WIFI/NET/ESPNOW/BLE/RMT/FS/OTA/TWAI/I2S/
+    // ETH/CAM) — hand to slow_task, which replies ST_UNKNOWN_CMD if unrecognised.
     default:        slow_enqueue(cmd, seq, origin, p, len); break;
   }
 }
@@ -469,47 +461,55 @@ static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
   return false;
 }
 
-// Corrupt frames received on the USB serial link (bad COBS, short, CRC fail).
-// One lost or flipped byte lands here — exposed via SYS_FREE_HEAP so a host
-// retry warning can be traced to actual line corruption instead of guesswork.
+// Corrupt USB frames (bad COBS, short, CRC fail). Counted and exposed via
+// SYS_FREE_HEAP so host retries trace to real line corruption, not guesswork.
 static uint32_t serial_rx_errors = 0;
 uint32_t link_serial_rx_errors() { return serial_rx_errors; }
 
-static void handle_encoded(uint8_t origin, const uint8_t* enc, uint16_t enclen) {
-  uint16_t n = cobs_decode(enc, enclen, rxframe);
-  if (n < 6 || crc16_ccitt(rxframe, n - 2) != rd16(rxframe + n - 2)) {
+// Decode in place (no scratch buffer) and dispatch. Safe to refill the
+// accumulator on return: inline handlers run to completion, slow_enqueue copies.
+static void decode_and_dispatch(uint8_t origin, uint8_t* enc, uint16_t enclen) {
+  uint16_t n = cobs_decode(enc, enclen, enc);
+  if (n < 6 || crc16_ccitt(enc, n - 2) != read_be16(enc + n - 2)) {
     // Corrupted frame: drop it and let the host retry on timeout.
     if (origin == LINK_USB) serial_rx_errors++;
     return;
   }
-  uint8_t seq = rxframe[1];
-  uint16_t cmd = rd16(rxframe + 2);
-  if (handle_auth(origin, seq, cmd, rxframe + 4, n - 6)) return;
-  dispatch(origin, seq, cmd, rxframe + 4, n - 6);
+  uint8_t seq = enc[1];
+  uint16_t cmd = read_be16(enc + 2);
+  if (handle_auth(origin, seq, cmd, enc + 4, n - 6)) return;
+  dispatch(origin, seq, cmd, enc + 4, n - 6);
 }
 
-static void pump_bytes(uint8_t origin, const uint8_t* chunk, int n) {
+static void pump_link_bytes(uint8_t origin, const uint8_t* chunk, int n) {
   RxState& rx = rxstate[origin];
-  for (int i = 0; i < n; i++) {
-    uint8_t b = chunk[i];
-    if (b == 0x00) {
-      if (!rx.overflow && rx.len > 0) handle_encoded(origin, rx.acc, rx.len);
+  int i = 0;
+  while (i < n) {
+    if (chunk[i] == 0x00) {  // frame delimiter
+      if (!rx.overflow && rx.len > 0) decode_and_dispatch(origin, rx.acc, rx.len);
       rx.len = 0;
       rx.overflow = false;
-    } else {
-      if (rx.len < sizeof(rx.acc)) {
-        rx.acc[rx.len++] = b;
-      } else {  // accumulator full (e.g. a lost delimiter merged two frames); discard until the next 0x00
-        if (!rx.overflow && origin == LINK_USB) serial_rx_errors++;
-        rx.overflow = true;
-      }
+      i++;
+      continue;
     }
+    // Bulk-copy the run up to the next delimiter — the hot RX path at 1.5 Mbaud.
+    const uint8_t* z = (const uint8_t*)memchr(chunk + i, 0x00, n - i);
+    int run = (z ? (int)(z - chunk) : n) - i;
+    if (rx.overflow || run > (int)sizeof(rx.acc) - rx.len) {
+      // Accumulator full (lost delimiter merged frames): drop until the next 0x00.
+      if (!rx.overflow && origin == LINK_USB) serial_rx_errors++;
+      rx.overflow = true;
+    } else {
+      memcpy(rx.acc + rx.len, chunk + i, run);
+      rx.len += run;
+    }
+    i += run;
   }
 }
 
 // Returns true if any bytes were processed; rx_task yields briefly when false.
 static bool proto_pump_rx() {
-  static uint8_t chunk[256];
+  uint8_t chunk[256];  // rx_task stack (8 KB) — keeps 256 B out of BSS
   bool any = false;
   for (;;) {
     // Read in blocks rather than one byte at a time. Reading only as many
@@ -521,14 +521,16 @@ static bool proto_pump_rx() {
     int n = Serial.read(chunk, avail);
     if (n <= 0) break;
     any = true;
-    pump_bytes(LINK_USB, chunk, n);
+    pump_link_bytes(LINK_USB, chunk, n);
   }
+#if BRIDGE_BLE
   for (;;) {
     uint16_t n = link_ble_read(chunk, sizeof(chunk));
     if (n == 0) break;
     any = true;
-    pump_bytes(LINK_BLE, chunk, n);
+    pump_link_bytes(LINK_BLE, chunk, n);
   }
+#endif
   return any;
 }
 
@@ -538,10 +540,8 @@ static void rx_task(void*) {
     bool busy = proto_pump_rx();
     gpio_poll();   // ISR edge queue -> events
     uart_poll();   // secondary UART RX -> events
-    // Yield regularly. Idle -> sleep a tick. Under sustained traffic we still
-    // must yield every RX_YIELD_EVERY loops, or this priority-10 task starves
-    // the core's idle task and trips the idle Task-WDT — a reset that looks
-    // like a random stall under heavy load.
+    // Yield regularly: idle -> sleep a tick; busy -> still yield every
+    // RX_YIELD_EVERY loops, or this prio-10 task starves idle and trips the WDT.
     if (!busy) {
       spins = 0;
       vTaskDelay(1);
@@ -558,7 +558,9 @@ static void rx_task(void*) {
 // tasks; call at the end of setup() after all other init is done.
 void proto_init() {
   tx_usb.q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
+#if BRIDGE_BLE
   tx_ble.q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
+#endif
   slowq = xQueueCreate(SLOWQ_DEPTH, sizeof(Req));
 }
 

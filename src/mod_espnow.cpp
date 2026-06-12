@@ -1,16 +1,12 @@
-// ESP-NOW module: connectionless 2.4 GHz peer-to-peer messaging.
-// Works alongside Wi-Fi STA/AP and BLE using the IDF software radio arbiter.
-// Callbacks never write to serial directly — they enqueue events via
-// proto_send_event so that tx_task remains the sole serial writer.
+// ESP-NOW: connectionless 2.4 GHz messaging, coexisting with Wi-Fi STA/AP and BLE
+// via the IDF SW radio arbiter. Callbacks only enqueue events (proto_send_event);
+// tx_task stays the sole serial writer.
 //
-// Coexistence rules — these come from the ESP-IDF coexistence guide.
-// Do NOT "optimize" them without fully understanding the arbiter:
-//  - Never call esp_wifi_set_ps(WIFI_PS_NONE) while Bluetooth is active.
-//    The default WIFI_PS_MIN_MODEM mode keeps the SW arbiter stable.
-//  - Do not call esp_coex_* manually; the IDF SW arbiter manages radio timeslots.
-//  - Channel ownership: a connected STA or an active AP owns the channel and
-//    ESP-NOW inherits it. Only lock a specific channel when the radio is idle
-//    (no STA association, no active AP).
+// Coexistence rules (from the IDF guide — do NOT "optimize" without understanding
+// the arbiter): never esp_wifi_set_ps(WIFI_PS_NONE) while BT is active (default
+// MIN_MODEM keeps the arbiter stable); never call esp_coex_* manually; a connected
+// STA / active AP owns the channel and ESP-NOW inherits it — only lock a channel
+// when the radio is idle.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/radio.h"
@@ -25,17 +21,15 @@
 
 static bool inited = false;
 
-// Send-completion tracking.
-// ESP-NOW serializes sends: TX callbacks arrive in the same order as the calls.
-// The ff_outstanding counter counts fire-and-forget sends that are still in flight.
-// When a callback fires, if ff_outstanding > 0 it belongs to a fire-and-forget
-// send (emit ESPNOW_SEND_EVT and decrement). If ff_outstanding == 0, the callback
-// belongs to the currently blocking sync send (store result and give the semaphore).
+// Send-completion tracking. ESP-NOW serializes sends (callbacks arrive in call
+// order), so ff_outstanding counts in-flight fire-and-forget sends: a callback
+// with ff_outstanding > 0 is fire-and-forget (emit ESPNOW_SEND_EVT, decrement);
+// at 0 it's the blocking sync send (store result, give the semaphore).
 static SemaphoreHandle_t tx_done_sem;
 static std::atomic<uint8_t> ff_outstanding{0};       // fire-and-forget sends in flight
 static std::atomic<uint8_t> sync_status{1};          // last sync result (0 = ACKed)
 
-static void on_tx_done(const uint8_t* dst_mac, esp_now_send_status_t status) {
+static void handle_tx_done(const uint8_t* dst_mac, esp_now_send_status_t status) {
   if (ff_outstanding > 0) {
     ff_outstanding--;
     if (!dst_mac) return;
@@ -51,11 +45,11 @@ static void on_tx_done(const uint8_t* dst_mac, esp_now_send_status_t status) {
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
 static void on_send(const wifi_tx_info_t* info, esp_now_send_status_t status) {
-  on_tx_done(info ? info->des_addr : nullptr, status);
+  handle_tx_done(info ? info->des_addr : nullptr, status);
 }
 #else
 static void on_send(const uint8_t* mac, esp_now_send_status_t status) {
-  on_tx_done(mac, status);
+  handle_tx_done(mac, status);
 }
 #endif
 
@@ -68,7 +62,7 @@ static void on_recv(const esp_now_recv_info_t* info, const uint8_t* data, int le
   proto_send_event(ESPNOW_RX_EVT, buf, 7 + len);
 }
 
-static uint8_t map_err(esp_err_t e) {
+static uint8_t map_espnow_error(esp_err_t e) {
   switch (e) {
     case ESP_OK:                     return ST_OK;
     case ESP_ERR_ESPNOW_NOT_INIT:    return ST_NOT_INIT;
@@ -80,7 +74,7 @@ static uint8_t map_err(esp_err_t e) {
 }
 
 // INIT: channel u8 (0 = auto/inherit) | flags u8 (bit0 = 802.11 LR long range)
-static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
+static void do_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   NEED(2);
   uint8_t channel = p[0], flags = p[1];
 
@@ -107,7 +101,7 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 
   if (!inited) {
     esp_err_t e = esp_now_init();
-    if (e != ESP_OK) { radio_release(RADIO_ESPNOW); proto_reply_err(seq, cmd, map_err(e)); return; }
+    if (e != ESP_OK) { radio_release(RADIO_ESPNOW); proto_reply_err(seq, cmd, map_espnow_error(e)); return; }
     // Max wake window: with Wi-Fi idle the coex arbiter favours BLE and
     // connectionless power save gates the receiver — broadcasts (single-shot,
     // never retried) land in dead air for seconds at a time without this.
@@ -124,7 +118,7 @@ static void handle_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 }
 
 // ADD_PEER: mac[6] | channel u8 (0 = follow current) | encrypt u8 | [lmk[16]]
-static void handle_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
+static void do_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   if (len != 8 && len != 8 + 16) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
   bool encrypt = p[7] != 0;
   if (encrypt && len != 8 + 16) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
@@ -138,7 +132,7 @@ static void handle_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_
 
   esp_err_t e = esp_now_is_peer_exist(peer.peer_addr) ? esp_now_mod_peer(&peer)
                                                       : esp_now_add_peer(&peer);
-  if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+  if (e != ESP_OK) { proto_reply_err(seq, cmd, map_espnow_error(e)); return; }
   proto_reply_ok(seq, cmd);
 }
 
@@ -151,7 +145,7 @@ static void handle_add_peer(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_
 //              always be 0 for broadcasts.
 //   seq == 0 — fire-and-forget: send without waiting; the result arrives later
 //              as an ESPNOW_SEND_EVT unsolicited event.
-static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
+static void do_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   if (len < 6 || len > 6 + ESPNOW_MAX_DATA) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 
   if (seq == 0) {
@@ -162,7 +156,7 @@ static void handle_send(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t le
 
   while (xSemaphoreTake(tx_done_sem, 0) == pdTRUE) {}  // drain any leftover gives from a previous send
   esp_err_t e = esp_now_send(p, p + 6, len - 6);
-  if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+  if (e != ESP_OK) { proto_reply_err(seq, cmd, map_espnow_error(e)); return; }
   uint8_t delivered = 0;
   if (xSemaphoreTake(tx_done_sem, pdMS_TO_TICKS(25)) == pdTRUE)
     delivered = sync_status == 0 ? 1 : 0;
@@ -174,7 +168,7 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   if (!inited && op != 0x01) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
   switch (op) {
     case 0x01:  // INIT
-      handle_init(seq, cmd, p, len);
+      do_init(seq, cmd, p, len);
       break;
 
     case 0x02:  // DEINIT — radio powers off unless STA or AP still holds it
@@ -192,29 +186,29 @@ void espnow_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       break;
 
     case 0x04:  // ADD_PEER
-      handle_add_peer(seq, cmd, p, len);
+      do_add_peer(seq, cmd, p, len);
       break;
 
     case 0x05: {  // DEL_PEER: mac[6]
       if (len != 6) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       esp_err_t e = esp_now_del_peer(p);
-      if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+      if (e != ESP_OK) { proto_reply_err(seq, cmd, map_espnow_error(e)); return; }
       proto_reply_ok(seq, cmd);
       break;
     }
 
     case 0x06:  // SEND
-      handle_send(seq, cmd, p, len);
+      do_send(seq, cmd, p, len);
       break;
 
     case 0x07: {  // POWER_SAVE: wake window u16 ms | wake interval u16 ms (0 = keep)
       // RF listens `window` ms per `interval`; 0 = RX off (TX still works).
       NEED(4);
-      uint16_t window   = rd16(p);
-      uint16_t interval = rd16(p + 2);
+      uint16_t window   = read_be16(p);
+      uint16_t interval = read_be16(p + 2);
       esp_err_t e = esp_now_set_wake_window(window);
       if (e == ESP_OK && interval) e = esp_wifi_connectionless_module_set_wake_interval(interval);
-      if (e != ESP_OK) { proto_reply_err(seq, cmd, map_err(e)); return; }
+      if (e != ESP_OK) { proto_reply_err(seq, cmd, map_espnow_error(e)); return; }
       proto_reply_ok(seq, cmd);
       break;
     }

@@ -19,7 +19,7 @@
 // pin_is_adc2() — the ADC2/Wi-Fi conflict check — is shared via modules.h.
 
 #if BRIDGE_HAS_DAC
-static bool dac_pin(uint8_t pin) {
+static bool is_dac_pin(uint8_t pin) {
 #if defined(CONFIG_IDF_TARGET_ESP32)
   return pin == 25 || pin == 26;
 #elif defined(CONFIG_IDF_TARGET_ESP32S2)
@@ -31,7 +31,7 @@ static bool dac_pin(uint8_t pin) {
 
 #if BRIDGE_DAC_COSINE
 static dac_cosine_handle_t cos_handle[2];  // per DAC channel
-static int dac_chan(uint8_t pin) {
+static int dac_channel(uint8_t pin) {
 #if defined(CONFIG_IDF_TARGET_ESP32)
   return pin == 25 ? 0 : 1;
 #else
@@ -39,8 +39,8 @@ static int dac_chan(uint8_t pin) {
 #endif
 }
 
-static void cos_stop(uint8_t pin) {
-  int ch = dac_chan(pin);
+static void stop_cosine(uint8_t pin) {
+  int ch = dac_channel(pin);
   if (cos_handle[ch]) {
     dac_cosine_stop(cos_handle[ch]);
     dac_cosine_del_channel(cos_handle[ch]);
@@ -50,7 +50,7 @@ static void cos_stop(uint8_t pin) {
 #endif
 #endif  // BRIDGE_HAS_DAC
 
-static void adc_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
+static void handle_adc(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_ADC, op);
   NEED(1);
   uint8_t pin = p[0];
@@ -65,7 +65,7 @@ static void adc_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) 
     case 0x03: {  // READ_MV -> millivolts u16
       if (pin_is_adc2(pin) && radio_active()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       uint8_t buf[2];
-      wr16(buf, op == 0x02 ? (uint16_t)analogRead(pin)
+      write_be16(buf, op == 0x02 ? (uint16_t)analogRead(pin)
                            : (uint16_t)analogReadMilliVolts(pin));
       proto_reply(seq, cmd, buf, 2);
       break;
@@ -75,7 +75,7 @@ static void adc_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) 
   }
 }
 
-static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
+static void handle_dac(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_DAC, op);
 #if !BRIDGE_HAS_DAC
   (void)p; (void)len;
@@ -83,12 +83,12 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
 #else
   NEED(1);
   uint8_t pin = p[0];
-  if (!dac_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
+  if (!is_dac_pin(pin)) { proto_reply_err(seq, cmd, ST_BAD_PIN); return; }
   switch (op) {
     case 0x01:  // WRITE: pin, value
       NEED(2);
 #if BRIDGE_DAC_COSINE
-      cos_stop(pin);  // the cosine generator holds exclusive ownership of the DAC channel while active, so stop it before doing a plain write
+      stop_cosine(pin);  // the cosine generator holds exclusive ownership of the DAC channel while active, so stop it before doing a plain write
 #endif
       dacWrite(pin, p[1]);
       proto_reply_ok(seq, cmd);
@@ -97,17 +97,17 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
     case 0x02: {  // COSINE: pin, freq u32, scale, offset i8, phase
 #if BRIDGE_DAC_COSINE
       NEED(8);
-      cos_stop(pin);
+      stop_cosine(pin);
       dacDisable(pin);
       dac_cosine_config_t cfg = {};
-      cfg.chan_id = (dac_channel_t)dac_chan(pin);
-      cfg.freq_hz = rd32(p + 1);
+      cfg.chan_id = (dac_channel_t)dac_channel(pin);
+      cfg.freq_hz = read_be32(p + 1);
       cfg.clk_src = DAC_COSINE_CLK_SRC_DEFAULT;
       cfg.atten = (dac_cosine_atten_t)p[5];
       cfg.phase = p[7] ? DAC_COSINE_PHASE_180 : DAC_COSINE_PHASE_0;
       cfg.offset = (int8_t)p[6];
       cfg.flags.force_set_freq = true;
-      int ch = dac_chan(pin);
+      int ch = dac_channel(pin);
       if (dac_cosine_new_channel(&cfg, &cos_handle[ch]) != ESP_OK ||
           dac_cosine_start(cos_handle[ch]) != ESP_OK) {
         if (cos_handle[ch]) { dac_cosine_del_channel(cos_handle[ch]); cos_handle[ch] = nullptr; }
@@ -123,14 +123,14 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
 
     case 0x03:  // COS_STOP
 #if BRIDGE_DAC_COSINE
-      cos_stop(pin);
+      stop_cosine(pin);
 #endif
       proto_reply_ok(seq, cmd);
       break;
 
     case 0x04:  // DISABLE
 #if BRIDGE_DAC_COSINE
-      cos_stop(pin);
+      stop_cosine(pin);
 #endif
       dacDisable(pin);
       proto_reply_ok(seq, cmd);
@@ -142,7 +142,7 @@ static void dac_handle_(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len)
 #endif
 }
 
-static void touch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
+static void handle_touch(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_TOUCH, op);
 #if !BRIDGE_HAS_TOUCH
   (void)p; (void)len;
@@ -151,15 +151,15 @@ static void touch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len
   if (op != 0x01) { proto_reply_err(seq, cmd, ST_UNKNOWN_CMD); return; }
   NEED(1);
   uint8_t buf[4];
-  wr32(buf, (uint32_t)touchRead(p[0]));
+  write_be32(buf, (uint32_t)touchRead(p[0]));
   proto_reply(seq, cmd, buf, 4);
 #endif
 }
 
 void analog_handle(uint8_t mod, uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   switch (mod) {
-    case MOD_ADC:   adc_handle(op, seq, p, len); break;
-    case MOD_DAC:   dac_handle_(op, seq, p, len); break;
-    case MOD_TOUCH: touch_handle(op, seq, p, len); break;
+    case MOD_ADC:   handle_adc(op, seq, p, len); break;
+    case MOD_DAC:   handle_dac(op, seq, p, len); break;
+    case MOD_TOUCH: handle_touch(op, seq, p, len); break;
   }
 }

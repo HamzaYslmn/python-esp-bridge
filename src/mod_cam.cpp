@@ -51,9 +51,9 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       held = esp_camera_fb_get();
       if (!held) { proto_reply_err(seq, cmd, ST_IO); return; }
       uint8_t buf[9];
-      wr32(buf, held->len);
-      wr16(buf + 4, held->width);
-      wr16(buf + 6, held->height);
+      write_be32(buf, held->len);
+      write_be16(buf + 4, held->width);
+      write_be16(buf + 6, held->height);
       buf[8] = (uint8_t)held->format;
       proto_reply(seq, cmd, buf, 9);
       break;
@@ -61,8 +61,8 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x03: {  // READ: offset u32|n u16 -> data
       NEED(6);
       if (!held) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
-      uint32_t off = rd32(p);
-      uint16_t n = rd16(p + 4);
+      uint32_t off = read_be32(p);
+      uint16_t n = read_be16(p + 4);
       if (n > MAX_PAYLOAD - 8) n = MAX_PAYLOAD - 8;
       if (off >= held->len) { proto_reply(seq, cmd, nullptr, 0); return; }
       if (off + n > held->len) n = held->len - off;
@@ -77,7 +77,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       NEED(5);
       sensor_t* s = cam_up ? esp_camera_sensor_get() : nullptr;
       if (!s) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
-      int v = (int32_t)rd32(p + 1);
+      int v = (int32_t)read_be32(p + 1);
       int r;
       switch (p[0]) {  // property IDs mirror the constants defined in espbridge.camera
         case 0:  r = s->set_framesize(s, (framesize_t)v); break;

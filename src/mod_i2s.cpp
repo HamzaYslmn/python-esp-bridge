@@ -24,7 +24,7 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         : p[9] == 24 ? I2S_DATA_BIT_WIDTH_24BIT
         : p[9] == 32 ? I2S_DATA_BIT_WIDTH_32BIT : I2S_DATA_BIT_WIDTH_16BIT;
       i2s.setPins((int8_t)p[1], (int8_t)p[2], (int8_t)p[3], (int8_t)p[4]);
-      if (!i2s.begin(I2S_MODE_STD, rd32(p + 5), bits,
+      if (!i2s.begin(I2S_MODE_STD, read_be32(p + 5), bits,
                      p[10] ? I2S_SLOT_MODE_STEREO : I2S_SLOT_MODE_MONO)) {
         proto_reply_err(seq, cmd, ST_IO);
         return;
@@ -37,14 +37,14 @@ void i2s_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       if (!i2s_up) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
       size_t w = i2s.write(p, len);
       uint8_t buf[2];
-      wr16(buf, w);
+      write_be16(buf, w);
       proto_reply(seq, cmd, buf, 2);
       break;
     }
     case 0x03: {  // READ: n u16 -> pcm
       NEED(2);
       if (!i2s_up) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
-      uint16_t n = rd16(p);
+      uint16_t n = read_be16(p);
       if (n > MAX_PAYLOAD - 8) n = MAX_PAYLOAD - 8;
       uint8_t* buf = (uint8_t*)malloc(n ? n : 1);
       if (!buf) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }

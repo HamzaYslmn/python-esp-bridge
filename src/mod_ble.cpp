@@ -49,7 +49,7 @@ static void uuid_to_wire(BLEUUID uuid, uint8_t out[16]) {
   } else {
     memcpy(out, BASE_UUID_MSB, 16);
     uint32_t v = n->len == ESP_UUID_LEN_16 ? n->uuid.uuid16 : n->uuid.uuid32;
-    wr32(out, v);
+    write_be32(out, v);
   }
 }
 
@@ -159,7 +159,7 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       uint8_t mlen = *q++; left--;
       if (left < (uint16_t)(mlen + 2)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       String mfg((const char*)q, mlen); q += mlen; left -= mlen;
-      uint16_t uuid16 = rd16(q);
+      uint16_t uuid16 = read_be16(q);
 
       BLEAdvertising* adv = BLEDevice::getAdvertising();
       BLEAdvertisementData data;

@@ -19,7 +19,7 @@ static bool eth_started = false;
 // The enum values can shift between SDK configurations (chips compiled without
 // a given PHY drop its enumerator), so the protocol defines its own fixed ids
 // (documented in commands.h) and we translate here.
-static bool phy_of(uint8_t id, eth_phy_type_t* out) {
+static bool phy_for_id(uint8_t id, eth_phy_type_t* out) {
   switch (id) {
 #if defined(CONFIG_ETH_USE_ESP32_EMAC)
     case 0: *out = ETH_PHY_GENERIC; return true;
@@ -43,7 +43,7 @@ static bool phy_of(uint8_t id, eth_phy_type_t* out) {
   }
 }
 
-static void on_eth_event(arduino_event_id_t event, arduino_event_info_t info) {
+static void on_eth_event_cb(arduino_event_id_t event, arduino_event_info_t info) {
   uint8_t buf[5] = {0};
   switch (event) {
     case ARDUINO_EVENT_ETH_CONNECTED:
@@ -70,9 +70,9 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x01: {  // BEGIN_RMII: phy|addr|mdc|mdio|power|clk (classic ESP32 EMAC)
 #if defined(CONFIG_ETH_USE_ESP32_EMAC)
       eth_phy_type_t phy;
-      if (len < 6 || !phy_of(p[0], &phy)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      if (len < 6 || !phy_for_id(p[0], &phy)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (eth_started) { proto_reply_err(seq, cmd, ST_BUSY); return; }
-      Network.onEvent(on_eth_event);
+      Network.onEvent(on_eth_event_cb);
       if (!ETH.begin(phy, (int8_t)p[1], (int8_t)p[2],
                      (int8_t)p[3], (int8_t)p[4], (eth_clock_mode_t)p[5])) {
         proto_reply_err(seq, cmd, ST_IO);
@@ -87,9 +87,9 @@ void eth_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
     case 0x02: {  // BEGIN_SPI: phy|addr|cs|irq|rst|sck|miso|mosi|freq_mhz
       eth_phy_type_t phy;
-      if (len < 9 || !phy_of(p[0], &phy)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+      if (len < 9 || !phy_for_id(p[0], &phy)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (eth_started) { proto_reply_err(seq, cmd, ST_BUSY); return; }
-      Network.onEvent(on_eth_event);
+      Network.onEvent(on_eth_event_cb);
 #if SOC_SPI_PERIPH_NUM > 2
       spi_host_device_t host = SPI3_HOST;
 #else

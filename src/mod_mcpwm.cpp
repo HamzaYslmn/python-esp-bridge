@@ -30,11 +30,11 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   switch (op) {
     case 0x01: {  // INIT: pin_a u8|pin_b i8 (-1 single)|freq u32|deadtime_ns u16
       NEED(8);
-      uint32_t freq = rd32(p + 2);
+      uint32_t freq = read_be32(p + 2);
       if (freq == 0 || freq > MCPWM_RES_HZ / 4) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       mcpwm_teardown();
       period_ticks = MCPWM_RES_HZ / freq;
-      uint32_t dt_ticks = (uint32_t)rd16(p + 6) / 100;  // ns -> 100 ns ticks
+      uint32_t dt_ticks = (uint32_t)read_be16(p + 6) / 100;  // ns -> 100 ns ticks
 
       mcpwm_timer_config_t tc = {};
       tc.group_id = 0;
@@ -98,7 +98,7 @@ void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x02: {  // DUTY: permille u16 (0..1000)
       NEED(2);
       if (!cmp) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
-      uint16_t pm = rd16(p);
+      uint16_t pm = read_be16(p);
       if (pm > 1000) pm = 1000;
       mcpwm_comparator_set_compare_value(cmp, (uint64_t)period_ticks * pm / 1000);
       proto_reply_ok(seq, cmd);

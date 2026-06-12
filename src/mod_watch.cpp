@@ -1,15 +1,7 @@
-// WATCH — on-device, POLLED user-definable event engine.
-//
-// The host defines rules ("sample ADC pin 4 every 50 ms; fire when it goes
-// above 3200"); this module samples each rule on a background task and pushes a
-// WATCH_EVT only when the rule's state changes. Two design points the bridge
-// cares about:
-//   * Non-interrupt: sampling happens in watch_poll() on slow_task, never in an
-//     ISR, so the application/main loop is never interrupted (unlike GPIO edge
-//     watches, which use attachInterrupt).
-//   * Lock-free: WATCH_ADD/REMOVE/CLEAR/LIST are routed to slow_task (via the
-//     net request queue) — the same task that runs watch_poll() — so the rule
-//     table is only ever touched from one task and needs no mutex.
+// WATCH — on-device, POLLED user-definable event engine. The host defines rules
+// ("sample ADC pin 4 every 50 ms; fire above 3200"); watch_poll() samples each on
+// slow_task and emits WATCH_EVT only on state change. Polled (never in an ISR, so
+// the main loop is never interrupted) and single-task (no mutex on the rule table).
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/radio.h"
@@ -47,17 +39,16 @@ struct Watch {
 
 static Watch watches[WATCH_MAX];
 
-static inline uint32_t now_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
+static inline uint32_t uptime_ms() { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 
-static Watch* find(uint8_t id) {
+static Watch* find_watch(uint8_t id) {
   for (auto& w : watches) if (w.active && w.id == id) return &w;
   return nullptr;
 }
 
-// Read a rule's source. Returns false if the sample can't be taken right now
-// (e.g. ADC2 pin while Wi-Fi owns the ADC — see pin_is_adc2 in modules.h) so the
-// caller skips this tick.
-static bool sample(const Watch& w, int32_t& out) {
+// Read a rule's source; false if unreadable now (e.g. ADC2 while Wi-Fi owns the
+// ADC — see pin_is_adc2 in modules.h), so the caller skips this tick.
+static bool read_watch_source(const Watch& w, int32_t& out) {
   switch (w.source) {
     case SRC_ADC_RAW:
     case SRC_ADC_MV:
@@ -83,7 +74,7 @@ static bool sample(const Watch& w, int32_t& out) {
 
 // Threshold state for the comparators that have an active/inactive notion,
 // applying hysteresis (a = engage, b = release) for above/below.
-static uint8_t threshold_state(const Watch& w, int32_t v) {
+static uint8_t threshold_active(const Watch& w, int32_t v) {
   switch (w.cmp) {
     // Release on a strict inequality so a degenerate band (b==a, i.e. no
     // hysteresis) doesn't oscillate when the value sits exactly on the
@@ -96,48 +87,48 @@ static uint8_t threshold_state(const Watch& w, int32_t v) {
   }
 }
 
-static void emit(const Watch& w, uint8_t state, int32_t value) {
+static void emit_watch_event(const Watch& w, uint8_t state, int32_t value) {
   uint8_t buf[10];
   buf[0] = w.id;
   buf[1] = state;
-  wr32(buf + 2, (uint32_t)value);
-  wr32(buf + 6, now_ms());
+  write_be32(buf + 2, (uint32_t)value);
+  write_be32(buf + 6, uptime_ms());
   proto_send_event(WATCH_EVT, buf, 10);
 }
 
 void watch_poll() {
-  uint32_t t = now_ms();
+  uint32_t t = uptime_ms();
   for (auto& w : watches) {
     if (!w.active) continue;
     if (w.primed && (uint32_t)(t - w.last_ms) < w.period_ms) continue;
 
     int32_t v;
-    if (!sample(w, v)) { w.last_ms = t; continue; }  // can't sample now; retry next tick
+    if (!read_watch_source(w, v)) { w.last_ms = t; continue; }  // unreadable now; retry next tick
     w.last_ms = t;
     w.last_val = v;
 
     if (w.cmp == CMP_CHANGED) {
       if (!w.primed) {
         w.primed = true; w.last_emit = v;
-        if (w.flags & F_INITIAL) emit(w, 1, v);
+        if (w.flags & F_INITIAL) emit_watch_event(w, 1, v);
       } else {
         int32_t d = v - w.last_emit;
         if (d < 0) d = -d;
-        if (d >= w.a) { w.last_emit = v; emit(w, 1, v); }
+        if (d >= w.a) { w.last_emit = v; emit_watch_event(w, 1, v); }
       }
       continue;
     }
 
-    uint8_t ns = threshold_state(w, v);
+    uint8_t ns = threshold_active(w, v);
     if (!w.primed) {
       w.primed = true;
       w.state = ns;
-      if (w.flags & F_INITIAL) emit(w, ns, v);  // report current state at arm time
+      if (w.flags & F_INITIAL) emit_watch_event(w, ns, v);  // report current state at arm time
       continue;
     }
     if (ns != w.state) {
       w.state = ns;
-      if ((ns && (w.flags & F_ENTER)) || (!ns && (w.flags & F_EXIT))) emit(w, ns, v);
+      if ((ns && (w.flags & F_ENTER)) || (!ns && (w.flags & F_EXIT))) emit_watch_event(w, ns, v);
     }
   }
 }
@@ -152,7 +143,7 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 #if !BRIDGE_HAS_TOUCH
       if (source == SRC_TOUCH) { proto_reply_err(seq, cmd, ST_UNSUPPORTED); return; }
 #endif
-      Watch* w = find(id);
+      Watch* w = find_watch(id);
       if (!w) for (auto& s : watches) if (!s.active) { w = &s; break; }
       if (!w) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }  // table full
 
@@ -162,16 +153,16 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       w->active = true;
       w->id = id; w->source = source; w->arg = arg;
       w->cmp = cmp; w->flags = p[5];
-      w->period_ms = rd16(p + 6); if (w->period_ms == 0) w->period_ms = 100;
-      w->a = (int32_t)rd32(p + 8);
-      w->b = (int32_t)rd32(p + 12);
+      w->period_ms = read_be16(p + 6); if (w->period_ms == 0) w->period_ms = 100;
+      w->a = (int32_t)read_be32(p + 8);
+      w->b = (int32_t)read_be32(p + 12);
       w->last_ms = 0; w->state = 0; w->primed = false; w->last_val = 0; w->last_emit = 0;
       proto_reply_ok(seq, cmd);
       break;
     }
     case 0x02: {  // REMOVE: id
       NEED(1);
-      Watch* w = find(p[0]);
+      Watch* w = find_watch(p[0]);
       if (w) w->active = false;
       proto_reply_ok(seq, cmd);
       break;
@@ -187,7 +178,7 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         if (!w.active) continue;
         buf[n++] = w.id;
         buf[n++] = w.state;
-        wr32(buf + n, (uint32_t)w.last_val); n += 4;
+        write_be32(buf + n, (uint32_t)w.last_val); n += 4;
         count++;
       }
       buf[0] = count;

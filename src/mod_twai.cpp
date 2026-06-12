@@ -23,7 +23,7 @@ void twai_poll() {
   for (int i = 0; i < 8 && twai_receive(&msg, 0) == ESP_OK; i++) {
     uint8_t evt[5 + TWAI_FRAME_MAX_DLC];
     evt[0] = (msg.extd ? 1 : 0) | (msg.rtr ? 2 : 0);
-    wr32(evt + 1, msg.identifier);
+    write_be32(evt + 1, msg.identifier);
     uint8_t n = msg.data_length_code > TWAI_FRAME_MAX_DLC
                     ? TWAI_FRAME_MAX_DLC : msg.data_length_code;
     memcpy(evt + 5, msg.data, n);
@@ -45,8 +45,8 @@ void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       g.rx_queue_len = 16;
       twai_filter_config_t f = TWAI_FILTER_CONFIG_ACCEPT_ALL();
       if (len >= 13) {
-        f.acceptance_code = rd32(p + 4);
-        f.acceptance_mask = rd32(p + 8);
+        f.acceptance_code = read_be32(p + 4);
+        f.acceptance_mask = read_be32(p + 8);
         f.single_filter = p[12] != 0;
       }
       if (twai_driver_install(&g, &TIMINGS[p[3]], &f) != ESP_OK
@@ -65,7 +65,7 @@ void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       twai_message_t msg = {};
       msg.extd = p[0] & 1;
       msg.rtr = (p[0] >> 1) & 1;
-      msg.identifier = rd32(p + 1);
+      msg.identifier = read_be32(p + 1);
       msg.data_length_code = len - 5;
       memcpy(msg.data, p + 5, len - 5);
       esp_err_t err = twai_transmit(&msg, pdMS_TO_TICKS(50));
@@ -83,7 +83,7 @@ void twai_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
              : st.state == TWAI_STATE_BUS_OFF ? 3 : 0;
       buf[1] = st.tx_error_counter > 255 ? 255 : st.tx_error_counter;
       buf[2] = st.rx_error_counter > 255 ? 255 : st.rx_error_counter;
-      wr32(buf + 3, st.rx_missed_count);
+      write_be32(buf + 3, st.rx_missed_count);
       proto_reply(seq, cmd, buf, 7);
       break;
     }

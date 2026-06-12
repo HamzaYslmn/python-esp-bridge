@@ -22,7 +22,7 @@ void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
         return;
       }
       if (Update.isRunning()) Update.abort();
-      uint32_t size = rd32(p);
+      uint32_t size = read_be32(p);
       ota_total = 0;
       if (!Update.begin(size == 0xFFFFFFFF ? UPDATE_SIZE_UNKNOWN : size)) {
         proto_log(2, Update.errorString());
@@ -42,7 +42,7 @@ void ota_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       }
       ota_total += len;
       uint8_t buf[4];
-      wr32(buf, ota_total);
+      write_be32(buf, ota_total);
       proto_reply(seq, cmd, buf, 4);
       break;
     }

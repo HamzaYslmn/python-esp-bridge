@@ -155,35 +155,17 @@
 #endif
 
 // ---- task layout ------------------------------------------------------------
-// Dual-core ESP32: ESP-IDF pins the Wi-Fi/Bluetooth stacks to core 0 (PRO_CPU);
-// core 1 (APP_CPU) is the application core. The bridge spreads its three tasks
-// across both cores, grouped by domain:
-//
-//   CORE_RADIO (0): Wi-Fi/BT stacks (fixed)
-//                   bridge_tx   — replies/events out: pure encode-and-write,
-//                                 no timing constraints, yields to the radio
-//                                 (prio 12 vs 19+)
-//                   bridge_slow — blocking handlers (Wi-Fi/NET/ESP-NOW/BLE/
-//                                 FS/OTA/...): mostly calls into the stacks
-//                                 that live on this core anyway
-//
-//   CORE_APP   (1): bridge_rx   — frame pump + fast inline handlers (GPIO/
-//                                 I2C/SPI/ADC/NVS/... and 1-Wire, whose
-//                                 IRQ-masking bit slots must never run on
-//                                 the radio core)
-//                   user loop() — when EspBridge.begin(..., exclusive=false)
-//
-// Net effect: reply N transmits on core 0 while command N+1 executes on
-// core 1, slow handlers no longer compete with the link fast path, and
-// nothing timing-sensitive shares a core with radio interrupts.
-//
-// Opt-out — pin ALL bridge tasks to a single core with a build flag:
-//   arduino-cli compile ... --build-property "build.extra_flags=-DBRIDGE_SINGLE_CORE=1"
-// BRIDGE_SINGLE_CORE=1 keeps the radio core completely untouched (the layout
-// of firmware <= 0.5.2). BRIDGE_SINGLE_CORE=0 moves the whole bridge onto
-// the radio core, leaving core 1 entirely to the sketch — pair it with
-// EspBridge.begin(..., exclusive=false); the trade-off is that bus timing
-// (1-Wire especially) then shares a core with radio interrupts.
+// Dual-core ESP32 (Wi-Fi/BT pinned to core 0). The bridge's three tasks split by
+// domain so reply N transmits while command N+1 executes:
+//   CORE_RADIO (0): bridge_tx   (encode+write, prio 12, yields to the radio)
+//                   bridge_slow (blocking Wi-Fi/NET/ESP-NOW/BLE/FS/OTA handlers,
+//                                next to the stacks they call)
+//   CORE_APP   (1): bridge_rx   (frame pump + fast inline handlers incl. 1-Wire,
+//                                whose IRQ-masking slots must avoid the radio core)
+//                   user loop() (when begin(..., exclusive=false))
+// Opt-out: -DBRIDGE_SINGLE_CORE=N pins all bridge tasks to core N (1 = leave the
+// radio core untouched; 0 = leave core 1 to the sketch, but bus timing then
+// shares a core with radio interrupts).
 #if CONFIG_FREERTOS_UNICORE
   #define CORE_RADIO 0
   #define CORE_APP   0
@@ -211,29 +193,21 @@
 // 0x00 frame delimiter appended by tx_task.
 #define ENC_BUF_SIZE   (MAX_FRAME + (MAX_FRAME / 254) + 2)
 
-// RX ring must absorb the host's pipelined burst while a slow inline handler
-// (e.g. an 80 ms I2C scan) blocks rx_task. The Python serial transport caps
-// waited in-flight bytes at 6400 — three max-size wire frames, enough to keep
-// the full-duplex line saturated — and the ring holds that cap plus one more
-// frame, so it can't overflow; UART overflow/framing errors are counted
-// (SYS_FREE_HEAP).
-// TX ring is small on purpose: tx_task's per-link cursor refills it every
-// pass (~1 ms), so it only needs to bridge wake-up latency, not hold whole
-// frames (1024 B = ~6 ms of drain at 1.5 Mbaud).
+// RX ring absorbs the host's pipelined burst while a slow inline handler (e.g. an
+// 80 ms I2C scan) blocks rx_task: the host caps in-flight bytes at 6400, and the
+// ring holds that plus one frame so it can't overflow (errors counted, SYS_FREE_HEAP).
+// TX ring is small on purpose — tx_task's cursor refills it every ~1 ms, so it
+// only bridges wake-up latency, not whole frames.
 #define SERIAL_RX_BUF  8704
 #define SERIAL_TX_BUF  1024
 
-// Bringing the radio up costs real heap (measured on classic ESP32, core
-// 3.3.6: first driver start ~52 KB; ~18 KB stays resident after a stop, so a
-// restart costs ~33 KB). With a BLE central connected the handlers refuse a
-// bring-up that would land below a ~6 KB working floor (ST_NO_MEM) instead of
-// letting the link starve. Wi-Fi + BLE + ESP-NOW all-at-once fits and is
-// allowed — measured surviving a 30 s three-radio soak at ~4 KB min free —
-// but expect large transfers to fail cleanly with NO_MEM while that thin.
-// Operations on an ALREADY-RUNNING driver (scan, connect, softAP) only cost
-// ~4-8 KB, so they get the much smaller WARM margin — this is what lets a
-// BLE session run Wi-Fi and ESP-NOW at the same time.
-// All margins are user-overridable (-D or #define before the library).
+// Radio bring-up costs real heap (classic ESP32, core 3.3.6: ~52 KB first start,
+// ~33 KB restart since ~18 KB stays resident). With a BLE central up, handlers
+// refuse a bring-up landing below a ~6 KB floor (ST_NO_MEM) rather than starve the
+// link — Wi-Fi + BLE + ESP-NOW together fits (~4 KB min free in a 30 s soak), but
+// large transfers fail cleanly with NO_MEM while that thin. Ops on an already-
+// running driver (scan/connect/softAP) cost only ~4-8 KB → the smaller WARM margin,
+// which is what lets a BLE session run Wi-Fi + ESP-NOW. All overridable (-D).
 #ifndef WIFI_UP_BLE_MIN_HEAP
 #define WIFI_UP_BLE_MIN_HEAP     58000
 #endif

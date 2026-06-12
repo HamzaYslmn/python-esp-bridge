@@ -21,19 +21,19 @@ static Sock socks[NET_MAX_SOCKETS];
 
 // Sockets are referenced by a 1-based handle on the wire (handle = index + 1).
 // A handle of 0 is reserved to mean "invalid / no socket".
-static int8_t alloc_sock() {
+static int8_t allocate_socket() {
   for (uint8_t i = 0; i < NET_MAX_SOCKETS; i++)
     if (socks[i].type == SK_FREE) return i;
   return -1;
 }
 
-static Sock* sock_of(uint8_t handle) {
+static Sock* socket_for_handle(uint8_t handle) {
   if (handle == 0 || handle > NET_MAX_SOCKETS) return nullptr;
   Sock* s = &socks[handle - 1];
   return s->type == SK_FREE ? nullptr : s;
 }
 
-static void free_sock(Sock* s) {
+static void free_socket(Sock* s) {
   switch (s->type) {
     case SK_TCP:    s->tcp.stop(); break;
     case SK_LISTEN: if (s->server) { s->server->end(); delete s->server; s->server = nullptr; } break;
@@ -44,7 +44,7 @@ static void free_sock(Sock* s) {
   s->window_used = 0;
 }
 
-static void closed_event(uint8_t handle, uint8_t reason) {
+static void send_closed_event(uint8_t handle, uint8_t reason) {
   uint8_t buf[2] = { handle, reason };
   proto_send_event(NET_CLOSED_EVT, buf, 2);
 }
@@ -74,13 +74,13 @@ void net_poll() {
           }
         }
       } else if (avail <= 0 && !s->tcp.connected()) {
-        closed_event(handle, 0);
-        free_sock(s);
+        send_closed_event(handle, 0);
+        free_socket(s);
       }
     } else if (s->type == SK_LISTEN) {
       NetworkClient c = s->server->accept();
       if (c) {
-        int8_t ni = alloc_sock();
+        int8_t ni = allocate_socket();
         if (ni < 0) {
           c.stop();  // no free slots
         } else {
@@ -92,7 +92,7 @@ void net_poll() {
           ev[1] = ni + 1;
           uint32_t rip = (uint32_t)c.remoteIP();
           memcpy(ev + 2, &rip, 4);
-          wr16(ev + 6, c.remotePort());
+          write_be16(ev + 6, c.remotePort());
           proto_send_event(NET_ACCEPT_EVT, ev, 8);
         }
       }
@@ -102,7 +102,7 @@ void net_poll() {
         buf[0] = handle;
         uint32_t rip = (uint32_t)s->udp.remoteIP();
         memcpy(buf + 1, &rip, 4);
-        wr16(buf + 5, s->udp.remotePort());
+        write_be16(buf + 5, s->udp.remotePort());
         int rd = s->udp.read(buf + 7, n > NET_CHUNK ? NET_CHUNK : n);
         if (rd > 0) proto_send_event(NET_UDP_EVT, buf, 7 + rd);
         s->udp.clear();  // discard any bytes beyond NET_CHUNK from this datagram.
@@ -118,14 +118,14 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   switch (op) {
     case 0x01: {  // TCP_CONNECT: port u16, host str -> handle
       NEED(4);
-      uint16_t port = rd16(p);
+      uint16_t port = read_be16(p);
       uint8_t hlen = p[2];
       if (len < (uint16_t)(3 + hlen) || hlen == 0) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       char host[128];
       if (hlen >= sizeof(host)) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       memcpy(host, p + 3, hlen);
       host[hlen] = 0;
-      int8_t i = alloc_sock();
+      int8_t i = allocate_socket();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       if (!socks[i].tcp.connect(host, port, 5000)) {  // synchronous connect; blocks this command handler up to 5 s
         proto_reply_err(seq, cmd, ST_SOCKET);
@@ -140,9 +140,9 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x02: {  // TCP_LISTEN: port u16 -> handle
       NEED(2);
-      int8_t i = alloc_sock();
+      int8_t i = allocate_socket();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
-      socks[i].server = new NetworkServer(rd16(p));
+      socks[i].server = new NetworkServer(read_be16(p));
       socks[i].server->begin();
       socks[i].type = SK_LISTEN;
       uint8_t handle = i + 1;
@@ -152,9 +152,9 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x03: {  // UDP_OPEN: local_port u16 -> handle
       NEED(2);
-      int8_t i = alloc_sock();
+      int8_t i = allocate_socket();
       if (i < 0) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
-      if (!socks[i].udp.begin(rd16(p))) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
+      if (!socks[i].udp.begin(read_be16(p))) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       socks[i].type = SK_UDP;
       uint8_t handle = i + 1;
       proto_reply(seq, cmd, &handle, 1);
@@ -163,21 +163,21 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x04: {  // SEND: handle, data.. -> sent u16 (TCP)
       NEED(1);
-      Sock* s = sock_of(p[0]);
+      Sock* s = socket_for_handle(p[0]);
       if (!s || s->type != SK_TCP) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       size_t sent = len > 1 ? s->tcp.write(p + 1, len - 1) : 0;
       uint8_t buf[2];
-      wr16(buf, (uint16_t)sent);
+      write_be16(buf, (uint16_t)sent);
       proto_reply(seq, cmd, buf, 2);
       break;
     }
 
     case 0x05: {  // SEND_TO: handle, ip[4], port u16, data.. (UDP)
       NEED(7);
-      Sock* s = sock_of(p[0]);
+      Sock* s = socket_for_handle(p[0]);
       if (!s || s->type != SK_UDP) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       IPAddress ip(p[1], p[2], p[3], p[4]);
-      if (!s->udp.beginPacket(ip, rd16(p + 5))) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
+      if (!s->udp.beginPacket(ip, read_be16(p + 5))) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       if (len > 7) s->udp.write(p + 7, len - 7);
       if (!s->udp.endPacket()) { proto_reply_err(seq, cmd, ST_SOCKET); return; }
       proto_reply_ok(seq, cmd);
@@ -186,8 +186,8 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
     case 0x06: {  // CLOSE: handle
       NEED(1);
-      Sock* s = sock_of(p[0]);
-      if (s) free_sock(s);
+      Sock* s = socket_for_handle(p[0]);
+      if (s) free_socket(s);
       proto_reply_ok(seq, cmd);  // idempotent — closing an already-closed socket is not an error
       break;
     }
@@ -195,9 +195,9 @@ void net_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x07: {  // WINDOW_ACK: handle, bytes u16 — host reports how many bytes it has consumed.
                   // Fire-and-forget: no reply is sent.
       if (len < 3) return;
-      Sock* s = sock_of(p[0]);
+      Sock* s = socket_for_handle(p[0]);
       if (!s) return;
-      uint16_t n = rd16(p + 1);
+      uint16_t n = read_be16(p + 1);
       s->window_used = n >= s->window_used ? 0 : s->window_used - n;
       break;
     }
