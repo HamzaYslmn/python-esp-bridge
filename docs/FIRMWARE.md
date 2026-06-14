@@ -94,12 +94,12 @@ toolchain. It lists the serial ports, lets you pick one, and writes the image
 over USB with esptool:
 
 ```sh
-uvx --from "python-esp-bridge[flash]" espbridge flash   # zero-install via uv
-# or, once installed:  pip install "python-esp-bridge[flash]"
-espbridge flash                # list ports and choose
-espbridge flash -p COM5        # flash a specific port
-espbridge flash --erase        # wipe the whole flash first (clears NVS / name)
-espbridge flash --firmware my.bin   # flash your own image instead
+uvx --from "python-esp-bridge[flash]" flash   # zero-install via uv
+# or install once:  uv tool install "python-esp-bridge[flash]"  /  pip install "python-esp-bridge[flash]"
+flash                # list ports and choose (also: espbridge flash)
+flash -p COM5        # flash a specific port
+flash --erase        # wipe the whole flash first (clears NVS / name)
+flash --firmware my.bin   # flash your own image instead
 ```
 
 The bundled image is a **classic-ESP32 Huge APP** build (no OTA — for cable-free

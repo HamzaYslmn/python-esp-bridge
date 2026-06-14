@@ -32,7 +32,7 @@ are implemented in Python where they are easy to read, test and extend.
    one, it writes a *Huge APP* image with esptool):
 
    ```sh
-   uvx --from "python-esp-bridge[flash]" espbridge flash   # or: espbridge flash
+   uvx --from "python-esp-bridge[flash]" flash   # zero-install via uv
    ```
 
    Prefer building it yourself? Install the **`python esp bridge`** library

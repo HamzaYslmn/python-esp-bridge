@@ -1422,7 +1422,7 @@ wheels = [
 
 [[package]]
 name = "python-esp-bridge"
-version = "0.12.0"
+version = "0.12.1"
 source = { editable = "." }
 dependencies = [
     { name = "bleak" },
@@ -1461,7 +1461,7 @@ dev = [
 requires-dist = [
     { name = "bleak", specifier = ">=3.0.2" },
     { name = "bleak", marker = "extra == 'ble'", specifier = ">=0.22" },
-    { name = "esptool", marker = "extra == 'flash'", specifier = ">=4.8" },
+    { name = "esptool", marker = "extra == 'flash'", specifier = ">=5" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.3" },
     { name = "pillow", marker = "extra == 'oled'", specifier = ">=10" },
     { name = "pyserial", specifier = ">=3.5" },

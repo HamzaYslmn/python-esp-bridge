@@ -21,6 +21,7 @@ updates need the Minimal SPIFFS scheme instead (see docs/FIRMWARE.md).
 """
 from __future__ import annotations
 
+import sys
 from importlib import resources
 from pathlib import Path
 
@@ -70,20 +71,23 @@ def _all_serial_ports() -> list[PortInfo]:
 
 
 def _choose_port(ports: list[PortInfo]) -> str:
-    """Print a numbered menu and read the operator's choice."""
+    """Print a numbered menu and read the operator's choice (Enter picks #1)."""
     print("Available serial ports:")
     for i, p in enumerate(ports, 1):
         chip = f"  [{p.usb_chip}]" if p.usb_chip else ""
         desc = f"  {p.description}" if p.description else ""
         print(f"  {i}) {p.device}{chip}{desc}")
+    prompt = f"Select a port [1-{len(ports)}, Enter = 1, q = cancel]: "
     while True:
         try:
-            raw = input(f"Select a port [1-{len(ports)}] (q to cancel): ").strip()
+            raw = input(prompt).strip()
         except EOFError:
             raise BridgeError("no port selected (no interactive console; "
                               "pass -p PORT explicitly)")
         if raw.lower() in ("q", "quit"):
             raise BridgeError("cancelled")
+        if raw == "":  # bare Enter → the first (most likely) port
+            return ports[0].device
         if raw.isdigit() and 1 <= int(raw) <= len(ports):
             return ports[int(raw) - 1].device
         for p in ports:  # also accept typing the port name directly
@@ -93,16 +97,22 @@ def _choose_port(ports: list[PortInfo]) -> str:
 
 
 def select_port(port: str | None = None) -> str:
-    """Resolve a port: honour an explicit one, else auto-pick or prompt."""
+    """Resolve a port: honour an explicit one, else show the menu (or, with no
+    interactive console, auto-pick a lone port)."""
     if port:
         return port
     ports = find_ports() or _all_serial_ports()
     if not ports:
         raise BridgeError("no serial ports found — plug the ESP32 in over USB, "
                           "or pass -p PORT")
-    if len(ports) == 1:
-        log.info(f"using the only serial port found: {ports[0].device}")
-        return ports[0].device
+    interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    if not interactive:  # piped/CI: can't prompt, so a lone port or bust
+        if len(ports) == 1:
+            log.info(f"using the only serial port found: {ports[0].device}")
+            return ports[0].device
+        names = ", ".join(p.device for p in ports)
+        raise BridgeError(f"several serial ports ({names}); pass -p PORT "
+                          "(no interactive console to choose from)")
     return _choose_port(ports)
 
 
@@ -131,8 +141,16 @@ def flash_firmware(port: str | None = None, *,
 
     port = select_port(port)
 
+    # esptool v5 renamed `write_flash` → `write-flash` (the underscore form
+    # still works but prints a deprecation warning); pick by version so we stay
+    # quiet on v5 and keep working on an older v4.
+    try:
+        major = int(esptool.__version__.split(".")[0])
+    except (AttributeError, ValueError):
+        major = 5
+    write_cmd = "write-flash" if major >= 5 else "write_flash"
     argv = ["--chip", chip, "--port", port, "--baud", str(baud),
-            "--before", "default-reset", "--after", "hard-reset", "write_flash"]
+            "--before", "default-reset", "--after", "hard-reset", write_cmd]
     if erase:
         argv.append("--erase-all")
     argv += ["--flash-size", "keep", FIRMWARE_OFFSET, str(fw)]
@@ -150,3 +168,41 @@ def flash_firmware(port: str | None = None, *,
         raise BridgeError(f"flash failed: {e}")
     log.info("done — the board will reboot into the bridge firmware "
              "(connect with `espbridge info`)")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for the standalone `flash` command, so the one-off is just
+
+        uvx --from "python-esp-bridge[flash]" flash
+
+    `espbridge flash` runs the same thing through the main CLI.
+    """
+    import argparse
+
+    from . import __version__
+    from .cli import _force_utf8_output
+
+    _force_utf8_output()
+    ap = argparse.ArgumentParser(
+        prog="flash",
+        description="Flash the bundled bridge firmware to an ESP32 over USB.")
+    ap.add_argument("--version", action="version", version=f"espbridge {__version__}")
+    ap.add_argument("-p", "--port", help="serial port to flash (default: list ports and choose)")
+    ap.add_argument("--baud", type=int, default=DEFAULT_BAUD,
+                    help=f"flash baud rate (default: {DEFAULT_BAUD})")
+    ap.add_argument("--erase", action="store_true",
+                    help="erase the whole flash before writing (clears NVS / stored name)")
+    ap.add_argument("--firmware", help="flash this .bin instead of the bundled image")
+    ap.add_argument("--chip", default=FIRMWARE_CHIP, help=f"target chip (default: {FIRMWARE_CHIP})")
+    args = ap.parse_args(argv)
+    try:
+        flash_firmware(args.port, baud=args.baud, erase=args.erase,
+                       firmware=args.firmware, chip=args.chip)
+    except BridgeError as e:
+        log.error(str(e))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
