@@ -1,8 +1,18 @@
 // python-esp-bridge — COBS framing, CRC16, FreeRTOS tasks, dispatch.
+// Architecture-independent: the ESP/nRF specifics live behind platform.h
+// (plat_*) and the per-arch link layer. proto_log_hook_install() is defined
+// per arch (src/esp/plat_esp.cpp, src/nrf/plat_nrf.cpp).
 #include "protocol.h"
 #include "modules.h"
 #include "link.h"
-#include <esp_log.h>
+#include "platform.h"
+#if defined(ARDUINO_ARCH_NRF52)
+// On arduino-esp32 the FreeRTOS API arrives transitively via Arduino.h; the
+// Bluefruit core needs the queue/task headers pulled in explicitly.
+#include <FreeRTOS.h>
+#include <task.h>
+#include <queue.h>
+#endif
 #include <atomic>  // inter-task counters/flags: atomic is the correct primitive (volatile is not)
 
 // ---- CRC-16/CCITT-FALSE (table-driven) --------------------------------------
@@ -288,30 +298,8 @@ void proto_log(uint8_t level, const char* msg) {
 void proto_log_heap(const char* stage) {
   char msg[64];
   snprintf(msg, sizeof(msg), "%s, %lu B free heap", stage,
-           (unsigned long)ESP.getFreeHeap());
+           (unsigned long)plat_free_heap());
   proto_log(1, msg);
-}
-
-// ---- IDF log capture ---------------------------------------------------------
-// Wi-Fi/BT stacks log via esp_log to UART0 — the COBS frame port — so raw bytes
-// would corrupt frames. This hook redirects IDF log output into SYS_LOG events.
-// (ROM boot and crash/panic text still hit UART0 raw; uninterceptable here.)
-static int bridge_vprintf(const char* fmt, va_list ap) {
-#if BRIDGE_NATIVE_USB
-  return vprintf(fmt, ap);  // UART0 is free on native-USB chips: keep IDF logs
-#else
-  char line[160];
-  int n = vsnprintf(line, sizeof(line), fmt, ap);
-  // esp_log appends CR/LF; strip it since SYS_LOG delivers one line at a time.
-  size_t L = n < 0 ? 0 : (n < (int)sizeof(line) ? (size_t)n : sizeof(line) - 1);
-  while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
-  if (L) proto_log(1, line);  // no-op before proto_init() (tx queue guard)
-  return n;
-#endif
-}
-
-void proto_log_hook_install() {
-  esp_log_set_vprintf(bridge_vprintf);
 }
 
 void proto_tx_flush() {

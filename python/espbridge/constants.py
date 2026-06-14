@@ -71,6 +71,7 @@ class ChipModel(enum.IntEnum):
     ESP32C3 = 4
     ESP32C6 = 5
     ESP32H2 = 6
+    NRF52840 = 7  # Nordic nRF52840 (Seeed XIAO / Adafruit Bluefruit core)
 
 
 def _cmd(mod: int, op: int) -> int:

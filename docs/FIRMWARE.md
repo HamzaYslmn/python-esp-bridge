@@ -39,6 +39,49 @@ GPIO, ADC/DAC, PWM, touch, I2C, SPI, UART, Wi-Fi sockets, BLE, ESP-NOW, RMT,
   link is currently classic-ESP32 only; other chips build USB-only
   automatically (ESP-NOW and everything else still work).
 
+## Nordic nRF52840 (Seeed XIAO / Adafruit Bluefruit)
+
+The firmware also builds for the **nRF52840** on the Adafruit/Seeed **nRF52
+(Bluefruit, FreeRTOS) core** — *not* the mbed-enabled core. The protocol, wire
+format and Python host are identical; the nRF build just exposes a smaller,
+capability-gated set of modules:
+
+| Available | Not available on nRF52840 |
+|---|---|
+| BLE link (Nordic UART Service), GPIO (+ edge-watch), ADC, PWM, I2C, SPI, UART (2nd), 1-Wire, filesystem (LittleFS), NVS, deep sleep, BLE scan | Wi-Fi, ESP-NOW, NET sockets, DAC, touch, CAN, I2S, RMT, Ethernet, camera, MCPWM, OTA, SD card, BLE GATT server/client |
+
+The host gates every call on `SYS_INFO` capabilities, so unavailable modules are
+simply never offered; `esp.info.chip` reads `NRF52840`. Flash the
+**`Bridge_nRF52`** example (same one-liner `EspBridge.begin()`).
+
+Notes specific to this build:
+- **BLE transport** uses Bluefruit's `BLEUart`, whose UUIDs are exactly the
+  bridge's link service — so the same `Bridge(ble=True)` host code connects.
+- **PWM** maps `attach(freq, res)` onto the nRF HardwarePWM peripheral (duty
+  resolution ≤ 14 bits; up to ~4 independent PWM pins).
+- **ADC** is 12-bit; `read_mv` is a nominal `raw·3600/4095` (uncalibrated,
+  default 0–3.6 V reference) — no per-pin attenuation.
+- **I2C** reports its fixed Wire buffer size from `i2c.init`; the host chunks
+  larger transfers (e.g. OLED frames) to fit.
+- **SPI** is a single host; **UART** is port 1 (`Serial1`), pins via `setPins`.
+- **Filesystem** is LittleFS on internal flash (id 0 only, no SD). The Adafruit
+  wrapper allows **one open file at a time** (a second open replies `BUSY`),
+  reports no mtime/usage (STAT mtime and DF totals are 0).
+- **NVS** and the persistent **device name** (`SYS_SET_NAME`) are LittleFS-backed
+  and survive reboot; NVS keys are stored as files under `/nvs/`.
+- **GPIO edge-watch** uses GPIOTE (up to 8 watched pins via `attachInterrupt`).
+- **Deep sleep** is nRF System OFF and requires a **wake pin** (no timer wake in
+  System OFF; the board reboots on wake). Light sleep is unsupported.
+- **BLE scan** works (observer role, coexists with the link); the BLE *GATT
+  server/client* (`MOD_BLE` adv/GATTS/GATTC) is not implemented — the link owns
+  the peripheral role and Bluefruit's GATT client uses static discovery.
+- The firmware is single-core; the per-task priority/stack table in
+  `src/espbridge/config.h` uses nRF-appropriate values (word-counted stacks).
+
+Source layout: the shared protocol core lives in `src/espbridge/`, with the
+per-architecture peripheral implementations split into `src/esp/` and
+`src/nrf/` (each file whole-guarded by `ARDUINO_ARCH_ESP32` / `ARDUINO_ARCH_NRF52`).
+
 ## API
 
 `EspBridge.begin(password = "espbridge", ble = true, exclusive = true)` —

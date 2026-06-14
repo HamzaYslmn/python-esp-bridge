@@ -1,5 +1,7 @@
 // python-esp-bridge — per-chip configuration & capability flags.
-// Requires arduino-esp32 core 3.x.
+// ESP path requires arduino-esp32 core 3.x; nRF52 path requires the Adafruit/
+// Seeed nRF52 (Bluefruit, FreeRTOS) core. Peripheral implementations live in
+// src/esp/ and src/nrf/; this header holds the shared, arch-selected config.
 #pragma once
 #include <Arduino.h>
 #include "commands.h"
@@ -11,6 +13,69 @@
 
 #define BRIDGE_NAME "esp-bridge"
 
+#if defined(ARDUINO_ARCH_NRF52)
+// ============================================================================
+// Nordic nRF52840 (Seeed XIAO / Adafruit Bluefruit core)
+// ----------------------------------------------------------------------------
+// Capability-gated subset: BLE transport + GPIO + ADC + PWM + I2C. This part
+// has no Wi-Fi/ESP-NOW radio and none of the ESP-IDF peripheral drivers, so
+// every other module compiles to an ST_UNSUPPORTED stub (src/nrf/mod_stubs.cpp)
+// and the host — which gates each feature on SYS_INFO.caps — never offers them.
+// ============================================================================
+#define BRIDGE_CHIP        CHIP_NRF52840
+#define BRIDGE_HAS_DAC     0
+#define BRIDGE_HAS_TOUCH   0
+#define BRIDGE_HAS_BT_CLASSIC 0
+#define BRIDGE_HAS_BLE     1
+#define BRIDGE_HAS_ESPNOW  0
+#define BRIDGE_HAS_RMT     0
+#define BRIDGE_HAS_ONEWIRE 1   // bit-banged GPIO timing (portable)
+#define BRIDGE_HAS_FS      1   // LittleFS on internal flash (InternalFS); no SD
+#define BRIDGE_HAS_SD      0
+#define BRIDGE_HAS_SDMMC   0
+#define BRIDGE_HAS_SLEEP   1   // System OFF deep sleep with GPIO wake
+#define BRIDGE_HAS_NVS     1   // LittleFS-backed key/value store
+#define BRIDGE_HAS_OTA     0
+#define BRIDGE_HAS_TWAI    0
+#define BRIDGE_HAS_I2S     0
+#define BRIDGE_HAS_MCPWM   0
+#define BRIDGE_ETH         0
+#define BRIDGE_CAM         0
+
+// The Bluefruit BLE stack is always present on this core (no controller/host
+// gating like the ESP Bluedroid path), so BRIDGE_BLE tracks the opt-in alone.
+#if BRIDGE_ENABLE_BLE
+#define BRIDGE_BLE 1
+#else
+#define BRIDGE_BLE 0
+#endif
+
+// XIAO nRF52840 / Bluefruit Serial is native USB CDC — the baud argument is
+// ignored by the USB driver, exactly like the ESP native-USB parts.
+#define BRIDGE_NATIVE_USB 1
+
+// Single-core MCU: pin every bridge task to the one core. The pinned-core API
+// is ESP-only, so map it to the portable FreeRTOS xTaskCreate.
+#define CORE_RADIO 0
+#define CORE_APP   0
+#define xTaskCreatePinnedToCore(fn, name, stack, arg, prio, handle, core) \
+        xTaskCreate(fn, name, stack, arg, prio, handle)
+
+// nRF FreeRTOS differs from arduino-esp32 in two ways the shared task sizing
+// must respect: task priorities run in a small range (configMAX_PRIORITIES),
+// and the stack DEPTH argument is in words (StackType_t = 4 B), not bytes. Set
+// arch-appropriate values here; the shared tail leaves these alone (#ifndef).
+#define TX_TASK_PRIO     3
+#define RX_TASK_PRIO     2
+#define SLOW_TASK_PRIO   2
+#define TX_TASK_STACK    1024   // words (~4 KB)
+#define RX_TASK_STACK    2048   // words (~8 KB) — holds the 256 B rx chunk + frame work
+#define SLOW_TASK_STACK  1024   // words (~4 KB) — slow handlers are all stubs here
+
+#else
+// ============================================================================
+// Espressif (arduino-esp32 3.x)
+// ============================================================================
 #if defined(CONFIG_IDF_TARGET_ESP32)
   #define BRIDGE_CHIP        CHIP_ESP32
   #define BRIDGE_HAS_DAC     1
@@ -177,15 +242,33 @@
   #define CORE_APP   1
 #endif
 
+#endif  // arch select (ARDUINO_ARCH_NRF52 / Espressif)
+
+// ---- task sizing & frame/buffer layout (architecture-independent) -----------
+// PRIO/STACK are #ifndef-guarded so the nRF branch (above) can set values that
+// fit its FreeRTOS (smaller priority range, stack depth counted in words). On
+// ESP these take the original byte-counted defaults.
 #define TX_TASK_CORE     CORE_RADIO
+#ifndef TX_TASK_PRIO
 #define TX_TASK_PRIO     12
+#endif
+#ifndef TX_TASK_STACK
 #define TX_TASK_STACK    4096
+#endif
 #define RX_TASK_CORE     CORE_APP
+#ifndef RX_TASK_PRIO
 #define RX_TASK_PRIO     10
+#endif
+#ifndef RX_TASK_STACK
 #define RX_TASK_STACK    8192
+#endif
 #define SLOW_TASK_CORE   CORE_RADIO
+#ifndef SLOW_TASK_PRIO
 #define SLOW_TASK_PRIO   9
+#endif
+#ifndef SLOW_TASK_STACK
 #define SLOW_TASK_STACK  8192
+#endif
 
 // Logical frame layout: 4-byte header + payload (up to MAX_PAYLOAD) + 2-byte CRC.
 #define MAX_FRAME      (4 + MAX_PAYLOAD + 2)

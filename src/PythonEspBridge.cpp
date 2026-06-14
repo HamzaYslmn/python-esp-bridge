@@ -3,54 +3,27 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
-#include <esp_system.h>
+#include "espbridge/platform.h"
 
 EspBridgeClass EspBridge;
 
-// Why the chip last reset — logged at boot so a stall that resets the board is
-// diagnosable on reconnect (brownout => power; task watchdog => a task starved;
-// panic => firmware bug) instead of a mystery.
-static const char* reset_reason_str() {
-  switch (esp_reset_reason()) {
-    case ESP_RST_POWERON:   return "power-on";
-    case ESP_RST_EXT:       return "external reset";
-    case ESP_RST_SW:        return "software reset";
-    case ESP_RST_PANIC:     return "panic/exception";
-    case ESP_RST_INT_WDT:   return "interrupt watchdog";
-    case ESP_RST_TASK_WDT:  return "task watchdog (a task starved the CPU)";
-    case ESP_RST_WDT:       return "watchdog";
-    case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
-    case ESP_RST_BROWNOUT:  return "brownout (supply voltage dropped)";
-    case ESP_RST_SDIO:      return "SDIO";
-    default:                return "unknown";
-  }
-}
-
 void EspBridgeClass::begin(const char* password, bool ble, bool exclusive) {
-  // Redirect IDF Wi-Fi/BT log output to SYS_LOG events — raw bytes on UART0 would
-  // corrupt protocol frames. Must be installed before any radio comes up.
+  // Redirect vendor radio/log output away from the frame port into SYS_LOG
+  // events (ESP only; a no-op on nRF). Must be installed before any radio.
   proto_log_hook_install();
 
-#if !BRIDGE_NATIVE_USB
-  Serial.setRxBufferSize(SERIAL_RX_BUF);   // must be called before Serial.begin(); the default 256-byte buffer is far too small for protocol frames
-  Serial.setTxBufferSize(SERIAL_TX_BUF);
-  Serial.begin(115200);
-  // RX interrupt defaults to 120 of 128 FIFO bytes — ~53 µs margin at 1.5 Mbaud,
-  // which a load spike can overrun and corrupt a frame. Fire at 64: same
-  // throughput, 8x the margin.
-  Serial.setRxFIFOFull(64);
-#else
-  Serial.setRxBufferSize(SERIAL_RX_BUF);
-  Serial.begin();                          // native USB CDC — baud rate argument is ignored by the USB driver
-#endif
+  // Bring up the host-link Serial port (UART or native USB CDC, per arch).
+  plat_serial_begin();
 
   proto_init();
   gpio_init();
   wifi_init();
   proto_start();   // spawn the bridge_tx, bridge_rx, and bridge_slow FreeRTOS tasks
 
+  // Why the chip last reset — logged at boot so a stall that resets the board is
+  // diagnosable on reconnect (brownout/watchdog/panic) instead of a mystery.
   { char msg[64];
-    snprintf(msg, sizeof(msg), "boot: last reset = %s", reset_reason_str());
+    snprintf(msg, sizeof(msg), "boot: last reset = %s", plat_reset_reason());
     proto_log(1, msg); }
 
   // Wi-Fi/ESP-NOW stay off until the host's first radio command (lazy init), so a

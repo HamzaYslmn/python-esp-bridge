@@ -10,8 +10,8 @@
 // above stays the hard compatibility gate; this one signals feature parity.
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 14
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_MINOR 15
+#define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
 //   flags u8 | seq u8 | cmd u16 BE | payload .. | crc16 BE
@@ -71,9 +71,12 @@ enum Status : uint8_t {
 #define CAP_SLEEP      (1UL << 21)  // deep/light sleep (IRAM-gated off on classic+BLE)
 
 // ---- chip models -------------------------------------------------------------
+// Values 1..6 are Espressif parts; 7+ are non-ESP ports that speak the same
+// protocol over a capability-gated subset of modules (the host degrades by caps).
 enum ChipModel : uint8_t {
   CHIP_UNKNOWN = 0, CHIP_ESP32 = 1, CHIP_ESP32S2 = 2, CHIP_ESP32S3 = 3,
   CHIP_ESP32C3 = 4, CHIP_ESP32C6 = 5, CHIP_ESP32H2 = 6,
+  CHIP_NRF52840 = 7,  // Nordic nRF52840 (Seeed XIAO / Adafruit Bluefruit core)
 };
 
 // ---- command ids: cmd = (MODULE << 8) | OP ----------------------------------
