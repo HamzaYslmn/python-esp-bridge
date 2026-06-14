@@ -19,5 +19,5 @@ with Bridge() as esp:                      # Bluetooth first, then USB serial
 
 - Firmware (flash once with Arduino IDE) and full docs:
   **<https://github.com/HamzaYslmn/python-esp-bridge>**
-- Works on Raspberry Pi OS, Linux, Windows, macOS (Python ≥ 3.10, pyserial).
+- Works on Raspberry Pi OS, Linux, Windows, macOS (Python ≥ 3.11, pyserial).
 - `espbridge` CLI: connection info; `espbridge ports`: list candidate ports.

@@ -25,7 +25,7 @@ are implemented in Python where they are easy to read, test and extend.
 
 ## Quick start
 
-*Works on Raspberry Pi OS, Linux, Windows, and macOS (requires Python ≥ 3.10).*
+*Works on Raspberry Pi OS, Linux, Windows, and macOS (requires Python ≥ 3.11).*
 
 1. **Flash the firmware once.** No Arduino IDE needed — flash the bundled
    prebuilt firmware straight from the host (lists the serial ports, you pick
