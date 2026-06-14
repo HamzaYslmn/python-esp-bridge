@@ -56,7 +56,7 @@ def __getattr__(name):
         return AsyncBridge
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__version__ = "0.11.6"
+__version__ = "0.12.0"
 
 __all__ = [
     "Bridge",

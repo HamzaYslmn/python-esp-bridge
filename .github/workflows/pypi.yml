@@ -16,6 +16,20 @@ jobs:
 
       - uses: astral-sh/setup-uv@v5
 
+      # MARK: - Build the bundled firmware image (Huge APP) shipped in the wheel
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index \
+            --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.6 \
+            --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+      - name: Build firmware image
+        run: |
+          uv run --with esptool python tools/build_firmware.py
+
       - name: Build sdist + wheel
         working-directory: python
         run: uv build -o ../dist/dist-build

@@ -65,6 +65,18 @@ def main(argv: list[str] | None = None) -> int:
                                    "(bundled + installed plugins)")
     p_name = sub.add_parser("set-name", help="store a device name on the ESP32 (NVS)")
     p_name.add_argument("new_name", help="name to assign (max 32 bytes)")
+    p_flash = sub.add_parser("flash", help="write the bundled bridge firmware to a "
+                                           "board over USB (needs the [flash] extra)")
+    # A second -p on the subparser so `espbridge flash -p COM5` reads naturally;
+    # SUPPRESS keeps it from clobbering the top-level -p when omitted.
+    p_flash.add_argument("-p", "--port", dest="port", default=argparse.SUPPRESS,
+                         help="serial port to flash (default: list ports and choose)")
+    p_flash.add_argument("--baud", type=int, default=921600,
+                         help="flash baud rate (default: 921600)")
+    p_flash.add_argument("--erase", action="store_true",
+                         help="erase the whole flash before writing (clears NVS / stored name)")
+    p_flash.add_argument("--firmware", help="flash this .bin instead of the bundled image")
+    p_flash.add_argument("--chip", default="esp32", help="target chip (default: esp32)")
     args = ap.parse_args(argv)
 
     kwargs = dict(upgrade_baud=not args.no_baud_upgrade)
@@ -76,6 +88,13 @@ def main(argv: list[str] | None = None) -> int:
         kwargs["password"] = args.password
 
     try:
+        if args.cmd == "flash":
+            from .flash import flash_firmware
+
+            flash_firmware(args.port, baud=args.baud, erase=args.erase,
+                           firmware=args.firmware, chip=args.chip)
+            return 0
+
         if args.cmd == "scan" and args.scan_ble:
             from .transports.ble import find_ble_devices
 

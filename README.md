@@ -27,7 +27,15 @@ are implemented in Python where they are easy to read, test and extend.
 
 *Works on Raspberry Pi OS, Linux, Windows, and macOS (requires Python ≥ 3.10).*
 
-1. **Flash the firmware once** — install the **`python esp bridge`** library
+1. **Flash the firmware once.** No Arduino IDE needed — flash the bundled
+   prebuilt firmware straight from the host (lists the serial ports, you pick
+   one, it writes a *Huge APP* image with esptool):
+
+   ```sh
+   uvx --from "python-esp-bridge[flash]" espbridge flash   # or: espbridge flash
+   ```
+
+   Prefer building it yourself? Install the **`python esp bridge`** library
    (Arduino IDE Library Manager), open *File → Examples → python esp bridge →
    Bridge*, pick partition scheme *Huge APP*, hit Upload. The whole sketch is
    `EspBridge.begin();`. Details: [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
@@ -37,6 +45,7 @@ are implemented in Python where they are easy to read, test and extend.
    pip install python-esp-bridge            # USB + Bluetooth, both included
    pip install "python-esp-bridge[oled]"    # + Pillow, for OLED displays
    pip install "python-esp-bridge[mcp]"     # + the MCP server (espbridge-mcp)
+   pip install "python-esp-bridge[flash]"   # + esptool, for `espbridge flash`
    ```
 
    ...or with [uv](https://docs.astral.sh/uv/):

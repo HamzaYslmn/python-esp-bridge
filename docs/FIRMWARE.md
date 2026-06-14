@@ -86,6 +86,28 @@ partition above; on Huge APP there's no OTA slot, so `esp.ota` replies
 > for all your boards, compile once, then `arduino-cli upload -p <port>` per
 > board reuses the cached binaries.
 
+## Flash without the Arduino IDE (`espbridge flash`)
+
+The host package ships a **prebuilt Huge APP image** of the example sketch, so
+the first flash can happen straight from the host — no Arduino IDE, no
+toolchain. It lists the serial ports, lets you pick one, and writes the image
+over USB with esptool:
+
+```sh
+uvx --from "python-esp-bridge[flash]" espbridge flash   # zero-install via uv
+# or, once installed:  pip install "python-esp-bridge[flash]"
+espbridge flash                # list ports and choose
+espbridge flash -p COM5        # flash a specific port
+espbridge flash --erase        # wipe the whole flash first (clears NVS / name)
+espbridge flash --firmware my.bin   # flash your own image instead
+```
+
+The bundled image is a **classic-ESP32 Huge APP** build (no OTA — for cable-free
+updates afterwards, build/flash the Minimal SPIFFS scheme yourself and use
+`espbridge.ota`). It is regenerated from `examples/Bridge` by
+`tools/build_firmware.py` (run in CI before each release), so it always matches
+the published version.
+
 ## Optional peripherals (compile-time)
 
 Ethernet and camera cost real flash, so they're **off by default**; board pin
