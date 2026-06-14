@@ -1,7 +1,6 @@
 """NVS key/value store."""
 import pytest
 
-from espbridge import constants as C
 
 
 def test_set_get_bytes(bridge, fw):

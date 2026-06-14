@@ -8,7 +8,6 @@ import time
 import threading
 
 import espbridge
-from espbridge import constants as C
 from espbridge.errors import RemoteError
 
 ITERATIONS = 5

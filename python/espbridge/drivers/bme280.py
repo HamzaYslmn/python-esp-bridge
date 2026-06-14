@@ -34,7 +34,6 @@ import time
 _REG_ID = 0xD0          # chip id; reads 0x60 for BME280, 0x58 for BMP280
 _REG_RESET = 0xE0       # write 0xB6 to soft-reset
 _REG_CTRL_HUM = 0xF2    # osrs_h[2:0]; only takes effect after a ctrl_meas write
-_REG_STATUS = 0xF3      # bit 3 = measuring, bit 0 = im_update (NVM copy in flight)
 _REG_CTRL_MEAS = 0xF4   # osrs_t[7:5] | osrs_p[4:2] | mode[1:0]
 _REG_CONFIG = 0xF5      # t_sb[7:5] | filter[4:2] | spi3w_en[0]
 _REG_DATA = 0xF7        # press(0xF7..F9) temp(0xFA..FC) hum(0xFD..FE), 8 bytes

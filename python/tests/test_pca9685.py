@@ -47,7 +47,6 @@ def test_init_does_sleep_prescale_dance_for_50hz():
 
     # The set_freq sequence: sleep -> prescale -> wake -> restart.
     writes = [c for c in calls if c[0] == "write_reg"]
-    regs_written = [(c[2], c[3]) for c in writes]
     # SLEEP bit (0x10) set before PRESCALE write.
     sleep_call = next(c for c in writes if c[2] == MODE1 and c[3] & 0x10)
     prescale_call = next(c for c in writes if c[2] == PRESCALE)

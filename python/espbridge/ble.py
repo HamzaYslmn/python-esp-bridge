@@ -9,7 +9,6 @@ import uuid as _uuid
 from dataclasses import dataclass
 
 from . import constants as C
-from .errors import BridgeTimeoutError
 from .protocol import lp, mac_to_str
 
 

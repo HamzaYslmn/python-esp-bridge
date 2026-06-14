@@ -32,7 +32,6 @@ from ..i2c import bind_i2c
 import struct
 
 # Register addresses (see module docstring for the datasheet reference).
-_SMPLRT_DIV = 0x19
 _CONFIG = 0x1A
 _GYRO_CONFIG = 0x1B
 _ACCEL_CONFIG = 0x1C

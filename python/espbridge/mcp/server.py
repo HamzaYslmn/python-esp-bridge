@@ -21,7 +21,7 @@ from .. import __version__
 from ..errors import BridgeError
 from ..manager import BridgeManager as _CoreBridgeManager
 from ..transports import find_ports
-from .common import FEEDBACK, ToolError, guarded, info_dict
+from .common import FEEDBACK, guarded, info_dict
 
 try:
     from fastmcp import FastMCP

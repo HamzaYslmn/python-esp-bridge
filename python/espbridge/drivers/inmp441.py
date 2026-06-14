@@ -28,7 +28,6 @@ Refs:
 """
 from __future__ import annotations
 
-import struct
 
 
 class INMP441:

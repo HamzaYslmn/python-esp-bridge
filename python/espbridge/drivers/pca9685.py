@@ -40,9 +40,7 @@ import time
 
 # --- Registers (datasheet Table 4) -----------------------------------------
 _MODE1 = 0x00
-_MODE2 = 0x01
 _LED0_ON_L = 0x06        # channel n bytes live at 0x06 + 4*n
-_ALL_LED_ON_L = 0xFA
 _PRESCALE = 0xFE
 
 # --- MODE1 bits (datasheet Table 5) ----------------------------------------

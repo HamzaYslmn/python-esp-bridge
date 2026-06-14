@@ -77,7 +77,6 @@ _IRQ_TIMEOUT = 0x0200
 _IRQ_ALL = 0xFFFF
 
 # SetTx/SetRx timeout is in steps of 15.625 us; 0 = single mode / no timeout.
-_TIMEOUT_STEP = 15.625e-6
 _BUSY_TIMEOUT = 0.1          # s, max wait for BUSY to fall (commands finish in <100 us)
 
 

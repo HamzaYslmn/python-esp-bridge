@@ -96,7 +96,7 @@ auto-reconnects on the first tool call if the link drops.
 
 ## Tools
 
-105 tools, grouped by peripheral. The agent reads the per-tool descriptions; the
+100+ tools, grouped by peripheral. The agent reads the per-tool descriptions; the
 groups are:
 
 | prefix | what |
