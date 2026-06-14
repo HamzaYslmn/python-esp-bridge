@@ -20,11 +20,13 @@ unbounded, the serial default):
 """
 from .serial import PortInfo, SerialTransport, autodetect_port, find_ports
 from .mock import MockTransport
+from .socket import SocketTransport
 
 __all__ = [
     "PortInfo",
     "SerialTransport",
     "MockTransport",
+    "SocketTransport",
     "autodetect_port",
     "find_ports",
 ]

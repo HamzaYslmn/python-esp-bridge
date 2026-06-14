@@ -214,9 +214,22 @@ async with AsyncBridge(ble=False) as esp:        # or AsyncBridge.wrap(espbridge
     t, h = await asyncio.gather(esp.adc.read(34), esp.adc.read(35))
 ```
 
-Multiple processes? One process owns the link (e.g. the
-[MCP](#drive-it-from-an-ai-agent-mcp) or an HTTP server) and the others talk to
-it. See [`shared_connection.py`](python/examples/basics/shared_connection.py).
+Multiple **processes**? A board's link can't be opened twice, so run a **hub**:
+one owner process holds the real link and relays the same frame stream to every
+other process over a local socket — no second process ever touches the board.
+
+```bash
+espbridge hub --ble c0:49:ef:d0:3f:e0    # owner: holds BLE, serves 127.0.0.1:8787
+```
+```python
+esp = espbridge.connect(share="127.0.0.1:8787")   # any other process attaches
+esp.gpio.write(2, 1)                                # drives the shared board
+```
+
+The owner runs with a keepalive heartbeat, so a board reset/drop reconnects
+transparently under all the clients. Embed it instead of the CLI with
+`espbridge.hub.serve(ble=...).start()`. See
+[`shared_connection.py`](python/examples/basics/shared_connection.py).
 
 ## Use the libraries you already know
 

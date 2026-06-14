@@ -22,6 +22,7 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
     # ...or write/register your own — esp.<name>(...) — see espbridge.drivers
     #    and docs/DRIVERS.md ("bring your own driver").
 """
+from . import hub
 from .bridge import Bridge, BridgeSet, Info, connect_all
 from .constants import Cap, ChipModel, Status
 from .drivers import driver_names, register_driver
@@ -56,7 +57,7 @@ def __getattr__(name):
         return AsyncBridge
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__version__ = "0.12.2"
+__version__ = "0.13.0"
 
 __all__ = [
     "Bridge",
@@ -65,6 +66,7 @@ __all__ = [
     "BridgeManager",
     "connect",
     "shared_manager",
+    "hub",
     "disconnect_all",
     "connect_all",
     "register_driver",

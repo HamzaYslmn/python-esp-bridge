@@ -77,6 +77,12 @@ def main(argv: list[str] | None = None) -> int:
                          help="erase the whole flash before writing (clears NVS / stored name)")
     p_flash.add_argument("--firmware", help="flash this .bin instead of the bundled image")
     p_flash.add_argument("--chip", default="esp32", help="target chip (default: esp32)")
+    p_hub = sub.add_parser("hub", help="own the board link and share it with other "
+                                       "processes over a local socket")
+    p_hub.add_argument("--bind", default="127.0.0.1:8787", metavar="HOST:PORT",
+                       help="address to serve on (default: 127.0.0.1:8787)")
+    p_hub.add_argument("--keepalive", type=float, default=20.0, metavar="SECONDS",
+                       help="board heartbeat interval; 0 disables (default: 20)")
     args = ap.parse_args(argv)
 
     kwargs = dict(upgrade_baud=not args.no_baud_upgrade)
@@ -149,6 +155,20 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{p.device:<12s} error: {e}")
                     rc = 1
             return rc
+
+        if args.cmd == "hub":
+            from . import hub as hub_mod
+
+            h = hub_mod.serve(args.bind, keepalive=args.keepalive or None,
+                              port=args.port, name=args.name, **kwargs)
+            host, port = h.address
+            print(f"espbridge hub on {host}:{port} — attach with "
+                  f"espbridge.connect(share='{host}:{port}'). Ctrl-C to stop.")
+            try:
+                h.serve_forever()
+            except KeyboardInterrupt:
+                h.stop()
+            return 0
 
         if args.cmd == "set-name":
             with Bridge(args.port, name=args.name, **kwargs) as esp:

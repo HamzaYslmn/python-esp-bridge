@@ -165,6 +165,7 @@ class Bridge:
         name: str | None = None,
         mac: str | None = None,
         ble: bool | str | None = True,
+        share: str | None = None,
         password: str | None = None,
         baud: int = 115200,
         upgrade_baud: bool = True,
@@ -193,10 +194,19 @@ class Bridge:
         #   ble=True (default) : prefer Bluetooth, then fall back to USB serial
         #   ble=False          : USB serial only — Bluetooth disabled
         #   ble="name"/"mac"   : that Bluetooth device only (no USB fallback)
-        # An explicit transport= or port= overrides `ble` entirely.
+        # An explicit transport=, port= or share= overrides `ble` entirely.
         if transport is not None:
             candidates = [(lambda t=transport: t, "transport",
                            getattr(transport, "usb_chip", None))]
+        elif share is not None:
+            # Attach to a hub (espbridge.hub) over a socket rather than the board
+            # directly — a fresh SocketTransport per attempt, so a manager
+            # reconnect reopens the socket cleanly.
+            from .transports.socket import SocketTransport, parse_addr
+
+            host, sport = parse_addr(share)
+            candidates = [(lambda h=host, sp=sport: SocketTransport(h, sp),
+                           f"hub {host}:{sport}", None)]
         elif port is not None:
             chip = next((p.usb_chip for p in find_ports() if p.device == port), None)
             candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
