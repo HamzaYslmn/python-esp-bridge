@@ -74,13 +74,13 @@ static volatile uint8_t tune_state = 0;  // 0 idle; 1..3 ladder step asked; 4 DL
 static const uint16_t tune_max_int[] = {0x06, 0x09, 0x0C};  // 7.5 / 11.25 / 15 ms
 
 static void request_conn_params(uint16_t min_int, uint16_t max_int,
-                                uint16_t latency = 0) {
+                                uint16_t latency = 0, uint16_t timeout = 100) {  // timeout default 1 s
   esp_ble_conn_update_params_t p = {};
   memcpy(p.bda, peer_bda, sizeof(p.bda));
   p.min_int = min_int;
   p.max_int = max_int;
   p.latency = latency;
-  p.timeout = 400;  // 4 s supervision timeout
+  p.timeout = timeout;  // supervision timeout (10 ms units): drop-detection delay before re-advertising
   esp_err_t err = esp_ble_gap_update_conn_params(&p);
   if (err != ESP_OK) {
     char msg[64];
@@ -259,7 +259,7 @@ bool link_ble_power(bool battery) {
     // 50-100 ms interval + slave latency 4 (latency only skips events when
     // the board has nothing to send, so a busy link stays responsive).
     tune_state = 4;  // park the fast ladder so GAP events don't re-tighten
-    request_conn_params(0x28, 0x50, 4);
+    request_conn_params(0x28, 0x50, 4, 400);  // 4 s timeout: spec floor here is (1+4)*100*2 = 1 s
   } else {
     tune_state = 1;  // re-run the fast ladder from the 7.5 ms spec minimum
     request_conn_params(0x06, tune_max_int[0]);
