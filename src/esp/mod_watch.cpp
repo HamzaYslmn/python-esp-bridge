@@ -7,6 +7,8 @@
 #include "espbridge/modules.h"
 #include "espbridge/radio.h"
 #include <esp32-hal-adc.h>
+#include <esp32-hal-gpio.h>
+#include <esp32-hal-ledc.h>
 #include <esp_timer.h>
 
 #if BRIDGE_HAS_TOUCH
@@ -21,6 +23,14 @@ enum { SRC_ADC_RAW = 0, SRC_ADC_MV = 1, SRC_GPIO = 2, SRC_TOUCH = 3, SRC_HEAP = 
 enum { CMP_ABOVE = 0, CMP_BELOW = 1, CMP_INSIDE = 2, CMP_OUTSIDE = 3, CMP_CHANGED = 4 };
 // flags
 enum { F_ENTER = 0x01, F_EXIT = 0x02, F_INITIAL = 0x04 };
+// on-device actions (WATCH_ADD2): executed here on state change, no host round trip
+enum { ACT_NONE = 0, ACT_GPIO = 1, ACT_PWM = 2 };
+
+struct WatchAction {
+  uint8_t type = ACT_NONE;
+  uint8_t pin;
+  int32_t value;
+};
 
 struct Watch {
   bool     active = false;   // slot in use
@@ -36,6 +46,7 @@ struct Watch {
   int32_t  last_val;         // last sample (reported by WATCH_LIST)
   int32_t  last_emit;        // last value emitted (CMP_CHANGED reference)
   bool     primed;           // has taken its first sample
+  WatchAction act[2];        // [1] runs on enter/changed, [0] on exit
 };
 
 static Watch watches[WATCH_MAX];
@@ -88,6 +99,17 @@ static uint8_t threshold_active(const Watch& w, int32_t v) {
   }
 }
 
+// Run the rule's on-device action for the new state. GPIO pins were set to
+// OUTPUT at add time; PWM pins must have been attached by the host (PWM_ATTACH)
+// beforehand — ledcWrite on an unattached pin is a no-op, not a crash.
+static void run_watch_action(const Watch& w, uint8_t state) {
+  const WatchAction& a = w.act[state ? 1 : 0];
+  switch (a.type) {
+    case ACT_GPIO: digitalWrite(a.pin, a.value ? HIGH : LOW); break;
+    case ACT_PWM:  ledcWrite(a.pin, (uint32_t)a.value); break;
+  }
+}
+
 static void emit_watch_event(const Watch& w, uint8_t state, int32_t value) {
   uint8_t buf[10];
   buf[0] = w.id;
@@ -115,7 +137,7 @@ void watch_poll() {
       } else {
         int32_t d = v - w.last_emit;
         if (d < 0) d = -d;
-        if (d >= w.a) { w.last_emit = v; emit_watch_event(w, 1, v); }
+        if (d >= w.a) { w.last_emit = v; run_watch_action(w, 1); emit_watch_event(w, 1, v); }
       }
       continue;
     }
@@ -124,11 +146,15 @@ void watch_poll() {
     if (!w.primed) {
       w.primed = true;
       w.state = ns;
+      // The action always tracks the first sample (an output must reflect
+      // reality from the start); the F_INITIAL flag only gates the host event.
+      run_watch_action(w, ns);
       if (w.flags & F_INITIAL) emit_watch_event(w, ns, v);  // report current state at arm time
       continue;
     }
     if (ns != w.state) {
       w.state = ns;
+      run_watch_action(w, ns);  // action first: the reflex beats the report
       if ((ns && (w.flags & F_ENTER)) || (!ns && (w.flags & F_EXIT))) emit_watch_event(w, ns, v);
     }
   }
@@ -137,13 +163,25 @@ void watch_poll() {
 void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_WATCH, op);
   switch (op) {
-    case 0x01: {  // ADD: id|source|arg|aux|cmp|flags|period u16|a i32|b i32
-      NEED(16);
+    case 0x01:    // ADD:  id|source|arg|aux|cmp|flags|period u16|a i32|b i32
+    case 0x05: {  // ADD2: ADD + enter/exit actions, each type u8|pin u8|value i32
+      bool with_actions = (op == 0x05);
+      NEED(with_actions ? 28 : 16);
       uint8_t id = p[0], source = p[1], arg = p[2], aux = p[3], cmp = p[4];
       if (source > SRC_HEAP || cmp > CMP_CHANGED) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
 #if !BRIDGE_HAS_TOUCH
       if (source == SRC_TOUCH) { proto_reply_err(seq, cmd, ST_UNSUPPORTED); return; }
 #endif
+      WatchAction acts[2] = {};  // [1] = enter (first on the wire), [0] = exit
+      if (with_actions) {
+        for (int i = 0; i < 2; i++) {
+          const uint8_t* q = p + 16 + i * 6;
+          if (q[0] > ACT_PWM) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
+          WatchAction& a = acts[i == 0 ? 1 : 0];
+          a.type = q[0]; a.pin = q[1]; a.value = (int32_t)read_be32(q + 2);
+          if (a.type == ACT_GPIO) pinMode(a.pin, OUTPUT);
+        }
+      }
       Watch* w = find_watch(id);
       if (!w) for (auto& s : watches) if (!s.active) { w = &s; break; }
       if (!w) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }  // table full
@@ -157,6 +195,7 @@ void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       w->period_ms = read_be16(p + 6); if (w->period_ms == 0) w->period_ms = 100;
       w->a = (int32_t)read_be32(p + 8);
       w->b = (int32_t)read_be32(p + 12);
+      w->act[0] = acts[0]; w->act[1] = acts[1];
       w->last_ms = 0; w->state = 0; w->primed = false; w->last_val = 0; w->last_emit = 0;
       proto_reply_ok(seq, cmd);
       break;

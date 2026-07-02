@@ -321,6 +321,7 @@ static QueueHandle_t slowq;
 static void slow_dispatch(uint16_t cmd, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
+    case MOD_SYS:    sys_handle(op, seq, p, len); break;  // only SYS_RADIO_OFF routes here
     case MOD_WIFI:   wifi_handle(op, seq, p, len); break;
     case MOD_NET:    net_handle(op, seq, p, len); break;
     case MOD_ESPNOW: espnow_handle(op, seq, p, len); break;
@@ -389,7 +390,11 @@ static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
   uint8_t mod = cmd >> 8, op = cmd & 0xFF;
   switch (mod) {
     // Fast handlers: run inline on rx_task.
-    case MOD_SYS:   sys_handle(op, seq, p, len); break;
+    case MOD_SYS:
+      // RADIO_OFF is the one SYS op that must run on slow_task: it tears down
+      // the radio stacks next to every other task that calls into them.
+      if (op == (SYS_RADIO_OFF & 0xFF)) { slow_enqueue(cmd, seq, origin, p, len); break; }
+      sys_handle(op, seq, p, len); break;
     case MOD_GPIO:  gpio_handle(op, seq, p, len); break;
     case MOD_ADC:
     case MOD_DAC:

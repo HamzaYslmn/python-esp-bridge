@@ -76,6 +76,27 @@ static uint32_t tx_timeout_ms(const RmtChan* c, uint32_t ticks) {
   return ticks / (c->tick_hz / 1000) + 50;  // converts tick count to ms, plus 50 ms slack; tick_hz >= 1000 guaranteed by INIT validation
 }
 
+// Transmit without parking slow_task for the whole train. A blocking rmtWrite
+// on a long train (a slow stepper chunk is seconds) starves every other slow
+// handler — most damagingly watch_poll, whose on-device actions are supposed
+// to be the realtime path. The RMT hardware streams from its own ring buffer,
+// so the CPU only needs to start the write and check back: pump watch rules
+// while it drains. Short trains (< 3 ms, e.g. a NeoPixel frame) keep the
+// blocking write — a pump tick would cost more latency than it saves.
+static bool rmt_write_pumped(RmtChan* c, rmt_data_t* buf, size_t words,
+                             uint32_t est_ms) {
+  uint32_t timeout = est_ms + 50;
+  if (est_ms < 3) return rmtWrite(c->pin, buf, words, timeout);
+  if (!rmtWriteAsync(c->pin, buf, words)) return false;
+  uint32_t t0 = millis();
+  while (!rmtTransmitCompleted(c->pin)) {
+    if ((uint32_t)(millis() - t0) > timeout) return false;
+    watch_poll();
+    vTaskDelay(1);
+  }
+  return true;
+}
+
 static void do_tx(RmtChan* c, uint8_t seq, uint16_t cmd,
                       const uint8_t* p, uint16_t len, bool loop) {
   uint16_t nsyms = len / 2;
@@ -96,7 +117,7 @@ static void do_tx(RmtChan* c, uint8_t seq, uint16_t cmd,
     c->loop_buf = buf;
     proto_reply_ok(seq, cmd);
   } else {
-    bool ok = rmtWrite(c->pin, buf, w, tx_timeout_ms(c, ticks));
+    bool ok = rmt_write_pumped(c, buf, w, ticks / (c->tick_hz / 1000));
     free(buf);
     ok ? proto_reply_ok(seq, cmd) : proto_reply_err(seq, cmd, ST_IO);
   }
@@ -121,7 +142,7 @@ static void do_tx_bytes(RmtChan* c, uint8_t seq, uint16_t cmd,
     size_t w = 0;
     for (uint16_t i = 0; i < len - 8; i++)
       for (int8_t b = 7; b >= 0; b--) buf[w++] = (data[i] >> b) & 1 ? w1 : w0;
-    bool ok = rmtWrite(c->pin, buf, w, tx_timeout_ms(c, nbits * bit_ticks));
+    bool ok = rmt_write_pumped(c, buf, w, nbits * bit_ticks / (c->tick_hz / 1000));
     free(buf);
     ok ? proto_reply_ok(seq, cmd) : proto_reply_err(seq, cmd, ST_IO);
     return;

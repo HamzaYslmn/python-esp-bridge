@@ -43,6 +43,7 @@ class FakeFirmware:
 
         self.watches: dict[int, dict] = {}  # id -> watch rule (WATCH_ADD)
         self.watch_supported = True         # set False to simulate pre-0.5.0 firmware
+        self.watch_add2_supported = True    # set False to simulate pre-0.16.0 firmware
 
         self.wifi_connected = False
         self.wifi_ssid: str | None = None
@@ -95,6 +96,8 @@ class FakeFirmware:
         self.cpu_mhz = 240
         self.ble_central = True  # set False to model a USB session (LINK_POWER -> NOT_INIT)
         self.link_power_mode: int | None = None
+        self.radio_off = False              # SYS_RADIO_OFF was accepted
+        self.radio_off_supported = True     # set False to simulate pre-0.16.0 firmware
 
         self.ota_size: int | None = None
         self.ota_data = bytearray()
@@ -323,6 +326,8 @@ class FakeFirmware:
         elif cmd == C.WIFI_DISCONNECT:
             self.wifi_connected = False
             self._reply(seq, cmd)
+        elif cmd == C.WIFI_AP_STOP:
+            self._reply(seq, cmd)
 
         # ---- NET ----
         elif cmd == C.NET_TCP_CONNECT:
@@ -498,6 +503,14 @@ class FakeFirmware:
                 self._reply_err(seq, cmd, C.Status.NOT_INIT)
             else:
                 self.link_power_mode = p[0]
+                self._reply(seq, cmd)
+        elif cmd == C.SYS_RADIO_OFF:
+            if not self.radio_off_supported:
+                self._reply_err(seq, cmd, C.Status.UNKNOWN_CMD)
+            elif self.ble_central or self.wifi_connected:
+                self._reply_err(seq, cmd, C.Status.BUSY)
+            else:
+                self.radio_off = True
                 self._reply(seq, cmd)
 
         # ---- NVS ----
@@ -690,13 +703,17 @@ class FakeFirmware:
             self._reply(seq, cmd)
 
         # ---- WATCH (polled event engine) ----
-        elif cmd == C.WATCH_ADD:
-            if not self.watch_supported:
+        elif cmd in (C.WATCH_ADD, C.WATCH_ADD2):
+            if not self.watch_supported or (cmd == C.WATCH_ADD2 and not self.watch_add2_supported):
                 self._reply_err(seq, cmd, C.Status.UNKNOWN_CMD)
                 return
-            wid, src, arg, aux, cmpv, flags, period, a, b = struct.unpack(">BBBBBBHii", p)
-            self.watches[wid] = dict(source=src, arg=arg, aux=aux, cmp=cmpv,
-                                     flags=flags, period_ms=period, a=a, b=b)
+            wid, src, arg, aux, cmpv, flags, period, a, b = struct.unpack_from(">BBBBBBHii", p)
+            rule = dict(source=src, arg=arg, aux=aux, cmp=cmpv,
+                        flags=flags, period_ms=period, a=a, b=b)
+            if cmd == C.WATCH_ADD2:
+                rule["enter_action"] = struct.unpack_from(">BBi", p, 16)
+                rule["exit_action"] = struct.unpack_from(">BBi", p, 22)
+            self.watches[wid] = rule
             self._reply(seq, cmd)
         elif cmd == C.WATCH_REMOVE:
             self.watches.pop(p[0], None)

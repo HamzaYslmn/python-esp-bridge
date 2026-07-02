@@ -17,6 +17,10 @@ with Bridge() as esp:                      # Bluetooth first, then USB serial
     status, body = esp.net.http_get("http://example.com/")
 ```
 
+- On-device rules react without the host in the loop
+  (`esp.watch.add("adc", pin=34, above=3200, do=("pwm", 13, 0))`), and
+  `esp.radio_off()` silences Wi-Fi + Bluetooth entirely for jitter-sensitive
+  realtime work (frees ~110 KB heap, unlocks the ADC2 pins).
 - Firmware (flash once with Arduino IDE) and full docs:
   **<https://github.com/HamzaYslmn/python-esp-bridge>**
 - Works on Raspberry Pi OS, Linux, Windows, macOS (Python ≥ 3.11, pyserial).

@@ -113,3 +113,41 @@ def test_unsupported_firmware_raises(fw, bridge):
     fw.watch_supported = False
     with pytest.raises(UnsupportedError, match="0.5.0"):
         bridge.watch.add("adc", pin=4, above=100)
+
+
+# ---- on-device actions (do= / undo=, WATCH_ADD2) ----
+
+def test_actions_use_add2_and_encode(fw, bridge):
+    wid = bridge.watch.add("gpio", pin=15, equals=1,
+                           do=("gpio", 26, 1), undo=("gpio", 26, 0))
+    r = fw.watches[wid]
+    assert r["enter_action"] == (1, 26, 1)          # gpio write 26 -> 1
+    assert r["exit_action"] == (1, 26, 0)
+
+
+def test_do_only_leaves_exit_action_empty(fw, bridge):
+    wid = bridge.watch.add("adc", pin=34, above=3200, do=("pwm", 13, 0))
+    r = fw.watches[wid]
+    assert r["enter_action"] == (2, 13, 0)          # pwm duty 13 -> 0
+    assert r["exit_action"] == (0, 0, 0)            # none
+
+
+def test_plain_add_carries_no_actions(fw, bridge):
+    wid = bridge.watch.add("adc", pin=4, above=100)
+    assert "enter_action" not in fw.watches[wid]    # WATCH_ADD, 16-byte payload
+
+
+def test_bad_action_kind_raises_before_arming(fw, bridge):
+    with pytest.raises(ValueError, match="gpio"):
+        bridge.watch.add("gpio", pin=2, equals=1, do=("servo", 5, 90))
+    assert fw.watches == {}
+
+
+def test_actions_on_old_firmware_raise_and_roll_back(fw, bridge):
+    fw.watch_add2_supported = False
+    with pytest.raises(UnsupportedError, match="0.16.0"):
+        bridge.watch.add("gpio", pin=2, equals=1, do=("gpio", 26, 1),
+                         callback=lambda e: None)
+    # the id and callback were rolled back; a plain rule can reuse the slot
+    wid = bridge.watch.add("adc", pin=4, above=100)
+    assert wid == 1 and wid not in bridge.watch._cbs

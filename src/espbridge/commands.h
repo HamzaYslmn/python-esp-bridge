@@ -10,7 +10,7 @@
 // above stays the hard compatibility gate; this one signals feature parity.
 // tests/test_contract_sync.py enforces the lockstep.
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 15
+#define FW_VERSION_MINOR 16
 #define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
@@ -123,6 +123,13 @@ enum ChipModel : uint8_t {
 #define SYS_WAKE_CAUSE  CMD(MOD_SYS, 0x09)  // -> cause u8 (esp_sleep_wakeup_cause_t: 0 power-on/reset, 2 ext0, 3 ext1, 4 timer, 7 gpio)
 #define SYS_CPU_FREQ    CMD(MOD_SYS, 0x0A)  // mhz u8 (80|160|240) -> mhz u8 (80 is the floor with any radio on; APB stays 80 MHz)
 #define SYS_LINK_POWER  CMD(MOD_SYS, 0x0B)  // mode u8 (0=performance, 1=battery) — BLE conn interval/latency profile
+// RADIO_OFF: full radio silence — requires Wi-Fi/ESP-NOW already released (the
+// host tears its users down first; ST_BUSY otherwise), then kills the whole BT
+// stack (advertising + link + controller) and releases its memory. Sheds all
+// radio interrupt load and frees ~110 KB heap; also leaves ADC2 permanently
+// readable (no Wi-Fi conflict). Bluetooth stays off until reboot. ST_BUSY while
+// a BLE central is connected or the BLE GATT module has been used this boot.
+#define SYS_RADIO_OFF   CMD(MOD_SYS, 0x0C)
 #define SYS_READY       CMD(MOD_SYS, 0x80)  // event at boot; payload = same as SYS_INFO
 #define SYS_LOG         CMD(MOD_SYS, 0x81)  // event: level u8|msg
 
@@ -387,4 +394,11 @@ enum ChipModel : uint8_t {
 #define WATCH_REMOVE    CMD(MOD_WATCH, 0x02) // id u8
 #define WATCH_CLEAR     CMD(MOD_WATCH, 0x03) // (remove every rule)
 #define WATCH_LIST      CMD(MOD_WATCH, 0x04) // -> n u8|{id u8|state u8|value i32}*n
+// ADD2 = ADD + two on-device actions executed by the firmware itself on state
+// change (enter action, then exit action on the wire), so a rule can react —
+// drive a relay, kill a PWM — with no host round trip. Each action:
+//   type u8 (0 none | 1 gpio write | 2 pwm duty) | pin u8 | value i32
+// The action always follows the FIRST sample too (the output must reflect
+// reality from arm time); flags bit2 still only gates the initial host event.
+#define WATCH_ADD2      CMD(MOD_WATCH, 0x05) // ADD payload|enter: type u8|pin u8|value i32|exit: type u8|pin u8|value i32
 #define WATCH_EVT       CMD(MOD_WATCH, 0x80) // id u8|state u8 (1 active/changed,0 inactive)|value i32|millis u32

@@ -288,6 +288,27 @@ uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen) {
   return (uint16_t)xStreamBufferReceive(rx_buf, buf, maxlen, 0);
 }
 
+// SYS_RADIO_OFF: tear the whole BT stack down — advertising, Bluedroid, the
+// controller — and release its memory to the heap. Removes the stack's core-0
+// interrupt/scheduler load for jitter-sensitive work over USB and frees
+// ~60 KB. One-way: released controller memory needs a reboot to reclaim, so
+// Bluetooth stays off until reset. Runs on slow_task (next to every other
+// Bluedroid caller); refused while a central holds the link.
+static bool bt_dead = false;
+
+bool link_ble_shutdown() {
+  if (connected) return false;  // a BLE central would saw off its own branch
+  enabled = false;
+  bt_dead = true;
+  tx_chr = nullptr;             // tx_task checks link_ble_up() before touching it
+  BLEDevice::deinit(true);      // no-op if init was skipped (boot heap guard)...
+  if (btStarted()) btStop();    // ...but the bare controller may still be up
+  proto_log_heap("ble: bt stack off");
+  return true;
+}
+
+bool link_bt_dead() { return bt_dead; }
+
 #else  // !BRIDGE_BLE — empty stubs so the rest of the codebase links cleanly on BLE-less builds
 
 void link_ble_init(const char*) {}
@@ -303,6 +324,8 @@ bool link_ble_writable() { return false; }
 uint16_t link_ble_write_chunk(const uint8_t*, uint16_t) { return 0; }
 uint16_t link_ble_read(uint8_t*, uint16_t) { return 0; }
 void* link_ble_server() { return nullptr; }
+bool link_ble_shutdown() { return false; }
+bool link_bt_dead() { return false; }
 
 #endif
 #endif  // ARDUINO_ARCH_ESP32

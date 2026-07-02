@@ -127,8 +127,13 @@ static BLERemoteCharacteristic* find_remote_chr(const uint8_t* svc_w, const uint
   return svc->getCharacteristic(wire_to_uuid(chr_w));
 }
 
+// SYS_RADIO_OFF asks before killing the BT stack: once this module has touched
+// Bluedroid, deinit would leave its scan/server/client pointers dangling.
+bool ble_module_active() { return ble_ready; }
+
 void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
   uint16_t cmd = CMD(MOD_BLE, op);
+  if (link_bt_dead()) { proto_reply_err(seq, cmd, ST_UNSUPPORTED); return; }  // SYS_RADIO_OFF ran; reboot to get BLE back
   ble_lazy_init();
 
   switch (op) {
@@ -280,6 +285,8 @@ void ble_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 }
 
 #else  // !BRIDGE_BLE
+
+bool ble_module_active() { return false; }
 
 UNSUPPORTED_STUB(ble_handle, MOD_BLE)
 

@@ -17,10 +17,10 @@ def test_ack_releases_only_its_own_bytes(bridge):
     b._reserve_window(150)
     b._reserve_window(100)
     assert b._unacked == 350                 # three requests in flight
-    b._ack_window(100)
+    b._decr_window(100, clear_send=True)     # == a reply landing
     assert b._unacked == 250                 # only the replied 100 released
-    b._ack_window(150)
-    b._ack_window(100)
+    b._decr_window(150, clear_send=True)
+    b._decr_window(100, clear_send=True)
     assert b._unacked == 0
 
 
@@ -30,7 +30,7 @@ def test_reply_clears_pending_send_bytes(bridge):
     b._unacked = 0
     b._send_bytes = 500
     b._reserve_window(80)
-    b._ack_window(80)
+    b._decr_window(80, clear_send=True)      # == a reply landing
     assert b._unacked == 0
     assert b._send_bytes == 0
 

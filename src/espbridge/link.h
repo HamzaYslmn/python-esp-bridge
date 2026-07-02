@@ -57,3 +57,9 @@ uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen);
 // reuse it rather than creating a second GATT server. Returns nullptr
 // when BLE is disabled or link_ble_init() has not been called.
 void* link_ble_server();
+
+// SYS_RADIO_OFF support: shut the whole BT stack down until reboot (returns
+// false while a central is connected), and the sticky flag that keeps
+// mod_ble from re-initing the dead stack afterwards.
+bool link_ble_shutdown();
+bool link_bt_dead();

@@ -18,6 +18,7 @@ from .errors import (
     ProtocolError,
     RemoteError,
     UnsupportedError,
+    needs_fw,
 )
 from .protocol import Frame, FrameSplitter, decode_frame, encode_frame, mac_to_str
 from .transports import SerialTransport, find_ports
@@ -440,6 +441,9 @@ class Bridge:
             target = C.UPGRADE_BAUD.get(getattr(self._t, "usb_chip", None), 921600)
         if not target or target == current:
             return
+        # Remembered so reset() can follow the board back down to the boot
+        # baud (the firmware doesn't persist SYS_SET_BAUD) and re-upgrade.
+        self._baud_base, self._baud_target = current, target
         # Ladder down to the universally-safe 921600 if the target fails, so a
         # too-optimistic target costs one recovery cycle, not a 115200 link.
         for baud in dict.fromkeys((target, 921600)):
@@ -466,6 +470,7 @@ class Bridge:
                 # failed attempt cheap.
                 self.request(C.SYS_PING, b"baud", timeout=0.3, retries=0)
                 log.debug(f"baud upgraded {current} -> {target}")
+                self._baud_now = target
                 return True
             except BridgeTimeoutError:
                 continue
@@ -514,7 +519,8 @@ class Bridge:
         if self._closing:
             return
         self._closing = True
-        self._notify_writers()  # unblock any writer waiting on the in-flight window
+        with self._flow:  # unblock any writer waiting on the in-flight window
+            self._flow.notify_all()
         if self.reset_on_exit and self._ready.is_set():
             try:
                 self.request(C.SYS_RESET, timeout=1.0)
@@ -564,7 +570,8 @@ class Bridge:
         with self._pending_lock:
             for p in self._pending.values():
                 p.event.set()
-        self._notify_writers()  # unblock any writers waiting on the in-flight window
+        with self._flow:  # unblock any writers waiting on the in-flight window
+            self._flow.notify_all()
 
     def _handle_frame(self, frame: Frame) -> None:
         if frame.is_event:
@@ -679,19 +686,6 @@ class Bridge:
                 self._send_bytes = 0
             self._flow.notify_all()
 
-    def _ack_window(self, size: int) -> None:
-        """A request's reply arrived: release that request's own reserved bytes,
-        and clear pending send() bytes (the reply proves they were consumed)."""
-        self._decr_window(size, clear_send=True)
-
-    def _release_window(self, size: int) -> None:
-        self._decr_window(size)
-
-    def _notify_writers(self) -> None:
-        """Wake every writer blocked on the in-flight window (shutdown paths)."""
-        with self._flow:
-            self._flow.notify_all()
-
     def _request_once(self, cmd: int, payload: bytes, timeout: float | None) -> bytes:
         seq = self._alloc_seq()
         p = self._pending[seq]
@@ -711,8 +705,9 @@ class Bridge:
             replied = True
             # Reply landed: release this request's reserved bytes (only its own,
             # so other threads' in-flight requests stay accounted) and clear any
-            # fire-and-forget send() bytes written before it.
-            self._ack_window(len(data))
+            # fire-and-forget send() bytes written before it (the reply proves
+            # the firmware consumed them).
+            self._decr_window(len(data), clear_send=True)
             if debug:
                 log.debug(f"<- {C.cmd_name(cmd)} seq={seq} "
                           f"{'ERR' if p.frame.is_error else 'ok'} "
@@ -723,7 +718,7 @@ class Bridge:
             return p.frame.payload
         finally:
             if not replied:  # write failed or timed out — release the reserved window bytes
-                self._release_window(len(data))
+                self._decr_window(len(data))
             with self._pending_lock:
                 self._pending.pop(seq, None)
 
@@ -884,6 +879,36 @@ class Bridge:
             applied["ble_link"] = None
         return applied
 
+    def radio_off(self) -> None:
+        """Full radio silence: Wi-Fi, ESP-NOW and the whole Bluetooth stack
+        off — the quietest the chip gets, for jitter-sensitive realtime work
+        over USB.
+
+        What it sheds: every radio interrupt on core 0 (BT controller ticks,
+        Wi-Fi MAC), the Bluedroid + Wi-Fi driver scheduler load, and ~110 KB
+        of heap comes back. ADC2 pins (GPIO 0/2/4/12-15/25-27 on a classic
+        ESP32) become permanently readable — they are blocked whenever the
+        Wi-Fi driver is up.
+
+        First tears down this session's Wi-Fi STA/AP and ESP-NOW (all cheap
+        no-ops when unused), which powers the Wi-Fi driver off; then kills
+        Bluetooth (advertising, BLE link, controller). Wi-Fi/ESP-NOW come
+        back the moment you use them again — Bluetooth stays off until
+        :meth:`reset` (its memory is released to the heap, by design).
+
+        Raises RemoteError(BUSY) while a BLE central is connected or after
+        ``esp.ble`` has been used this boot (reset first). USB sessions only."""
+        for stop in (self.wifi.disconnect, self.wifi.ap_stop, self.espnow.end):
+            try:
+                stop()
+            except RemoteError as e:
+                if e.status is not C.Status.NOT_INIT:  # never started = already off
+                    raise
+        try:
+            self.request(C.SYS_RADIO_OFF)
+        except RemoteError as e:
+            needs_fw(e, "radio_off() needs bridge firmware >= 0.16.0 — reflash")
+
     @staticmethod
     def _sleep_args(mode: int, seconds: float, wake_pin: int | None,
                     wake_level: int) -> bytes:
@@ -896,8 +921,18 @@ class Bridge:
         """Soft-reset the ESP32 and wait for it to come back."""
         self._ready.clear()
         self.request(C.SYS_RESET)
+        # The firmware boots back at the port-default baud (SYS_SET_BAUD is not
+        # persisted) — follow it down or the READY event arrives as garbage,
+        # then restore the fast link once the board is up.
+        base = getattr(self, "_baud_base", None)
+        upgraded = base is not None and getattr(self, "_baud_now", base) != base
+        if upgraded:
+            self._t.set_baudrate(base)
+            self._baud_now = base
         if not self._ready.wait(5.0):
             raise BridgeTimeoutError("bridge did not come back after reset")
+        if upgraded:
+            self._upgrade_baud(base, self._baud_target)
 
     def set_name(self, name: str) -> None:
         """Persist a device name on the ESP32 (NVS) for `Bridge(name=...)` lookup."""

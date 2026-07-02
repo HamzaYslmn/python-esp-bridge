@@ -98,6 +98,13 @@ def main():
 #     esp.watch.add("touch",  pin=4,  below=40)            # touch pad pressed
 #     esp.watch.add("heap",   change=20000)                # free-RAM moved a lot
 #     esp.watch.add("adc",    pin=34, outside=(800, 3200)) # left a safe band
+#
+# On-device actions — the FIRMWARE reacts, no host round trip (~5 ms,
+# link-independent, keeps working even if the USB/BLE link drops):
+#     esp.watch.add("gpio", pin=15, equals=1,               # thermostat contact
+#                   do=("gpio", 26, 1), undo=("gpio", 26, 0))   # relay on/off
+#     esp.watch.add("adc",  pin=34, above=3200, period_ms=5,    # over-current
+#                   do=("pwm", 13, 0))                          # -> kill motor PWM
 
 if __name__ == "__main__":
     main()

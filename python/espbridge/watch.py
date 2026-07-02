@@ -20,6 +20,15 @@ It's not analog-only — the *source* is whatever you pick:
 
 The callback runs on the bridge's reader thread. For ``await``-style code use
 ``async for ev in AsyncBridge.watch_events()`` (see :mod:`espbridge.aio`).
+
+Rules can also *act on the board itself* — no host round trip, so the reaction
+is deterministic (~ the rule's period) even over BLE or a busy USB link:
+
+    esp.watch.add("adc", pin=34, above=3200,            # over-current?
+                  do=("pwm", 13, 0),                    # -> kill the motor PWM
+                  period_ms=5)
+    esp.watch.add("gpio", pin=15, equals=1,             # thermostat contact
+                  do=("gpio", 26, 1), undo=("gpio", 26, 0))   # relay on/off
 """
 from __future__ import annotations
 
@@ -36,6 +45,20 @@ SOURCES = {"adc": 0, "adc_raw": 0, "adc_mv": 1, "gpio": 2, "touch": 3, "heap": 4
 _ABOVE, _BELOW, _INSIDE, _OUTSIDE, _CHANGED = 0, 1, 2, 3, 4
 # flag bits
 _F_ENTER, _F_EXIT, _F_INITIAL = 0x01, 0x02, 0x04
+
+# on-device action kinds (must match mod_watch.cpp); packed type|pin|value
+_ACTIONS = {"gpio": 1, "pwm": 2}
+
+
+def _pack_action(spec) -> bytes:
+    """("gpio"|"pwm", pin, value) -> 6 wire bytes; None -> a no-op action."""
+    if spec is None:
+        return struct.pack(">BBi", 0, 0, 0)
+    kind, pin, value = spec
+    if kind not in _ACTIONS:
+        raise ValueError(f"action kind must be one of {sorted(_ACTIONS)}, not {kind!r}")
+    return struct.pack(">BBi", _ACTIONS[kind], int(pin), int(value))
+
 
 # condition kwarg -> (comparator, a, b) from (value, hysteresis). One table so the
 # accepted conditions, the error message and the encoding share a single source.
@@ -109,6 +132,7 @@ class Watch:
             change: int | None = None,
             hysteresis: int = 0, period_ms: int = 100, atten=11,
             on_enter: bool = True, on_exit: bool = True, initial: bool = False,
+            do: tuple | None = None, undo: tuple | None = None,
             callback=None, id: int | None = None) -> int:
         """Register a rule on the board; returns its id (use it to :meth:`remove`).
 
@@ -130,6 +154,16 @@ class Watch:
         period_ms: how often the board samples (default 100 ms).
         on_enter/on_exit: emit when the condition becomes true / false again.
         initial:   also emit one event for the very first sample (current state).
+        do/undo:   optional ON-DEVICE action, run by the firmware itself when the
+                   condition becomes true (``do``) / false again (``undo``) —
+                   no host round trip, so it works even if the link is busy or
+                   down. Each is a tuple:
+                     ("gpio", pin, level)  — digital write (pin is made OUTPUT)
+                     ("pwm",  pin, duty)   — LEDC duty; pwm.attach(pin) first
+                   The action also runs for the very first sample (so an output
+                   pin reflects the rule's state from arm time), and needs
+                   bridge firmware >= 0.16.0. For change= rules only ``do``
+                   fires (there is no "cleared" state to undo).
         callback:  callback(WatchEvent), called on the reader thread when it fires.
         """
         src = SOURCES[source] if isinstance(source, str) else int(source)
@@ -152,6 +186,12 @@ class Watch:
         aux = ATTEN.get(atten, int(atten)) if src in (0, 1) else 0
         body = struct.pack(">BBBBBBHii", id, src, pin or 0, aux, cmp, flags,
                            int(period_ms), a, b)
+        # ADD2 carries the rule and its actions in one frame, so the rule is
+        # never armed without them (a BIND-after-ADD would race the first poll).
+        cmd, fw_hint = C.WATCH_ADD, "watch engine needs bridge firmware >= 0.5.0"
+        if do is not None or undo is not None:
+            body += _pack_action(do) + _pack_action(undo)
+            cmd, fw_hint = C.WATCH_ADD2, "watch do=/undo= actions need bridge firmware >= 0.16.0"
         # Register the callback *before* arming the rule: the firmware can emit
         # its first event (e.g. initial=True) on the very next poll, which may
         # land before request() even returns — registering first avoids losing it.
@@ -159,11 +199,11 @@ class Watch:
             self._cbs.setdefault(id, []).append(callback)
         self._ids.add(id)
         try:
-            self._b.request(C.WATCH_ADD, body)
+            self._b.request(cmd, body)
         except RemoteError as e:
             self._cbs.pop(id, None)
             self._ids.discard(id)
-            needs_fw(e, "watch engine needs bridge firmware >= 0.5.0 — reflash")
+            needs_fw(e, fw_hint + " — reflash")
         return id
 
     def remove(self, id: int) -> None:

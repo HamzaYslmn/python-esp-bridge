@@ -30,6 +30,7 @@ void cam_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void mcpwm_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void watch_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len);
 void watch_poll();  // slow_task: evaluate polled watch rules -> WATCH_EVT
+bool ble_module_active();  // SYS_RADIO_OFF guard: mod_ble has touched Bluedroid
 
 // Generates a handler body that returns ST_UNSUPPORTED for every op.
 // Use in the #else branch of a chip-capability guard so that all declared

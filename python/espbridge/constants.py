@@ -115,6 +115,7 @@ SYS_SLEEP = _cmd(MOD_SYS, 0x08)
 SYS_WAKE_CAUSE = _cmd(MOD_SYS, 0x09)
 SYS_CPU_FREQ = _cmd(MOD_SYS, 0x0A)
 SYS_LINK_POWER = _cmd(MOD_SYS, 0x0B)
+SYS_RADIO_OFF = _cmd(MOD_SYS, 0x0C)  # all radios off; BT until reboot (frees ADC2)
 SYS_READY = _cmd(MOD_SYS, 0x80)
 SYS_LOG = _cmd(MOD_SYS, 0x81)
 
@@ -321,6 +322,7 @@ WATCH_ADD = _cmd(MOD_WATCH, 0x01)
 WATCH_REMOVE = _cmd(MOD_WATCH, 0x02)
 WATCH_CLEAR = _cmd(MOD_WATCH, 0x03)
 WATCH_LIST = _cmd(MOD_WATCH, 0x04)
+WATCH_ADD2 = _cmd(MOD_WATCH, 0x05)  # ADD + on-device enter/exit actions
 WATCH_EVT = _cmd(MOD_WATCH, 0x80)
 
 # Commands that must NOT be auto-retried after a response timeout. If the

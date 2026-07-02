@@ -66,8 +66,12 @@ Link starts at 115200. If the board does **not** have `CAP_NATIVE_USB`
 (native USB CDC ignores baud), the host sends `SYS_SET_BAUD(target)`.
 Firmware replies OK **at the old baud**, flushes, then switches. The host
 switches and re-pings (3 attempts); on failure it drops back to 115200.
-Defaults: 921600 (safe for CP2102/CH340/CH9102); CH340 supports up to
-2,000,000 opt-in.
+The host picks the target by USB bridge chip (`UPGRADE_BAUD`): CP210x and
+CH9102 → 1,500,000; CH340 → 2,000,000; unknown chips → 921600. The host
+driver is probed first and a failed target ladders down to the
+universally-safe 921600, so a too-optimistic target costs one recovery
+cycle, not a 115200 link. `SYS_SET_BAUD` is not persisted — after
+`SYS_RESET` the board boots back at 115200 and the host re-negotiates.
 
 ## Transports
 
@@ -240,7 +244,7 @@ OK, flushes, then powers down — the board reboots on wake. Light sleep
 replies *after* waking with the cause. `SYS_WAKE_CAUSE` reports the last
 boot's wake reason. Gated on `CAP_SLEEP` (see IRAM note below).
 
-### Power (SYS 0x0A/0x0B)
+### Power (SYS 0x0A/0x0B/0x0C)
 
 `SYS_CPU_FREQ` (`mhz u8` ∈ 80/160/240 → granted `mhz u8`) scales the CPU
 clock; 80 MHz is the floor while any radio is on, and APB stays at 80 MHz so
@@ -252,6 +256,16 @@ Centrals apply relaxed parameters quickly but may take 5–10 s to re-grant
 fast ones. Replies `ST_NOT_INIT` when no BLE central is connected.
 Per-connection; reconnects start back in performance. ESP-NOW receive duty
 is the third knob: `ESPNOW_POWER_SAVE`.
+
+`SYS_RADIO_OFF` is full radio silence for jitter-sensitive realtime work
+over USB: it requires Wi-Fi/ESP-NOW already released (the host tears its
+users down first; `ST_BUSY` otherwise), then kills the whole Bluetooth
+stack — advertising, BLE link, controller — and releases its memory to the
+heap (~110 KB back, all radio interrupts on core 0 gone, ADC2 pins no
+longer conflict-blocked). One-way for Bluetooth: only `SYS_RESET` brings it
+back; Wi-Fi/ESP-NOW return on next use. `ST_BUSY` while a BLE central is
+connected or the BLE GATT module (0x71) was used this boot. Routed to the
+slow task so the teardown runs next to every other radio caller.
 
 ### ETH (module 0x53) and CAM (module 0x73) — compile-time opt-ins
 
@@ -345,4 +359,9 @@ Hosts must treat the tail as optional for compatibility with older firmware.
 - **A long RMT capture or FS/OTA burst runs on the same task as Wi-Fi/NET**
   (`bridge_slow`): it can delay those replies — never GPIO/I2C/SPI/1-Wire,
   which run on the rx task. Conversely, a 1-Wire ROM search (~tens of ms)
-  briefly delays other fast commands, like an I2C scan does.
+  briefly delays other fast commands, like an I2C scan does. Long RMT
+  *transmits* are the exception: trains over ~3 ms start asynchronously
+  (the RMT hardware streams from its own ring buffer) and the task keeps
+  servicing the WATCH engine while they drain, so on-device watch rules
+  and actions stay at their configured period even through a multi-second
+  pulse train.

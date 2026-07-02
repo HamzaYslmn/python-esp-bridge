@@ -3,6 +3,7 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
+#include "espbridge/radio.h"
 #include <esp_mac.h>
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
@@ -229,6 +230,17 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       NEED(1);
       if (p[0] > 1) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       if (!link_ble_power(p[0] == 1)) { proto_reply_err(seq, cmd, ST_NOT_INIT); return; }
+      proto_reply_ok(seq, cmd);
+      break;
+    }
+
+    case 0x0C: {  // RADIO_OFF — routed to slow_task (see dispatch()), next to every radio user
+      // The host tears down its own Wi-Fi/ESP-NOW/AP first (those releases
+      // already power the Wi-Fi driver off); this refuses rather than yanking
+      // a live radio out from under a module — predictable beats forceful.
+      if (radio_active()) { proto_reply_err(seq, cmd, ST_BUSY); return; }         // Wi-Fi/ESP-NOW still up
+      if (ble_module_active()) { proto_reply_err(seq, cmd, ST_BUSY); return; }    // esp.ble used: reboot first
+      if (!link_ble_shutdown()) { proto_reply_err(seq, cmd, ST_BUSY); return; }   // a BLE central is connected
       proto_reply_ok(seq, cmd);
       break;
     }

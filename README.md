@@ -1,5 +1,7 @@
 # python-esp-bridge
 
+[Türkçe README](docs/README-TR.md)
+
 Connect an ESP32 to a Raspberry Pi (or any PC) over USB **or Bluetooth** and
 drive **every** ESP32 peripheral live from Python — GPIO, PWM, ADC, DAC,
 capacitive touch, I2C, SPI, extra UARTs, RMT pulse trains (NeoPixels, IR,
@@ -14,7 +16,7 @@ protocols (WS2812 timing, NEC IR, DHT decoding, 1-Wire search, stepper ramps)
 are implemented in Python where they are easy to read, test and extend.
 
 ```
-┌────────────────┐  USB serial (≤921600 Bd) or BLE  ┌─────────────────────┐
+┌────────────────┐  USB serial (≤2 Mbaud) or BLE    ┌─────────────────────┐
 │ Pi / PC        │ ───────────────────────────────► │ ESP32 (bridge fw)   │
 │ Python:        │   binary protocol, COBS+CRC16    │ FreeRTOS tasks:     │
 │  espbridge     │ ◄─────────────────────────────── │  tx / rx / network  │
@@ -120,7 +122,9 @@ are implemented in Python where they are easy to read, test and extend.
 | I2S    | PCM in/out for MEMS mics & DACs/amps (`esp.i2s`; link bandwidth caps rates ~16-bit/32 kHz mono) |
 | Files  | LittleFS on internal flash + SD cards: open/read/write/list/… (`esp.fs`) |
 | NVS    | persistent key/value storage on the board (`esp.nvs`) |
+| Watch  | on-device rules: the board samples ADC/GPIO/touch/heap itself and pushes an event when a condition trips — and can **react on-device** (`do=("gpio", pin, level)` / `do=("pwm", pin, duty)`) in ~5 ms, link-independent, even mid-BLE-dropout |
 | Sleep  | deep + light sleep with timer/GPIO wake (`esp.deep_sleep()`; see chip notes) |
+| Power  | `esp.radio_off()`: Wi-Fi + ESP-NOW + the whole BT stack off — sheds all radio interrupts, frees ~110 KB heap, unlocks the ADC2 pins for jitter-sensitive realtime work over USB; `esp.cpu_freq()`, `esp.power_mode()` |
 | OTA    | **reflash the firmware over USB or Bluetooth** (`esp.ota.flash("fw.bin")`; dual-app partition scheme) |
 | Ethernet | RMII (WT32-ETH01, Olimex POE…) or SPI (W5500) — NET sockets ride it automatically (firmware opt-in) |
 | Camera | JPEG snapshots from ESP32-CAM / XIAO-S3-Sense / ESP-EYE (firmware opt-in, PSRAM) |
@@ -179,7 +183,9 @@ Adafruit / luma / gpiozero / smbus2 ecosystems, it runs unchanged through the
 
 The firmware is fully event-driven on FreeRTOS: serial TX, command handling
 and the network stack run as separate tasks, so a blocking Wi-Fi/BLE
-operation never delays a GPIO read (~1 ms round-trips at 921600 Bd).
+operation never delays a GPIO read (~1 ms round-trips; the link auto-upgrades
+from 921600 Bd to what the USB bridge chip supports — 1.5 Mbaud on CP210x,
+2 Mbaud on CH340).
 
 ## Concurrency & integration
 

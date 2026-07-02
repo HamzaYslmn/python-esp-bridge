@@ -154,6 +154,29 @@ def test_cpu_freq_round_trip(bridge, fw):
         bridge.cpu_freq(120)
 
 
+def test_radio_off(bridge, fw):
+    fw.ble_central = False                      # USB session
+    fw.wifi_connected = True                    # radio_off must tear this down itself
+    bridge.radio_off()
+    assert fw.radio_off is True
+    assert fw.wifi_connected is False           # wifi.disconnect() ran first
+
+
+def test_radio_off_refused_with_ble_central(bridge, fw):
+    from espbridge.errors import RemoteError
+    with pytest.raises(RemoteError):            # BUSY: would kill the central's own link
+        bridge.radio_off()
+    assert fw.radio_off is False
+
+
+def test_radio_off_old_firmware(bridge, fw):
+    from espbridge.errors import UnsupportedError
+    fw.ble_central = False
+    fw.radio_off_supported = False
+    with pytest.raises(UnsupportedError, match="0.16.0"):
+        bridge.radio_off()
+
+
 def test_link_power_modes(bridge, fw):
     bridge.link_power("battery")
     assert fw.link_power_mode == 1
