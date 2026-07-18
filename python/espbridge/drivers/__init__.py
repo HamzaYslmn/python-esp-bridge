@@ -39,7 +39,9 @@ _BUNDLED: dict[str, str] = {
     "ir_receiver": "espbridge.drivers.ir:IrReceiver",
     "pcf8574": "espbridge.drivers.pcf8574:PCF8574",
     # ADC / sensors (I2C)
-    "ads1115": "espbridge.drivers.ads1115:ADS1115",     # 16-bit 4-ch ADC
+    "ads1115": "espbridge.drivers.ads1115:ADS1115",     # 16-bit 4-ch ADC (I2C)
+    "mcp3208": "espbridge.drivers.mcp3208:MCP3208",     # 12-bit 8-ch ADC (SPI)
+    "mcp3202": "espbridge.drivers.mcp3202:MCP3202",     # 12-bit 2-ch ADC (SPI)
     "bh1750": "espbridge.drivers.bh1750:BH1750",        # ambient light (lux)
     "bme280": "espbridge.drivers.bme280:BME280",        # temp / humidity / pressure
     "mpu6050": "espbridge.drivers.mpu6050:MPU6050",     # 6-axis IMU (accel + gyro)
