@@ -58,7 +58,7 @@ class FakeBoardServer:
 
 
 def dial_home(fw: FakeFirmware, port: int) -> None:
-    """A board in *dial-home* mode: connects out to Bridge(wifi=True)."""
+    """A board in *dial-home* mode: connects out to Bridge.all(wifi=True)."""
     def run():
         _pump(fw, socket.create_connection(("127.0.0.1", port), 5.0))
 
@@ -94,11 +94,11 @@ def test_tcp_transport_rejects_wrong_password():
         server.close()
 
 
-# ---- boards dialling home: Bridge(wifi=True) -----------------------------------
+# ---- boards dialling home: Bridge.all(wifi=True) -----------------------------------
 
 
 def test_plural_wifi_collects_boards_as_ordinary_bridges():
-    with Bridge(wifi=True, tcp_port=0, password=PASSWORD) as boards:
+    with Bridge.all(wifi=True, tcp_port=0, password=PASSWORD) as boards:
         fws = [FakeFirmware(password=PASSWORD, mac=f"24a16000000{i}",
                             name=f"b{i}") for i in range(1, 4)]
         for fw in fws:
@@ -123,7 +123,7 @@ def test_plural_wifi_collects_boards_as_ordinary_bridges():
 
 
 def test_plural_wifi_rejects_a_bad_password():
-    with Bridge(wifi=True, tcp_port=0, password="the-real-one") as boards:
+    with Bridge.all(wifi=True, tcp_port=0, password="the-real-one") as boards:
         dial_home(FakeFirmware(password="something-else"), boards._listener.port)
         time.sleep(0.5)
         assert list(boards) == []
@@ -131,7 +131,7 @@ def test_plural_wifi_rejects_a_bad_password():
 
 def test_plural_wifi_replaces_a_reconnecting_board():
     """A board reconnects after a dropout; it must not end up in the set twice."""
-    with Bridge(wifi=True, tcp_port=0, password=PASSWORD) as boards:
+    with Bridge.all(wifi=True, tcp_port=0, password=PASSWORD) as boards:
         port = boards._listener.port
         dial_home(FakeFirmware(password=PASSWORD, mac="24a160000009"), port)
         boards.wait_for(1, timeout=10)
@@ -149,7 +149,7 @@ def test_plural_wifi_replaces_a_reconnecting_board():
 def test_each_reports_per_board_failures():
     """One unhappy board must not fail the whole sweep — with a thousand of
     them, some are always mid-reboot."""
-    with Bridge(wifi=True, tcp_port=0, password=PASSWORD) as boards:
+    with Bridge.all(wifi=True, tcp_port=0, password=PASSWORD) as boards:
         port = boards._listener.port
         dial_home(FakeFirmware(password=PASSWORD, mac="24a160000011"), port)
         mute = FakeFirmware(password=PASSWORD, mac="24a160000012")
@@ -165,6 +165,6 @@ def test_each_reports_per_board_failures():
 
 
 def test_wait_for_times_out_when_nobody_dials_in():
-    with Bridge(wifi=True, tcp_port=0, password=PASSWORD) as boards:
+    with Bridge.all(wifi=True, tcp_port=0, password=PASSWORD) as boards:
         with pytest.raises(BridgeTimeoutError):
             boards.wait_for(1, timeout=0.2)

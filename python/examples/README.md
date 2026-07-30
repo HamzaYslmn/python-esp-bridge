@@ -10,7 +10,8 @@ immediately):
 cd examples
 uv run basics/blink.py
 uv run displays/oled_ssd1306.py
-uv run wireless/ble_blink.py      # no USB needed
+uv run wireless/ble_blink.py          # no USB needed
+uv run wireless/ble_blink.py relays   # a specific board, once you have several
 ```
 
 Without uv: `pip install -e "..[oled]"` once, then `python basics/blink.py`
@@ -93,7 +94,7 @@ The Bluetooth password defaults to `espbridge`; change it by passing it to
 | `tcp_through_bridge.py` | join Wi-Fi, HTTP + raw TCP through the ESP32 |
 | `udp_through_bridge.py` | UDP datagrams through the ESP32 |
 | `wifi_link.py` | control a board **over Wi-Fi** instead of a cable — provision once, then `Bridge(host=...)` |
-| `many_boards.py` | every board on the Wi-Fi via `Bridge(wifi=True)` — discovered *and* dial-home |
+| `many_boards.py` | every board on the Wi-Fi via `Bridge.all(wifi=True)` — discovered *and* dial-home |
 
 ## displays/
 
@@ -124,7 +125,11 @@ One folder per ecosystem — existing code from these libraries runs unchanged:
   stored name doesn't, and it is the same string over USB, Bluetooth and Wi-Fi.
   Name each board once (`espbridge -p COM7 set-name sensors`), then
   `Bridge("sensors")` finds it on any link. A MAC works in the same argument if
-  you'd rather not name them.
+  you'd rather not name them. Bare `Bridge()` takes whichever board answers
+  first — fine for one board on the desk, and it logs which one it picked.
+- **`Bridge()` is one board, `Bridge.all()` is every board.** These examples all
+  drive a single board, so they call `Bridge()`; `multi_device.py` and
+  `many_boards.py` are the two that want the whole desk.
 - **Re-attach without rebooting.** Opening the serial port resets the board by
   default; pass `Bridge(reset_on_open=False)` to reconnect to the running
   firmware with all peripheral state intact.

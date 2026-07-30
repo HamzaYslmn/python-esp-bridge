@@ -9,6 +9,9 @@ PIN, COUNT = 5, 30
 
 with Bridge() as esp:
     strip = NeoPixel(esp, PIN, COUNT, brightness=0.3)
+    # WS2812 is write-only, so nothing here can tell you the strip is there:
+    # say what is being driven, then look at the LEDs. Ctrl+C to stop.
+    print(f"{esp.info.ident}: driving {COUNT} pixels on GPIO{PIN} — Ctrl+C to quit")
     t = 0
     try:
         while True:

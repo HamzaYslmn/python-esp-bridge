@@ -7,7 +7,7 @@ import sys
 from . import __version__
 from . import constants
 from ._log import log
-from .bridge import Bridge, BridgeSet
+from .bridge import Bridge
 from .errors import BridgeError
 from .transports import find_ports
 
@@ -105,7 +105,7 @@ def cmd_scan(args) -> int:
         if not devs:
             print("no bridges answered the Wi-Fi discovery broadcast "
                   "(dial-home boards do not answer — they connect to you; "
-                  "use Bridge(wifi=True))")
+                  "use Bridge.all(wifi=True))")
             return 1
         print(f"{'NAME':<14s} {'MAC':<18s} ADDRESS")
         for d in devs:
@@ -149,11 +149,9 @@ def cmd_set_name(args) -> int:
 
 
 def cmd_info(args) -> int:
-    """Print firmware/chip info. Bridge() is already plural when nothing was
-    selected, so one path prints one board or every board."""
-    with Bridge(**_connect_kwargs(args)) as found:
-        for i, esp in enumerate(found if isinstance(found, BridgeSet)
-                                else [found]):
+    """Print firmware/chip info — every board, or just the one you named."""
+    with Bridge.all(**_connect_kwargs(args)) as found:
+        for i, esp in enumerate(found):
             if i:
                 print("-" * 40)
             _print_info(esp)
@@ -169,9 +167,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          "(the way to pick one of several)")
     ap.add_argument("-p", "--port", help="serial port (default: auto-detect)")
     ap.add_argument("-b", "--ble", action="store_true",
-                    help="Bluetooth only (the default already prefers Bluetooth)")
+                    help="Bluetooth only (default: USB, then Bluetooth, then Wi-Fi)")
     ap.add_argument("--usb", action="store_true",
-                    help="USB serial only — disable Bluetooth")
+                    help="USB serial only — no radio")
     ap.add_argument("--host", metavar="ADDR",
                     help="connect over Wi-Fi to a board at this address")
     ap.add_argument("--tcp-port", type=int, default=constants.BRIDGE_LINK_PORT,

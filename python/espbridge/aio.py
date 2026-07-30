@@ -136,9 +136,11 @@ class AsyncBridge:
     surfaced here (events, ``on_event``, device drivers).
     """
 
-    def __init__(self, **kwargs):
-        # Bridge() connects (and blocks) in its constructor, so defer it.
-        self._kwargs = kwargs
+    def __init__(self, *args, **kwargs):
+        # Bridge() connects (and blocks) in its constructor, so defer it. Args
+        # are passed straight through, so AsyncBridge("relays") selects a board
+        # exactly the way Bridge("relays") does.
+        self._args, self._kwargs = args, kwargs
         self._bridge = None
         self._owned = True  # we opened it, so we close it
 
@@ -152,7 +154,7 @@ class AsyncBridge:
         (e.g. the BridgeManager behind connect()) closes it.
         """
         self = cls.__new__(cls)
-        self._kwargs = {}
+        self._args, self._kwargs = (), {}
         self._bridge = bridge
         self._owned = False
         return self
@@ -173,7 +175,8 @@ class AsyncBridge:
         """Open the link off the event loop (Bridge() blocks while connecting).
         Usually you don't call this directly — use ``async with AsyncBridge():``."""
         if self._bridge is None:
-            self._bridge = await asyncio.to_thread(Bridge, **self._kwargs)
+            self._bridge = await asyncio.to_thread(Bridge, *self._args,
+                                                   **self._kwargs)
         return self
 
     async def close(self) -> None:

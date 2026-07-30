@@ -71,7 +71,7 @@ gerekir.*
    ```python
    from espbridge import Bridge
 
-   with Bridge() as esp:                      # önce Bluetooth, olmazsa USB serial
+   with Bridge() as esp:                      # önce USB, sonra Bluetooth, sonra Wi-Fi
        print(esp.info)                        # çip, MAC, yetenekler
 
        esp.gpio.mode(2, "output")             # RPi GPIO gibi, ama ESP32 üstünde
@@ -97,7 +97,8 @@ gerekir.*
        esp.gpio.write(2, 1)
    ```
 
-   `Bridge()` önce Bluetooth'u dener, sonra USB serial'a düşer. Her taşıma
+   `Bridge()` en iyi bağlantıyı sırayla dener: önce USB kablosu, sonra
+   Bluetooth, en son da ağ. Her taşıma
    anahtarı kendi bağlantısını sabitler: `ble=False` yalnızca **USB / COM**,
    `ble=True` yalnızca Bluetooth, `wifi=True` yalnızca Wi-Fi. Belirli bir kartı
    seçmek için `Bridge("relays")`, belirli bir seri port için `port="COM7"`
@@ -330,15 +331,19 @@ etkilenmez. Sonra ne portları ne de MAC'leri düşünmeniz gerekir:
 ```python
 from espbridge import Bridge
 
-esp = Bridge("relays")                    # tek ad  -> yalnızca o kart
+esp = Bridge()                            # tek kart -> ilk yanıt veren
+esp = Bridge("relays")                    # tek ad   -> yalnızca o kart
 esp = Bridge("c0:49:ef:d0:3f:e0")         # MAC de aynı argümanda çalışır
 
-with Bridge(["relays", "sensors"]) as boards:   # liste -> tam olarak onlar
+with Bridge.all(["relays", "sensors"]) as boards:   # tam olarak onlar
     boards["relays"].gpio.write(2, 1)
 
-with Bridge() as boards:                  # seçici yok -> tüm kartlar
+with Bridge.all() as boards:              # masadaki tüm kartlar
     boards.each(lambda esp: esp.ping())
 ```
+
+`Bridge()` tek karttır, `Bridge.all()` tüm kartlar — nasıl çağırdığınız geri
+dönen türü değiştirmez.
 
 Bu argüman kartın **kimliğidir**: adı, ad vermediyseniz MAC'i. Her iki değer de
 Bluetooth reklamında, Wi-Fi keşif yanıtında ve `SYS_INFO` içinde tam olarak

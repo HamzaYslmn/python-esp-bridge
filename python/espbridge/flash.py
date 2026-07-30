@@ -141,16 +141,10 @@ def flash_firmware(port: str | None = None, *,
 
     port = select_port(port)
 
-    # esptool v5 renamed `write_flash` → `write-flash` (the underscore form
-    # still works but prints a deprecation warning); pick by version so we stay
-    # quiet on v5 and keep working on an older v4.
-    try:
-        major = int(esptool.__version__.split(".")[0])
-    except (AttributeError, ValueError):
-        major = 5
-    write_cmd = "write-flash" if major >= 5 else "write_flash"
+    # All-dashed spellings throughout: esptool 5 renamed every underscore form
+    # and the [flash] extra requires >=5, so there is no older syntax to serve.
     argv = ["--chip", chip, "--port", port, "--baud", str(baud),
-            "--before", "default-reset", "--after", "hard-reset", write_cmd]
+            "--before", "default-reset", "--after", "hard-reset", "write-flash"]
     if erase:
         argv.append("--erase-all")
     argv += ["--flash-size", "keep", FIRMWARE_OFFSET, str(fw)]

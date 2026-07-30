@@ -1,3 +1,6 @@
+# Written by python/examples/devices/i2s_record.py when you run it.
+python/examples/devices/recording.wav
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -104,7 +104,8 @@ def test_cmd_name_lookup():
 
 
 def test_remote_error_message_names_cmd_and_hints(bridge):
-    with pytest.raises(RemoteError, match=r"I2C_WRITE \(0x4003\) failed: IO — no ACK"):
+    with pytest.raises(RemoteError,
+                       match=r"I2C_WRITE \(0x4003\) failed: IO — nothing acknowledged"):
         bridge.i2c.write(0x3C, b"\x00")  # no fake device at 0x3C -> ST_IO
 
 

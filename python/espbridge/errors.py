@@ -16,8 +16,11 @@ _STATUS_HINTS = {
                    "payloads, or build without BLE (BRIDGE_ENABLE_BLE 0)",
     Status.BAD_PIN: "that pin doesn't exist or can't do this on this chip",
     Status.NOT_INIT: "peripheral not initialized — call its init()/begin first",
-    Status.IO: "no ACK on the wire — check wiring, power, device address and "
-               "pull-ups (i2c.scan() shows who's answering)",
+    # Any bus can report this — I2C, SPI, 1-Wire, CAN — so the hint stays about
+    # the wire itself and scopes the scan tip to the bus that has one.
+    Status.IO: "nothing acknowledged on the wire — check wiring, power, the "
+               "device address and pull-ups (esp.i2c.scan() lists what answers "
+               "on I2C)",
     Status.WIFI: "Wi-Fi operation failed — check credentials/radio state",
     Status.SOCKET: "socket failed — host unreachable or handle already closed",
     Status.CRC: "payload integrity check failed",

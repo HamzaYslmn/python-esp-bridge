@@ -34,13 +34,20 @@ if port and ssid:
             raise SystemExit("board never joined the network — check the password")
 
 print("\nlooking for bridges on the LAN ...")
-for dev in espbridge.find_wifi_devices():
+# Retried: a board that just joined has an IP a second or two before it answers
+# the discovery broadcast, so provisioning and finding it in one run would race.
+for _ in range(10):
+    found = espbridge.find_wifi_devices()
+    if found:
+        break
+    time.sleep(1)
+for dev in found:
     print("   ", dev)
 
-# wifi=True collects every board that answers the discovery broadcast (plus any
-# that dial home). Pass a name or MAC — Bridge("relays", wifi=True) — to pin
-# one, or host="192.168.1.50" when broadcast doesn't reach at all (VPNs,
-# subnets, client isolation).
+# wifi=True pins the link: the first board that answers the discovery broadcast.
+# Pass a name or MAC — Bridge("relays", wifi=True) — to pin one, or
+# host="192.168.1.50" when broadcast doesn't reach at all (VPNs, subnets, client
+# isolation). Bridge.all(wifi=True) takes the whole fleet, dial-home ones too.
 with Bridge(wifi=True) as esp:
     print(f"\nconnected to {esp.info.ident} over Wi-Fi, fw "
           f"{'.'.join(map(str, esp.info.fw_version))}")

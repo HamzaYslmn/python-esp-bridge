@@ -14,12 +14,15 @@ relaxed BLE link leaves more radio time for the Wi-Fi side. Messages just
 arrive in ~0.5 s batches instead of instantly. A board never hears its own
 broadcasts; with one board it still pairs up with any other board in range.
 """
+import contextlib
 import sys
 import time
 
-from espbridge import Bridge, find_ble_devices
+from espbridge import Bridge, BridgeError, find_ble_devices
 
-picks = sys.argv[1:] or [d.mac for d in find_ble_devices()]
+# .ident, not .mac: a named board advertises its name (only one identity fits
+# the scan response), so .mac is empty for those — .ident is always a selector.
+picks = sys.argv[1:] or [d.ident for d in find_ble_devices()]
 if not picks:
     sys.exit("no boards advertising over Bluetooth")
 
@@ -51,7 +54,9 @@ except KeyboardInterrupt:
 finally:
     # Free each board's Wi-Fi driver (~50 KB) before exiting. Over BLE nothing
     # resets the board between sessions, so a driver left resident would leave
-    # ~8 KB of heap and cripple every later Bluetooth session.
+    # ~8 KB of heap and cripple every later Bluetooth session. suppress(): a
+    # board that never got ESP-NOW up must not mask the error that says why.
     for esp in boards:
-        esp.espnow.end()
+        with contextlib.suppress(BridgeError):
+            esp.espnow.end()
         esp.close()

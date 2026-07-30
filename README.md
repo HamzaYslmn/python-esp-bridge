@@ -67,7 +67,7 @@ are implemented in Python where they are easy to read, test and extend.
    ```python
    from espbridge import Bridge
 
-   with Bridge() as esp:                      # Bluetooth first, then USB serial
+   with Bridge() as esp:                      # USB first, then Bluetooth, then Wi-Fi
        print(esp.info)                        # chip, MAC, capabilities
 
        esp.gpio.mode(2, "output")             # like RPi GPIO, but on the ESP32
@@ -93,10 +93,13 @@ are implemented in Python where they are easy to read, test and extend.
        esp.gpio.write(2, 1)
    ```
 
-   `Bridge()` prefers Bluetooth and falls back to USB serial. Each transport
-   keyword pins its link instead: `ble=False` is **USB / COM only**, `ble=True`
-   Bluetooth only, `wifi=True` Wi-Fi only. `Bridge("relays")` picks one specific
-   board over any of them, `port="COM7"` one specific serial port.
+   `Bridge()` takes the best link available, in that order: a **USB** cable if
+   one is plugged in, else **Bluetooth**, else the board's **Wi-Fi** address.
+   Each transport keyword pins its link instead of merely preferring it:
+   `ble=False` is **USB / COM only**, `ble=True` Bluetooth only, `wifi=True`
+   Wi-Fi only — ask for a link and that is the link you get, or an error.
+   `Bridge("relays")` picks one specific board over any of them, `port="COM7"`
+   one specific serial port.
 
    `espbridge` on the command line prints connection info; `espbridge ports`
    lists candidate serial ports; `espbridge scan` probes every attached board
@@ -317,15 +320,19 @@ again:
 ```python
 from espbridge import Bridge
 
-esp = Bridge("relays")                    # one name  -> that one board
+esp = Bridge()                            # one board  -> whichever answers
+esp = Bridge("relays")                    # one name   -> that one board
 esp = Bridge("c0:49:ef:d0:3f:e0")         # a MAC works too, same argument
 
-with Bridge(["relays", "sensors"]) as boards:   # a list -> exactly those
+with Bridge.all(["relays", "sensors"]) as boards:   # exactly those
     boards["relays"].gpio.write(2, 1)
 
-with Bridge() as boards:                  # no selector -> every board
+with Bridge.all() as boards:              # every board on the desk
     boards.each(lambda esp: esp.ping())
 ```
+
+`Bridge()` is one board and `Bridge.all()` is every board — nothing about how
+you call it changes the type you get back.
 
 That argument is the board's **identity** — its name, or its MAC if you never
 named it — and it works the same over USB, Bluetooth and Wi-Fi, because both
@@ -359,20 +366,20 @@ running both is down to ~10 KB of free heap.
 
 ### However many boards there are
 
-There is no separate API for this. One name gets you that board, a list gets you
-those, none gets you all of them — over USB, or over Wi-Fi with `wifi=True`:
+One extra call covers every scale: `Bridge.all()` opens all of them, and a list
+opens exactly the ones you name — over USB, or over Wi-Fi with `wifi=True`:
 
 ```python
 from espbridge import Bridge
 
-with Bridge(wifi=True) as boards:
+with Bridge.all(wifi=True) as boards:
     boards.wait_for(800, timeout=120)                  # they keep arriving
     boards.each(lambda esp: esp.ping())                # all of them, at once
 
     def blink(esp):                                    # ...or arbitrary work
         esp.gpio.mode(2, "output")
         esp.gpio.write(2, 1)
-    boards.each(blink)                                 # -> {mac: result}
+    boards.each(blink)                                 # -> {ident: result}
 
     boards["relays"].oled(addr=0x3c).clear()           # or just pick one
 ```
@@ -389,7 +396,7 @@ with Bridge(port="COM3") as usb:                       # once per board
 
 Dialling home is what scales: nothing tracks IP addresses, so DHCP churn, NAT
 and reboots stop mattering, and each board reconnects on its own with jittered
-backoff. You get the same [`BridgeSet`](#several-boards-at-once) as over USB and
+backoff. You get the same [`BridgeSet`](#however-many-boards-there-are) as over USB and
 every entry is an ordinary `Bridge` — sub-APIs, drivers and `esp.watch` behave
 identically. A board that comes back replaces its old entry (matched by MAC), and
 one that fails maps to its exception instead of failing the sweep. Full example:

@@ -138,8 +138,9 @@ def _register_connection(mcp: FastMCP, mgr: BridgeManager) -> None:
 
         name: the board's stored name, or its MAC — the way to pick one of
         several, over any link. port: serial port (e.g. "COM7" /
-        "/dev/ttyUSB0"); omit to auto-detect. ble: Bluetooth only, instead of
-        USB. password is the wireless link password (firmware default
+        "/dev/ttyUSB0"); omit to take the best link available, which is USB
+        first, then Bluetooth, then Wi-Fi. ble: Bluetooth only, instead of that
+        order. password is the wireless link password (firmware default
         "espbridge").
         """
         esp = mgr.connect(name=name, port=port, ble=True if ble else None,
@@ -164,10 +165,15 @@ def _register_connection(mcp: FastMCP, mgr: BridgeManager) -> None:
     @mcp.tool
     @guarded
     def bridge_scan_ble(timeout: float = 5.0) -> list[dict]:
-        """Scan for bridges advertising over Bluetooth (needs the [ble] extra)."""
+        """Scan for bridges advertising over Bluetooth (needs the [ble] extra).
+
+        Pass a board's "ident" to bridge_connect(name=...) — only one identity
+        fits an advertisement, so a named board reports no mac and vice versa.
+        """
         from ..transports.ble import find_ble_devices
 
-        return [{"name": d.name or None, "mac": d.mac, "rssi": d.rssi}
+        return [{"ident": d.ident, "name": d.name or None, "mac": d.mac or None,
+                 "rssi": d.rssi}
                 for d in find_ble_devices(timeout)]
 
     @mcp.tool

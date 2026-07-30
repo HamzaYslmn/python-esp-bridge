@@ -11,7 +11,9 @@ SSID = sys.argv[1] if len(sys.argv) > 1 else "your-ssid"
 PASSWORD = sys.argv[2] if len(sys.argv) > 2 else "your-password"
 TARGET = (sys.argv[3] if len(sys.argv) > 3 else "192.168.1.10", 6000)
 
-with Bridge() as esp:
+# ble=False: on the classic ESP32 the Wi-Fi radio can't come up over a live
+# Bluetooth session (the firmware refuses with NO_MEM), so use the cable.
+with Bridge(ble=False) as esp:
     st = esp.wifi.connect(SSID, PASSWORD)
     print(f"connected: ip={st.ip}")
     with esp.net.udp(5005) as sock:

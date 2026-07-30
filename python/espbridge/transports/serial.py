@@ -47,11 +47,25 @@ class SerialTransport:
     # frame is always queued to transmit while a reply streams back.
     max_inflight = 6400
 
-    def __init__(self, port: str, baud: int = 115200, usb_chip: str | None = None):
+    def __init__(self, port: str, baud: int = 115200, usb_chip: str | None = None,
+                 *, reset: bool = True):
         import serial
 
         self.usb_chip = usb_chip
-        self.ser = serial.Serial(port, baudrate=baud, timeout=0.05, write_timeout=2.0)
+        if reset:
+            self.ser = serial.Serial(port, baudrate=baud, timeout=0.05,
+                                     write_timeout=2.0)
+            return
+        # Opening a port asserts DTR/RTS, and on a DevKit those lines *are* the
+        # auto-reset circuit — so the plain open above reboots the board. Set
+        # them before opening to attach to a running board instead: that is what
+        # reset_on_open=False promises, and what keeps enumerating a fleet from
+        # rebooting boards that are already talking on another link.
+        self.ser = serial.Serial(baudrate=baud, timeout=0.05, write_timeout=2.0)
+        self.ser.dtr = False
+        self.ser.rts = False
+        self.ser.port = port
+        self.ser.open()
 
     def read(self) -> bytes:
         # One syscall: drain whatever's buffered, else block up to `timeout` for 1 byte.

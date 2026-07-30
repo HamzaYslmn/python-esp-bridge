@@ -24,8 +24,8 @@ import time
 
 import espbridge
 
-with espbridge.Bridge(wifi=True,
-                      on_connect=lambda esp: print(f"+ {esp.info.mac}")) as boards:
+with espbridge.Bridge.all(
+        wifi=True, on_connect=lambda esp: print(f"+ {esp.info.ident}")) as boards:
     print("waiting for boards (Ctrl-C to stop)")
     boards.wait_for(1, timeout=None)
     time.sleep(1.0)                      # let a few more arrive before the first sweep

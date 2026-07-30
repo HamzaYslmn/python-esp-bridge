@@ -20,7 +20,12 @@ def decode(symbols: list[tuple[int, int]]) -> bytes:
              if level == 1 and i > 0 and symbols[i - 1][0] == 0
              and 10 <= dur <= 110]
     if len(highs) < 40:
-        raise ValueError(f"short read: {len(highs)} bits")
+        # 0 means the line never moved: almost always nothing wired to that pin.
+        raise ValueError(
+            f"short read: {len(highs)}/40 bits — "
+            + ("no response from the sensor: check the data pin, 3V3/GND and "
+               "the 4.7k pull-up" if not highs else
+               "a partial frame, usually a missing pull-up or a long wire"))
     bits = highs[-40:]
     data = bytearray(5)
     for i, dur in enumerate(bits):

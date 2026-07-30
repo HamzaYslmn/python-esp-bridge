@@ -7,7 +7,7 @@ wrapper with the same blocking read()/write() interface as the serial one::
     esp = Bridge(wifi=True)             # find it with a UDP broadcast
 
 The socket can also arrive already connected — that is how a board that dialed
-home becomes an ordinary Bridge (see Bridge(wifi=True)).
+home becomes an ordinary Bridge (see Bridge.all(wifi=True)).
 """
 from __future__ import annotations
 

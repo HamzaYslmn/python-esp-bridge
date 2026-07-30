@@ -4,8 +4,9 @@ espbridge.drivers.oled.OLED drives true SSD1306s *and* the common SH1106 clones 
 as "SSD1306" (the Arduino Adafruit_SSD1306 equivalent — no code on the ESP32,
 drawing is plain PIL). Only genuine 1.3" SH1106 modules need a tweak:
 
-    uv run oled_ssd1306.py        # 0.96" SSD1306 / clones: just works
-    uv run oled_ssd1306.py 2      # 1.3" SH1106 (image shifted sideways? try 1..4)
+    uv run oled_ssd1306.py           # 0.96" SSD1306 / clones: just works
+    uv run oled_ssd1306.py relays    # the board with the screen, if you have several
+    uv run oled_ssd1306.py relays 2  # 1.3" SH1106 (image shifted sideways? try 1..4)
 
 Wiring (classic DevKit defaults): SDA -> GPIO21, SCL -> GPIO22, VCC -> 3V3, GND.
 """
@@ -16,9 +17,10 @@ import time
 from espbridge import Bridge
 from espbridge.drivers.oled import OLED
 
-colstart = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+board = sys.argv[1] if len(sys.argv) > 1 else None    # name or MAC
+colstart = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 
-with Bridge(ble=False) as esp:
+with Bridge(board, ble=False) as esp:
     oled = OLED(esp, colstart=colstart)
 
     # --- the Arduino sketch, line for line ---------------------------------

@@ -4,7 +4,7 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
 
     from espbridge import Bridge
 
-    with Bridge() as esp:                # Bluetooth first, then USB serial
+    with Bridge() as esp:                # USB first, then Bluetooth, then Wi-Fi
         esp.gpio.mode(2, "output")
         esp.gpio.write(2, 1)
         print(esp.adc.read(34))
@@ -56,7 +56,7 @@ def __getattr__(name):
         return AsyncBridge
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # Grouped by role, not alphabetised: this list is the shape of the public API.
 __all__ = [

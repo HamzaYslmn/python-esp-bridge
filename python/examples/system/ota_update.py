@@ -4,17 +4,20 @@
    with OTA)".
 2. Export a compiled binary (Sketch > Export Compiled Binary), then:
 
-       python ota_update.py path/to/Bridge.ino.bin
+       uv run ota_update.py path/to/Bridge.ino.bin
+       uv run ota_update.py path/to/Bridge.ino.bin relays   # a specific board
 
-Works over `Bridge(ble=...)` too — wireless firmware updates.
+Works over Bluetooth too — wireless firmware updates.
 """
 import sys
 
 from espbridge import Bridge
 
-binfile = sys.argv[1]
+if len(sys.argv) < 2:
+    raise SystemExit(f"usage: {sys.argv[0]} <firmware.bin> [board-name-or-mac]")
+binfile, board = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else None)
 
-with Bridge() as esp:
+with Bridge(board) as esp:
     old = esp.info.fw_version
     print(f"current firmware: {'.'.join(map(str, old))}")
     esp.ota.flash(binfile, progress=lambda done, total: print(

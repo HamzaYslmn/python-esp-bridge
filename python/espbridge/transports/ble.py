@@ -81,12 +81,28 @@ def _require_bleak():
         ) from None
 
 
+def _scan(coro_fn):
+    """Run a bleak scan, turning an unusable adapter into a NoDeviceError.
+
+    bleak raises when Bluetooth is off, missing or blocked by OS permissions,
+    and a traceback out of the scanner tells a user nothing they can act on.
+    NoDeviceError is also what lets the default transport order fall through to
+    USB serial on a machine with no Bluetooth at all (see bridge._candidates).
+    """
+    from bleak.exc import BleakError   # callers checked bleak is installed
+
+    try:
+        return asyncio.run(coro_fn())
+    except BleakError as e:
+        raise NoDeviceError(f"Bluetooth is unavailable: {e}") from None
+
+
 def find_ble_devices(timeout: float = 5.0) -> list[BleDeviceInfo]:
     """Scan for bridges advertising the BLE link service."""
     _require_bleak()
     from bleak import BleakScanner
 
-    async def _scan():
+    async def _run():
         found = await BleakScanner.discover(
             timeout=timeout, return_adv=True,
             service_uuids=[BLE_LINK_SERVICE_UUID],
@@ -96,7 +112,7 @@ def find_ble_devices(timeout: float = 5.0) -> list[BleDeviceInfo]:
             for dev, adv in found.values()
         ]
 
-    return asyncio.run(_scan())
+    return _scan(_run)
 
 
 def find_ble_devices_fast(match=None, *, settle: float = 0.4,
@@ -113,7 +129,7 @@ def find_ble_devices_fast(match=None, *, settle: float = 0.4,
     _require_bleak()
     from bleak import BleakScanner
 
-    async def _scan():
+    async def _run():
         seen: dict[str, BleDeviceInfo] = {}
 
         def _cb(dev, adv):
@@ -136,7 +152,7 @@ def find_ble_devices_fast(match=None, *, settle: float = 0.4,
             await scanner.stop()
         return sorted(seen.values(), key=lambda d: d.rssi, reverse=True)
 
-    return asyncio.run(_scan())
+    return _scan(_run)
 
 
 class BleTransport:
@@ -162,6 +178,7 @@ class BleTransport:
         _require_bleak()
         self.address = address
         self._rx: queue.Queue = queue.Queue()
+        self._closed = False
         self._chunk_size = 20  # write-without-response size; grows after MTU exchange
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever,
@@ -175,8 +192,23 @@ class BleTransport:
             raise
 
     def _run(self, coro, timeout: float):
+        from bleak.exc import BleakError
+
+        if self._closed:
+            # The loop is gone, so this coroutine would never be awaited — and
+            # Python reports that as a RuntimeWarning from deep inside asyncio.
+            # Writes after close() are real (a driver's __del__ flushing, say);
+            # say so plainly instead.
+            coro.close()
+            raise BridgeError("the Bluetooth link is closed")
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return fut.result(timeout)
+        try:
+            return fut.result(timeout)
+        except BleakError as e:
+            # A dropout mid-session surfaces as bleak's "Not connected", which
+            # no caller of this library should have to know about: everything
+            # that goes wrong on a link is a BridgeError.
+            raise BridgeError(f"Bluetooth link lost: {e}") from None
 
     async def _connect(self, address: str, timeout: float) -> None:
         from bleak import BleakClient
@@ -246,4 +278,5 @@ class BleTransport:
             self._run(self._disconnect(), timeout=5.0)
         except Exception:
             pass
+        self._closed = True         # after the disconnect, which goes via _run
         self._stop_loop()

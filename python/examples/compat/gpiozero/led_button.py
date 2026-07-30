@@ -3,7 +3,7 @@
 Wire a button between GPIO4 and GND (internal pull-up is used), LED on GPIO2
 (most DevKits have one on-board).
 """
-from signal import pause
+import time
 
 from gpiozero import LED, Button
 
@@ -21,7 +21,8 @@ button.when_released = led.off
 
 print("press the button (GPIO4) to light the LED (GPIO2) — Ctrl+C to quit")
 try:
-    pause()
+    while True:          # gpiozero scripts end in signal.pause(), which Windows
+        time.sleep(1)    # doesn't have; sleeping keeps the callbacks alive too
 except KeyboardInterrupt:
     pass
 finally:

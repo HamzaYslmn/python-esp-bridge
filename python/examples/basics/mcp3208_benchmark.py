@@ -13,7 +13,8 @@ Two ways to run without a real MCP3208 wired up:
 With a real MCP3208 wired (CS=GPIO5), the readings are real too.
 
 Run:  uv run python mcp3208_benchmark.py [PORT]
-      (pass a port like COM3 to force USB — auto-detect may pick a slow BLE link)
+      (USB only — a BLE link would measure the radio, not the bridge; see
+      wireless/usb_vs_ble_benchmark.py for that comparison)
 """
 import sys
 import threading
@@ -51,7 +52,7 @@ def rate(esp, workers):
     return sum(counts) / (time.perf_counter() - t0)
 
 
-with Bridge(port=sys.argv[1] if len(sys.argv) > 1 else None) as esp:
+with Bridge(port=sys.argv[1] if len(sys.argv) > 1 else None, ble=False) as esp:
     print(f"board: {esp.info.ident}  fw={esp.info.fw_version}")
     esp.spi.init(sck=18, miso=19, mosi=23, freq=FREQ, mode=0)
     adc = esp.mcp3208(cs=CS, vref=3.3)

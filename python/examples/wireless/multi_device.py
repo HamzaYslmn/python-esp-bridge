@@ -13,8 +13,8 @@ fits the Bluetooth advertisement):
 """
 import espbridge
 
-# No selector, so Bridge() opens every bridge that's plugged in.
-with espbridge.Bridge() as boards:
+# Bridge() is one board; Bridge.all() is every bridge that's plugged in.
+with espbridge.Bridge.all() as boards:
     print(f"found {len(boards)} board(s):")
     for esp in boards:
         info = esp.info
@@ -35,5 +35,5 @@ with espbridge.Bridge() as boards:
         print("light sensor:", sensors.adc.read_mv(34), "mV")
 
 # To open specific boards and nothing else, name them:
-#     with espbridge.Bridge("relays") as esp:                  # one
-#     with espbridge.Bridge(["relays", "sensors"]) as boards:  # several
+#     with espbridge.Bridge("relays") as esp:                      # one
+#     with espbridge.Bridge.all(["relays", "sensors"]) as boards:  # several

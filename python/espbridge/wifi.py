@@ -179,9 +179,11 @@ class Wifi:
         """Provision the Wi-Fi transport link (send this over USB or Bluetooth).
 
         ``server=""`` is listen mode: the board waits on ``port`` for
-        ``Bridge(host=...)``. A ``"host"`` or ``"host:port"`` makes it dial your
-        host and reconnect forever, where ``Bridge(wifi=True)`` picks it up —
-        the mode to use past a handful of boards.
+        ``Bridge(host=...)``, and answers the UDP discovery ``Bridge(wifi=True)``
+        broadcasts. A ``"host"`` or ``"host:port"`` makes it dial your host and
+        reconnect forever instead; a dialling board is not discoverable, so
+        ``Bridge.all(wifi=True)`` collects those as they arrive — the mode to use
+        past a handful of boards.
 
         Credentials persist in NVS, so the board comes back on Wi-Fi after every
         reboot with no reflash. Same password as Bluetooth.

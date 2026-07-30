@@ -106,7 +106,7 @@ void loop() { /* yours, unless run() was called */ }
 | `usb.begin()` | starts the core; USB serial link |
 | `ble.begin(password = "espbridge")` | BLE link; `""` = open access |
 | `wifi.begin(ssid, pass)` | joins and **listens** on port 3232 |
-| `wifi.begin(ssid, pass, "10.0.0.5")` | **dials out** to your host, reconnecting forever (`Bridge(wifi=True)` accepts it) |
+| `wifi.begin(ssid, pass, "10.0.0.5")` | **dials out** to your host, reconnecting forever (`Bridge.all(wifi=True)` accepts it) |
 | `wifi.begin()` | uses credentials provisioned over USB/BLE (NVS) |
 | `wifi.end()` | drops the link, gives the Wi-Fi heap back |
 | `run()` | deletes the loop task and never returns |

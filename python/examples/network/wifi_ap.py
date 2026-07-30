@@ -14,7 +14,9 @@ import time
 
 from espbridge import Bridge
 
-with Bridge() as esp:
+# ble=False: on the classic ESP32 the Wi-Fi radio can't come up over a live
+# Bluetooth session (the firmware refuses with NO_MEM), so use the cable.
+with Bridge(ble=False) as esp:
     ip = esp.wifi.ap_start("espbridge-demo", "letmein123", channel=6)
     print(f"AP 'espbridge-demo' up at {ip} — join it (60 s) ...")
     try:

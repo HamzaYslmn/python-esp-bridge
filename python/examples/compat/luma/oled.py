@@ -3,8 +3,9 @@
 Identical to luma on a Raspberry Pi except the serial interface line:
 ``i2c(port=1, address=0x3C)`` becomes ``LumaI2C(esp.i2c, 0x3C)``.
 
-    uv run luma/oled.py            # sh1106 (default)
-    uv run luma/oled.py ssd1306    # true SSD1306
+    uv run luma/oled.py                   # sh1106 (default)
+    uv run luma/oled.py ssd1306           # true SSD1306
+    uv run luma/oled.py sh1106 relays     # ...on a named board, if you have several
 
 For panel adjustments (contrast, vertical offset, mirroring, clone column
 offset) use the native driver instead — espbridge.drivers.oled.OLED has a named
@@ -38,8 +39,9 @@ class sh1106_shifted(sh1106):
 driver = {"ssd1306": ssd1306, "sh1106": sh1106_shifted}[
     sys.argv[1].lower() if len(sys.argv) > 1 else "sh1106"
 ]
+board = sys.argv[2] if len(sys.argv) > 2 else None    # name or MAC
 
-with Bridge() as esp:
+with Bridge(board) as esp:
     # SSD1306/SH1106 are specced to 400 kHz but clone modules usually run
     # fine at 1 MHz — drop back to 400_000 if you see artifacts.
     esp.i2c.init(sda=21, scl=22, freq=1_000_000)

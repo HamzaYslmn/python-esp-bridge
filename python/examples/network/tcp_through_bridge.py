@@ -9,7 +9,9 @@ from espbridge import Bridge
 SSID = sys.argv[1] if len(sys.argv) > 1 else "your-ssid"
 PASSWORD = sys.argv[2] if len(sys.argv) > 2 else "your-password"
 
-with Bridge() as esp:
+# ble=False: on the classic ESP32 the Wi-Fi radio can't come up over a live
+# Bluetooth session (the firmware refuses with NO_MEM), so use the cable.
+with Bridge(ble=False) as esp:
     print(f"joining {SSID!r} ...")
     st = esp.wifi.connect(SSID, PASSWORD)
     print(f"connected: ip={st.ip} rssi={st.rssi} dBm")

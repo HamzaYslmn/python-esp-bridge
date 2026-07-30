@@ -1,8 +1,9 @@
 """Deep sleep: put the board to sleep for 10 s, watch it come back.
 
-wake_cause() works on every build. Entering sleep needs IRAM the BLE link
-occupies on classic ESP32 — build the firmware with BRIDGE_ENABLE_BLE 0
-there, or use an S2/S3/C3/C6 board.
+wake_cause() works on every build. Entering sleep needs IRAM the BLE stack
+occupies on classic ESP32 — and that is about how the *firmware* was built,
+not how you connect, so a USB cable doesn't help: build with
+BRIDGE_ENABLE_BLE 0 there, or use an S2/S3/C3/C6 board.
 """
 import time
 
