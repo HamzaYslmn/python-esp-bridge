@@ -18,14 +18,14 @@ import time
 
 from espbridge import Bridge
 
-target = sys.argv[1] if len(sys.argv) > 1 else True
+target = sys.argv[1] if len(sys.argv) > 1 else None   # name or MAC
 
-with Bridge(ble=target, password="espbridge") as esp:
+with Bridge(target, ble=True, password="espbridge") as esp:
     def heap(tag):
         print(f"  {tag:<28} {esp.free_heap()['free']:>6} B free, "
               f"ping {esp.ping() * 1000:.0f} ms")
 
-    print(f"BLE link up: {esp.info.name or esp.info.mac}")
+    print(f"BLE link up: {esp.info.ident}")
     heap("radio off")
 
     mac = esp.espnow.begin()                       # radio #2

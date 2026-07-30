@@ -17,7 +17,7 @@ built-in peripheral tools before serving. See docs/MCP.md for the full reference
 from espbridge.mcp import BridgeManager, build_server
 
 # Construct the manager explicitly so the custom tool below can reach the board.
-# Pass port="COM7" / ble=True / name="relays" here to pin a specific device;
+# Pass "relays" (a name or MAC) / port="COM7" / ble=True here to pin one board;
 # with no arguments it auto-detects the USB serial port.
 mgr = BridgeManager()
 server = build_server(mgr)

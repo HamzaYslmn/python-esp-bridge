@@ -19,18 +19,18 @@ import time
 
 from espbridge import Bridge, find_ble_devices
 
-picks = sys.argv[1:] or [d.address for d in find_ble_devices()]
+picks = sys.argv[1:] or [d.mac for d in find_ble_devices()]
 if not picks:
     sys.exit("no boards advertising over Bluetooth")
 
 boards = []
 try:
     for sel in picks:
-        esp = Bridge(ble=sel, password="espbridge")
+        esp = Bridge(sel, ble=True, password="espbridge")
         boards.append(esp)
         mac = esp.espnow.begin()       # set up at full speed...
         esp.power_mode("battery")      # ...then relax the radio
-        me = esp.info.name or mac
+        me = esp.info.ident
         print(f"{me}: Bluetooth link up (battery profile), ESP-NOW on {mac}")
         esp.espnow.on_receive(
             lambda src, data, rssi, me=me:
@@ -44,7 +44,7 @@ try:
     while True:
         n += 1
         for esp in boards:
-            esp.espnow.broadcast(f"{esp.info.name or esp.info.mac}: tick {n}".encode())
+            esp.espnow.broadcast(f"{esp.info.ident}: tick {n}".encode())
         time.sleep(1)
 except KeyboardInterrupt:
     pass

@@ -87,7 +87,7 @@ class WatchEvent:
         return bool(self.state)
 
     @classmethod
-    def parse(cls, payload: bytes) -> "WatchEvent | None":
+    def parse(cls, payload: bytes) -> WatchEvent | None:
         """Decode a WATCH_EVT payload (id u8 | state u8 | value i32 | millis u32)."""
         if len(payload) < 10:
             return None

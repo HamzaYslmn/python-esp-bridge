@@ -11,6 +11,7 @@ one. Notifications land in a queue that read() drains.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import queue
 import threading
 from dataclasses import dataclass
@@ -20,39 +21,59 @@ from ..constants import BLE_LINK_RX_UUID, BLE_LINK_SERVICE_UUID, BLE_LINK_TX_UUI
 from ..errors import BridgeError, NoDeviceError
 
 
-ADV_NAME_PREFIX = "espbridge_"  # firmware advertises espbridge_<mac>[_<name>]
+# Bridges advertise as "espbridge_<identity>", where the identity is the stored
+# name or, until one is set, the 12-hex MAC. The prefix marks the board as ours
+# in any BLE scanner; discovery additionally filters on BLE_LINK_SERVICE_UUID.
+ADV_NAME_PREFIX = "espbridge_"
 
 _RX_SHUTDOWN = object()  # sentinel put on the RX queue to wake a blocked read()
 
 
 @dataclass(frozen=True)
 class BleDeviceInfo:
-    name: str     # advertised name: "espbridge_c049efd03fe0" or "espbridge_c049efd03fe0_relays"
-    address: str  # MAC on Windows/Linux, CoreBluetooth UUID on macOS
+    advertised: str  # the raw advertised name, "espbridge_<identity>"
+    address: str     # MAC on Windows/Linux, CoreBluetooth UUID on macOS
     rssi: int
 
-    def _parts(self) -> tuple[str, str]:
-        rest = self.name.removeprefix(ADV_NAME_PREFIX)
-        hexpart, _, custom = rest.partition("_")
-        if len(hexpart) == 12 and all(c in "0123456789abcdef" for c in hexpart):
-            return hexpart, custom
-        return "", ""
+    @property
+    def _advertised_identity(self) -> str:
+        """Whatever follows the prefix; "" if this device isn't one of ours."""
+        rest = self.advertised.removeprefix(ADV_NAME_PREFIX)
+        return "" if rest == self.advertised else rest
 
     @property
     def mac(self) -> str:
-        """Bridge MAC (matches Info.mac) parsed from the advertised name."""
-        hexpart, _ = self._parts()
-        return ":".join(hexpart[i : i + 2] for i in range(0, 12, 2)) if hexpart else ""
+        """The board's MAC, when the advertisement carries it — i.e. while the
+        board is unnamed, since only one identity fits. "" otherwise, and
+        ``Bridge(mac=...)`` then falls back to asking each board over the link.
+
+        It is *not* ``address``, which is the OS's handle for the radio — a UUID
+        on macOS, and elsewhere the Bluetooth MAC, which differs from the base
+        MAC the firmware reports.
+        """
+        hexpart = self._advertised_identity
+        if len(hexpart) != 12 or any(c not in "0123456789abcdef" for c in hexpart):
+            return ""
+        return ":".join(hexpart[i : i + 2] for i in range(0, 12, 2))
 
     @property
-    def device_name(self) -> str:
-        """User-assigned name (espbridge set-name), "" when unset."""
-        return self._parts()[1]
+    def name(self) -> str:
+        """Stored device name (see Bridge.set_name), "" while unnamed.
+
+        Whole, never truncated: BRIDGE_NAME_MAX is chosen so ``espbridge_`` plus
+        the name fits the advertisement, so this is the string SYS_INFO reports.
+        """
+        return "" if self.mac else self._advertised_identity
+
+    @property
+    def ident(self) -> str:
+        """What to pass to ``Bridge()`` for this board — mirrors ``Info.ident``."""
+        return self.name or self.mac
 
 
 def _require_bleak():
     try:
-        import bleak  # noqa: F401
+        import bleak  # noqa: F401 — importing IS the availability probe
     except ImportError:
         raise BridgeError(
             "the Bluetooth transport needs the 'bleak' package — "
@@ -197,10 +218,8 @@ class BleTransport:
 
     async def _disconnect(self) -> None:
         if self._client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._client.disconnect()
-            except Exception:
-                pass
 
     def read(self) -> bytes:
         # Block until a notification lands (or close() injects the sentinel) —

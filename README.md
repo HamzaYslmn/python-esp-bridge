@@ -40,7 +40,8 @@ are implemented in Python where they are easy to read, test and extend.
    Prefer building it yourself? Install the **`python esp bridge`** library
    (Arduino IDE Library Manager), open *File → Examples → python esp bridge →
    Bridge*, pick partition scheme *Huge APP*, hit Upload. The whole sketch is
-   `EspBridge.begin();`. Details: [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
+   three lines: `EspBridge.usb.begin(); EspBridge.ble.begin(); EspBridge.run();`
+   Details: [`docs/FIRMWARE.md`](docs/FIRMWARE.md).
 2. **Install the Python library** on the Pi/PC — with pip:
 
    ```sh
@@ -83,18 +84,19 @@ are implemented in Python where they are easy to read, test and extend.
        status, body = esp.net.http_get("http://example.com/")  # ...as your modem
    ```
 
-   Or with **no USB cable at all** — boards advertise as `espbridge_<mac>`
-   (plus your custom name) and require a password (default `espbridge`,
-   change it via `EspBridge.begin("yourpassword")` in the sketch):
+   Or with **no USB cable at all** — boards advertise as `espbridge_<name>` and
+   require a password (default `espbridge`, change it via
+   `EspBridge.ble.begin("yourpassword")` in the sketch):
 
    ```python
    with Bridge(ble=True, password="espbridge") as esp:   # over Bluetooth
        esp.gpio.write(2, 1)
    ```
 
-   `Bridge()` prefers Bluetooth and falls back to USB serial; pass
-   `ble=False` for **USB / COM only** (Bluetooth off), `ble="name"` to pin a
-   specific board over Bluetooth, or `port="COM7"` for a specific serial port.
+   `Bridge()` prefers Bluetooth and falls back to USB serial. Each transport
+   keyword pins its link instead: `ble=False` is **USB / COM only**, `ble=True`
+   Bluetooth only, `wifi=True` Wi-Fi only. `Bridge("relays")` picks one specific
+   board over any of them, `port="COM7"` one specific serial port.
 
    `espbridge` on the command line prints connection info; `espbridge ports`
    lists candidate serial ports; `espbridge scan` probes every attached board
@@ -308,19 +310,90 @@ Antigravity, Ollama): [`docs/MCP.md`](docs/MCP.md).**
 
 ### Multiple ESP32s
 
-Give each board a persistent name once (`espbridge -p COM7 set-name relays` —
-stored in the ESP32's flash, survives reboots and port renumbering), then:
+Name each board once (`espbridge -p COM7 set-name relays` — stored in its flash,
+survives reboots and port renumbering), then never think about ports or MACs
+again:
 
 ```python
-import espbridge
 from espbridge import Bridge
 
-esp = Bridge(name="relays")                  # or Bridge(mac="aa:bb:cc:dd:ee:ff")
+esp = Bridge("relays")                    # one name  -> that one board
+esp = Bridge("c0:49:ef:d0:3f:e0")         # a MAC works too, same argument
 
-with espbridge.connect_all() as boards:    # or just open all of them
-    boards.by_name("sensors").adc.read(34)
-    boards.by_name("relays").gpio.write(2, 1)
+with Bridge(["relays", "sensors"]) as boards:   # a list -> exactly those
+    boards["relays"].gpio.write(2, 1)
+
+with Bridge() as boards:                  # no selector -> every board
+    boards.each(lambda esp: esp.ping())
 ```
+
+That argument is the board's **identity** — its name, or its MAC if you never
+named it — and it works the same over USB, Bluetooth and Wi-Fi, because both
+halves travel in the Bluetooth advertisement, the Wi-Fi discovery reply and
+`SYS_INFO` alike. It is never a COM port or an IP address; those have their own
+keywords, so nothing is guessed from the shape of the string.
+
+Names are capped at 16 characters, which is what keeps the advertised
+`espbridge_<name>` inside the 26 the Bluetooth scan response fits — a name that
+would be cut short over the air is refused instead. Asking for boards that
+aren't all there is an error, not a partial run.
+
+### Over Wi-Fi
+
+The same protocol runs over TCP, so a board needs neither a cable nor
+Bluetooth range. Provision it once — credentials live in the board's flash, so
+it rejoins on every boot with no reflash and no password in your sketch:
+
+```python
+with Bridge(port="COM3") as usb:
+    usb.wifi.link_setup("my-ssid", "my-password")   # board joins and listens
+
+esp = Bridge(wifi=True)              # found by UDP broadcast on the LAN
+esp = Bridge(host="192.168.1.50")    # ...or address it directly
+```
+
+Round trips run ~7-8 ms (versus 2 ms over USB), and the board answers a few
+hundred requests a second. Keep Bluetooth off on a latency-sensitive board:
+Wi-Fi modem sleep has to stay enabled while BLE is up, and a classic ESP32
+running both is down to ~10 KB of free heap.
+
+### However many boards there are
+
+There is no separate API for this. One name gets you that board, a list gets you
+those, none gets you all of them — over USB, or over Wi-Fi with `wifi=True`:
+
+```python
+from espbridge import Bridge
+
+with Bridge(wifi=True) as boards:
+    boards.wait_for(800, timeout=120)                  # they keep arriving
+    boards.each(lambda esp: esp.ping())                # all of them, at once
+
+    def blink(esp):                                    # ...or arbitrary work
+        esp.gpio.mode(2, "output")
+        esp.gpio.write(2, 1)
+    boards.each(blink)                                 # -> {mac: result}
+
+    boards["relays"].oled(addr=0x3c).clear()           # or just pick one
+```
+
+Which end opens the socket is a provisioning detail, not something you ask about
+here: boards left in listen mode answer a UDP broadcast and get dialled, and
+boards told to dial home connect in and go on arriving.
+
+```python
+with Bridge(port="COM3") as usb:                       # once per board
+    usb.wifi.link_setup("ssid", "pw")                  # listen mode, or...
+    usb.wifi.link_setup("ssid", "pw", server="192.168.1.10")   # ...dial home
+```
+
+Dialling home is what scales: nothing tracks IP addresses, so DHCP churn, NAT
+and reboots stop mattering, and each board reconnects on its own with jittered
+backoff. You get the same [`BridgeSet`](#several-boards-at-once) as over USB and
+every entry is an ordinary `Bridge` — sub-APIs, drivers and `esp.watch` behave
+identically. A board that comes back replaces its old entry (matched by MAC), and
+one that fails maps to its exception instead of failing the sweep. Full example:
+[`python/examples/network/many_boards.py`](python/examples/network/many_boards.py).
 
 ## Troubleshooting
 
@@ -349,7 +422,7 @@ Library Manager); the Python package lives under `python/`.
 
 | path | what |
 |------|------|
-| [`src/`](src/) + [`examples/Bridge/`](examples/Bridge/) | Arduino library — the flash-once firmware (C/C++) + its example sketch (`EspBridge.begin()`) |
+| [`src/`](src/) + [`examples/Bridge/`](examples/Bridge/) | Arduino library — the flash-once firmware (C/C++) + its example sketch (`EspBridge.usb/ble/wifi.begin()`) |
 | `library.properties`, `keywords.txt` | Arduino Library Manager metadata (at the repo root, as the registry requires) |
 | [`python/`](python/) | Python package `python-esp-bridge` (import `espbridge`) with its own `tests/` and grouped `examples/` (`basics/`, `devices/`, `system/`, `wireless/`, `network/`, `displays/`, `compat/`) |
 | [`docs/MCP.md`](docs/MCP.md) | MCP server (`espbridge-mcp`): drive the bridge from an AI agent |

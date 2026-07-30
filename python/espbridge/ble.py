@@ -48,7 +48,7 @@ class Advertisement:
 class Characteristic:
     """A characteristic of the local GATT server."""
 
-    def __init__(self, ble: "Ble", char_id: int, uuid_: bytes):
+    def __init__(self, ble: Ble, char_id: int, uuid_: bytes):
         self._ble = ble
         self.char_id = char_id
         self.uuid = uuid_
@@ -66,7 +66,7 @@ class Characteristic:
 class GattClient:
     """Connection to a remote BLE peripheral (one at a time)."""
 
-    def __init__(self, ble: "Ble"):
+    def __init__(self, ble: Ble):
         self._ble = ble
         self.connected = True
 

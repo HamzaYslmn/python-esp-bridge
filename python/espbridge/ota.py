@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from . import constants as C
 from .errors import RemoteError, needs_fw

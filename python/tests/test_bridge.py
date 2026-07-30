@@ -6,7 +6,8 @@ import pytest
 from espbridge import constants as C
 from espbridge.bridge import Bridge
 from espbridge.constants import Cap, ChipModel, Status
-from espbridge.errors import BridgeTimeoutError, ProtocolError, RemoteError
+from espbridge.errors import (BridgeTimeoutError, NoDeviceError, ProtocolError,
+                             RemoteError)
 from fake_firmware import FakeFirmware
 
 
@@ -246,3 +247,80 @@ def test_concurrent_requests_correlate_by_seq(bridge):
     for t in threads:
         t.join()
     assert not errors
+
+
+def test_advertised_identity_parses():
+    """The advert is "espbridge_<identity>" — the prefix marks it as ours, and
+    the identity is the name, or the MAC while the board has no name."""
+    from espbridge.transports.ble import BleDeviceInfo
+
+    named = BleDeviceInfo("espbridge_relays", "C0:49:EF:D0:3F:E2", -50)
+    assert named.name == "relays"      # not "rel"
+    assert named.ident == "relays"
+    assert named.mac == ""             # only one identity fits an advert
+
+    bare = BleDeviceInfo("espbridge_c049efd03fe0", "C0:49:EF:D0:3F:E2", -50)
+    assert bare.mac == "c0:49:ef:d0:3f:e0"
+    assert bare.name == ""
+    assert bare.ident == "c0:49:ef:d0:3f:e0"
+
+    junk = BleDeviceInfo("SomeOtherDevice", "AA:BB:CC:DD:EE:FF", -50)
+    assert junk.ident == "" and junk.mac == "" and junk.name == ""
+
+
+@pytest.mark.parametrize("advert,target", [
+    ("espbridge_relays", "relays"),                       # named board, by name
+    ("espbridge_c049efd03fe0", "c0:49:ef:d0:3f:e0"),      # unnamed, by MAC
+])
+def test_ble_selection_matches_the_advertised_identity(monkeypatch, advert, target):
+    import espbridge.transports.ble as ble_mod
+    from espbridge.transports.ble import BleDeviceInfo
+
+    # address is the OS handle for the radio — deliberately NOT the base MAC.
+    adv = BleDeviceInfo(advert, "C0:49:EF:D0:3F:E2", -50)
+
+    seen = []
+    monkeypatch.setattr(ble_mod, "find_ble_devices_fast",
+                        lambda pred: seen.append(pred(adv)) or [])
+    monkeypatch.setattr(ble_mod, "find_ble_devices", lambda *a, **k: [])
+    with pytest.raises(NoDeviceError):
+        Bridge(target, ble=True)
+    assert seen == [True], f"{advert!r} must satisfy {target!r}"
+
+
+def test_ble_mac_selection_falls_back_to_asking_over_the_link(monkeypatch):
+    """A named board advertises its name, not its MAC, so mac= can't match the
+    advert — it must connect and ask instead of giving up."""
+    import espbridge.transports.ble as ble_mod
+    from espbridge.transports.ble import BleDeviceInfo
+
+    adv = BleDeviceInfo("espbridge_relays", "C0:49:EF:D0:3F:E2", -50)
+    monkeypatch.setattr(ble_mod, "find_ble_devices_fast", lambda pred: [])
+    monkeypatch.setattr(ble_mod, "find_ble_devices", lambda *a, **k: [adv])
+
+    fake = FakeFirmware(mac="c049efd03fe0", name="relays")
+    fake.boot()
+    monkeypatch.setattr(ble_mod, "BleTransport", lambda *a, **k: fake.transport)
+    esp = Bridge(mac="c0:49:ef:d0:3f:e0", ble=True, upgrade_baud=False)
+    try:
+        assert esp.info.name == "relays"
+    finally:
+        esp.close()
+
+
+def test_ble_selection_rejects_a_board_that_answers_differently(monkeypatch):
+    """An advertisement is a broadcast, so SYS_INFO gets the final word.
+
+    Connecting to the wrong board and reporting success is far worse than failing.
+    """
+    import espbridge.transports.ble as ble_mod
+    from espbridge.transports.ble import BleDeviceInfo
+
+    lying = BleDeviceInfo("espbridge_relays", "C0:49:EF:D0:3F:E2", -50)
+    monkeypatch.setattr(ble_mod, "find_ble_devices_fast", lambda pred: [lying])
+
+    fake = FakeFirmware(mac="c049efd0ffff", name="something-else")
+    fake.boot()
+    monkeypatch.setattr(ble_mod, "BleTransport", lambda *a, **k: fake.transport)
+    with pytest.raises(NoDeviceError):
+        Bridge("relays", ble=True, upgrade_baud=False)

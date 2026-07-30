@@ -5,6 +5,7 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/radio.h"
+#include "espbridge/link.h"
 #include <WiFi.h>
 
 static bool scanning = false;
@@ -96,7 +97,9 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x01: {  // SCAN (async)
       // Channel-hopping during a scan disrupts ESP-NOW: peers on other channels
       // cannot be reached while the radio sweeps. See PROTOCOL.md for details.
+      // It also stalls the Wi-Fi transport link for seconds, so refuse there.
       if (scanning) { proto_reply_err(seq, cmd, ST_BUSY); return; }
+      if (link_tcp_enabled()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       if (!radio_acquire(0)) { proto_reply_err(seq, cmd, ST_NO_MEM); return; }
       WiFi.mode(radio_held(RADIO_AP) ? WIFI_MODE_APSTA : WIFI_MODE_STA);
       if (WiFi.scanNetworks(true, true) == WIFI_SCAN_FAILED) {
@@ -124,6 +127,9 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     }
 
     case 0x03:  // DISCONNECT
+      // Refused while the transport link is armed: the host would be cutting the
+      // branch it sits on. WIFI_LINK_STOP first if that is really wanted.
+      if (link_tcp_enabled()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
       // wifioff=false: radio_release decides the power-off; dropping STA mode
       // here would kill the STA interface a co-resident ESP-NOW rides on.
       WiFi.disconnect(false, false);
@@ -187,6 +193,56 @@ void wifi_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       proto_reply_ok(seq, cmd);
       break;
     }
+
+#if BRIDGE_WIFI_LINK
+    case 0x08: {  // LINK_SETUP: ssid|pass|server|port u16|flags u8
+      char ssid[33], pass[65], srv[65];
+      const uint8_t* q = p; uint16_t left = len;
+      if (!take_str(q, left, ssid, sizeof(ssid)) || !take_str(q, left, pass, sizeof(pass)) ||
+          !take_str(q, left, srv, sizeof(srv)) || left < 3) {
+        proto_reply_err(seq, cmd, ST_BAD_ARGS);
+        return;
+      }
+      uint16_t port = read_be16(q);
+      uint8_t flags = q[2];
+      if (!link_tcp_configure(ssid, pass, srv, port, flags & 0x01)) {
+        proto_reply_err(seq, cmd, ST_BAD_ARGS);
+        return;
+      }
+      if (flags & 0x02) {
+        // Inherit the BLE password so one board has one secret; link_tcp_begin
+        // falls back to the library default when this build has no BLE.
+        const char* pw = link_ble_enabled() ? link_ble_password() : nullptr;
+        if (!link_tcp_begin(ssid, pass, srv, port, pw)) {
+          proto_reply_err(seq, cmd, ST_NO_MEM);
+          return;
+        }
+      }
+      proto_reply_ok(seq, cmd);
+      break;
+    }
+
+    case 0x09:  // LINK_STOP — drop the link and forget the stored config
+      // Replying first: stopping the link kills the socket this reply would
+      // otherwise leave on, and the host is waiting for it.
+      proto_reply_ok(seq, cmd);
+      proto_tx_flush();
+      link_tcp_forget();
+      link_tcp_stop();
+      break;
+
+    case 0x0A: {  // LINK_STATUS -> state u8|ip[4]|port u16|peer u8|rx_dropped u32
+      uint8_t buf[12];
+      buf[0] = link_tcp_state();
+      uint32_t ip = link_tcp_ip();
+      memcpy(buf + 1, &ip, 4);  // already network byte order, as elsewhere here
+      write_be16(buf + 5, link_tcp_port());
+      buf[7] = link_tcp_up() ? 1 : 0;
+      write_be32(buf + 8, link_tcp_tx_errors());
+      proto_reply(seq, cmd, buf, 12);
+      break;
+    }
+#endif
 
     default:
       proto_reply_err(seq, cmd, ST_UNKNOWN_CMD);

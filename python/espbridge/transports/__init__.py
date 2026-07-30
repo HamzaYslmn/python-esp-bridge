@@ -18,13 +18,16 @@ unbounded, the serial default):
     burst_window: int      # same cap for fire-and-forget send(); past it send()
                            # inserts a ping fence to drain the in-flight window
 """
-from .serial import PortInfo, SerialTransport, autodetect_port, find_ports
+from .serial import PortInfo, SerialTransport, find_ports
 from .mock import MockTransport
+from .tcp import TcpTransport, WifiDeviceInfo, find_wifi_devices
 
 __all__ = [
+    "MockTransport",
     "PortInfo",
     "SerialTransport",
-    "MockTransport",
-    "autodetect_port",
+    "TcpTransport",
+    "WifiDeviceInfo",
     "find_ports",
+    "find_wifi_devices",
 ]

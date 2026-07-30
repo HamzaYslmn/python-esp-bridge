@@ -5,8 +5,9 @@ import argparse
 import sys
 
 from . import __version__
+from . import constants
 from ._log import log
-from .bridge import Bridge, connect_all
+from .bridge import Bridge, BridgeSet
 from .errors import BridgeError
 from .transports import find_ports
 
@@ -16,8 +17,8 @@ def _print_info(esp: Bridge) -> None:
     assert info is not None
     fw = ".".join(map(str, info.fw_version))
     print(f"name      : {info.name or '(unnamed — set with `espbridge set-name`)'}")
-    print(f"chip      : {info.chip.name} rev {info.chip_rev}")
     print(f"mac       : {info.mac}")
+    print(f"chip      : {info.chip.name} rev {info.chip_rev}")
     print(f"firmware  : v{fw} (protocol v{info.protocol})")
     print(f"flash     : {info.flash_mb} MB")
     print(f"gpio count: {info.gpio_count}")
@@ -37,36 +38,178 @@ def _force_utf8_output() -> None:
             pass
 
 
-def main(argv: list[str] | None = None) -> int:
-    _force_utf8_output()
+def _connect_kwargs(args) -> dict:
+    """Bridge() settings from the global options."""
+    kwargs = {"upgrade_baud": not args.no_baud_upgrade, "name": args.name,
+              "port": args.port}
+    if args.host:
+        kwargs.update(host=args.host, tcp_port=args.tcp_port)
+    elif args.wifi:
+        kwargs.update(wifi=True, tcp_port=args.tcp_port)
+    elif args.usb:
+        kwargs["ble"] = False
+    elif args.ble:
+        kwargs["ble"] = True
+    if args.password is not None:
+        kwargs["password"] = args.password
+    return kwargs
+
+
+# ---- subcommands (one per `sub.add_parser(...).set_defaults(fn=...)`) ---------
+
+
+def cmd_ports(args) -> int:
+    ports = find_ports()
+    if not ports:
+        print("no ESP32-like serial ports found")
+        return 1
+    for p in ports:
+        print(f"{p.device}\t{p.usb_chip}\t{p.description}")
+    return 0
+
+
+def cmd_drivers(args) -> int:
+    from .drivers import driver_names, driver_source
+
+    names = driver_names()
+    if not names:
+        print("no drivers registered")
+        return 0
+    width = max(len(n) for n in names) + len("esp.(...)")
+    for n in names:
+        print(f"{'esp.' + n + '(...)':<{width}}  {driver_source(n)}")
+    print("\nWrite or install your own — see docs/DRIVERS.md")
+    return 0
+
+
+def cmd_scan(args) -> int:
+    if args.scan_ble:
+        from .transports.ble import find_ble_devices
+
+        devs = find_ble_devices()
+        if not devs:
+            print("no bridges advertising over Bluetooth")
+            return 1
+        # One column, because only one identity fits an advertisement: a named
+        # board broadcasts its name, an unnamed one its MAC. Either way this is
+        # the string to pass to Bridge().
+        print(f"{'DEVICE':<20s} RSSI")
+        for d in devs:
+            print(f"{d.ident or '(unknown)':<20s} {d.rssi} dBm")
+        return 0
+
+    if args.scan_wifi:
+        from .transports.tcp import find_wifi_devices
+
+        devs = find_wifi_devices(port=args.tcp_port)
+        if not devs:
+            print("no bridges answered the Wi-Fi discovery broadcast "
+                  "(dial-home boards do not answer — they connect to you; "
+                  "use Bridge(wifi=True))")
+            return 1
+        print(f"{'NAME':<14s} {'MAC':<18s} ADDRESS")
+        for d in devs:
+            print(f"{d.name or '-':<14s} {d.mac:<18s} {d.host}:{d.port}")
+        return 0
+
+    ports = find_ports()
+    if not ports:
+        print("no ESP32-like serial ports found")
+        return 1
+    print(f"{'PORT':<12s} {'NAME':<14s} {'MAC':<18s} {'CHIP':<10s} FW")
+    rc = 0
+    for p in ports:
+        try:
+            # skip the baud upgrade so each port is probed faster
+            with Bridge(port=p.device, upgrade_baud=False) as esp:
+                info = esp.info
+                fw = ".".join(map(str, info.fw_version))
+                print(f"{p.device:<12s} {info.name or '-':<14s} "
+                      f"{info.mac:<18s} {info.chip.name:<10s} v{fw}")
+        except BridgeError as e:
+            print(f"{p.device:<12s} error: {e}")
+            rc = 1
+    return rc
+
+
+def cmd_flash(args) -> int:
+    from .flash import flash_firmware
+
+    flash_firmware(args.port, baud=args.baud, erase=args.erase,
+                   firmware=args.firmware, chip=args.chip)
+    return 0
+
+
+def cmd_set_name(args) -> int:
+    with Bridge(**_connect_kwargs(args)) as esp:
+        esp.set_name(args.new_name)
+        print(f"{esp.info.mac} is now named {args.new_name!r}")
+        print("(the Bluetooth advertised name updates on next reset)")
+    return 0
+
+
+def cmd_info(args) -> int:
+    """Print firmware/chip info. Bridge() is already plural when nothing was
+    selected, so one path prints one board or every board."""
+    with Bridge(**_connect_kwargs(args)) as found:
+        for i, esp in enumerate(found if isinstance(found, BridgeSet)
+                                else [found]):
+            if i:
+                print("-" * 40)
+            _print_info(esp)
+    return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="espbridge",
                                  description="python-esp-bridge host tool")
     ap.add_argument("--version", action="version", version=f"espbridge {__version__}")
+    ap.add_argument("-n", "--name", metavar="NAME_OR_MAC",
+                    help="select one board by its stored name, or its MAC "
+                         "(the way to pick one of several)")
     ap.add_argument("-p", "--port", help="serial port (default: auto-detect)")
-    ap.add_argument("-n", "--name", help="select device by stored name")
-    ap.add_argument("-b", "--ble", nargs="?", const=True, metavar="NAME_OR_MAC",
-                    help="force Bluetooth (optionally to a named/MAC device); "
-                         "the default already prefers Bluetooth")
+    ap.add_argument("-b", "--ble", action="store_true",
+                    help="Bluetooth only (the default already prefers Bluetooth)")
     ap.add_argument("--usb", action="store_true",
                     help="USB serial only — disable Bluetooth")
-    ap.add_argument("--password", help="Bluetooth link password "
+    ap.add_argument("--host", metavar="ADDR",
+                    help="connect over Wi-Fi to a board at this address")
+    ap.add_argument("--tcp-port", type=int, default=constants.BRIDGE_LINK_PORT,
+                    help=f"Wi-Fi link port (default: {constants.BRIDGE_LINK_PORT})")
+    ap.add_argument("-w", "--wifi", action="store_true",
+                    help="find boards over Wi-Fi with a discovery broadcast")
+    ap.add_argument("--password", help="wireless link password "
                                        "(default: 'espbridge')")
     ap.add_argument("--no-baud-upgrade", action="store_true",
                     help="stay at 115200 instead of upgrading the link speed")
-    sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("ports", help="list ESP32-like serial ports")
+    # info is the default command; every subparser names its own handler, so
+    # main() dispatches instead of matching on args.cmd.
+    ap.set_defaults(fn=cmd_info)
+    sub = ap.add_subparsers()
+    sub.add_parser("ports", help="list ESP32-like serial ports").set_defaults(
+        fn=cmd_ports)
+    sub.add_parser("info", help="connect and print firmware/chip info (default; "
+                                "shows every board when several are attached)"
+                   ).set_defaults(fn=cmd_info)
+    sub.add_parser("drivers", help="list registered device drivers "
+                                   "(bundled + installed plugins)").set_defaults(
+        fn=cmd_drivers)
+    p_name = sub.add_parser("set-name", help="store a device name on the board, "
+                                             f"max {constants.BRIDGE_NAME_MAX} "
+                                             "chars")
+    p_name.set_defaults(fn=cmd_set_name)
+    p_name.add_argument("new_name", help="name to assign; "
+                                         "Bridge('<name>') then finds this board")
     p_scan = sub.add_parser("scan", help="connect to every attached device and "
-                                         "list port/name/chip/mac")
+                                         "list port/name/mac/chip")
+    p_scan.set_defaults(fn=cmd_scan)
     p_scan.add_argument("--ble", action="store_true", dest="scan_ble",
                         help="scan for bridges advertising over Bluetooth")
-    sub.add_parser("info", help="connect and print firmware/chip info (default; "
-                                "shows every device when several are attached)")
-    sub.add_parser("drivers", help="list registered device drivers "
-                                   "(bundled + installed plugins)")
-    p_name = sub.add_parser("set-name", help="store a device name on the ESP32 (NVS)")
-    p_name.add_argument("new_name", help="name to assign (max 32 bytes)")
+    p_scan.add_argument("--wifi", action="store_true", dest="scan_wifi",
+                        help="broadcast a discovery probe for bridges on the LAN")
     p_flash = sub.add_parser("flash", help="write the bundled bridge firmware to a "
                                            "board over USB (needs the [flash] extra)")
+    p_flash.set_defaults(fn=cmd_flash)
     # A second -p on the subparser so `espbridge flash -p COM5` reads naturally;
     # SUPPRESS keeps it from clobbering the top-level -p when omitted.
     p_flash.add_argument("-p", "--port", dest="port", default=argparse.SUPPRESS,
@@ -74,101 +217,17 @@ def main(argv: list[str] | None = None) -> int:
     p_flash.add_argument("--baud", type=int, default=921600,
                          help="flash baud rate (default: 921600)")
     p_flash.add_argument("--erase", action="store_true",
-                         help="erase the whole flash before writing (clears NVS / stored name)")
+                         help="erase the whole flash before writing (clears NVS)")
     p_flash.add_argument("--firmware", help="flash this .bin instead of the bundled image")
     p_flash.add_argument("--chip", default="esp32", help="target chip (default: esp32)")
-    args = ap.parse_args(argv)
+    return ap
 
-    kwargs = dict(upgrade_baud=not args.no_baud_upgrade)
-    if args.usb:
-        kwargs["ble"] = False
-    elif args.ble:
-        kwargs["ble"] = args.ble
-    if args.password is not None:
-        kwargs["password"] = args.password
 
+def main(argv: list[str] | None = None) -> int:
+    _force_utf8_output()
+    args = _build_parser().parse_args(argv)
     try:
-        if args.cmd == "flash":
-            from .flash import flash_firmware
-
-            flash_firmware(args.port, baud=args.baud, erase=args.erase,
-                           firmware=args.firmware, chip=args.chip)
-            return 0
-
-        if args.cmd == "scan" and args.scan_ble:
-            from .transports.ble import find_ble_devices
-
-            devs = find_ble_devices()
-            if not devs:
-                print("no bridges advertising over Bluetooth")
-                return 1
-            print(f"{'NAME':<16s} {'MAC':<18s} {'ADVERTISED':<32s} RSSI")
-            for d in devs:
-                print(f"{d.device_name or '-':<16s} {d.mac or '-':<18s} "
-                      f"{d.name:<32s} {d.rssi} dBm")
-            return 0
-
-        if args.cmd == "drivers":
-            from .drivers import driver_names, driver_source
-
-            names = driver_names()
-            if not names:
-                print("no drivers registered")
-                return 0
-            width = max(len(n) for n in names) + len("esp.(...)")
-            for n in names:
-                print(f"{'esp.' + n + '(...)':<{width}}  {driver_source(n)}")
-            print("\nWrite or install your own — see docs/DRIVERS.md")
-            return 0
-
-        if args.cmd == "ports":
-            ports = find_ports()
-            if not ports:
-                print("no ESP32-like serial ports found")
-                return 1
-            for p in ports:
-                print(f"{p.device}\t{p.usb_chip}\t{p.description}")
-            return 0
-
-        if args.cmd == "scan":
-            ports = find_ports()
-            if not ports:
-                print("no ESP32-like serial ports found")
-                return 1
-            print(f"{'PORT':<12s} {'NAME':<16s} {'CHIP':<10s} {'MAC':<17s} FW")
-            rc = 0
-            for p in ports:
-                try:
-                    # skip the baud upgrade so each port is probed faster
-                    with Bridge(p.device, upgrade_baud=False) as esp:
-                        info = esp.info
-                        fw = ".".join(map(str, info.fw_version))
-                        print(f"{p.device:<12s} {info.name or '-':<16s} "
-                              f"{info.chip.name:<10s} {info.mac:<17s} v{fw}")
-                except BridgeError as e:
-                    print(f"{p.device:<12s} error: {e}")
-                    rc = 1
-            return rc
-
-        if args.cmd == "set-name":
-            with Bridge(args.port, name=args.name, **kwargs) as esp:
-                esp.set_name(args.new_name)
-                print(f"{esp.info.mac} is now named {args.new_name!r}")
-                print("(the Bluetooth advertised name updates on next reset)")
-            return 0
-
-        # default: info
-        if args.port is None and args.name is None and not args.ble \
-                and len(find_ports()) > 1:
-            with connect_all(**kwargs) as boards:
-                for i, esp in enumerate(boards):
-                    if i:
-                        print("-" * 40)
-                    _print_info(esp)
-            return 0
-        with Bridge(args.port, name=args.name, **kwargs) as esp:
-            _print_info(esp)
-        return 0
+        return args.fn(args)
     except BridgeError as e:
         log.error(str(e))
         return 1

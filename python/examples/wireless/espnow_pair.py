@@ -1,14 +1,14 @@
 """Two-board ESP-NOW chat, fully wireless — Bluetooth to the board, ESP-NOW between boards.
 
 No USB cable, no router: each machine talks to its ESP32 over the Bluetooth
-link (default password "espbridge", set via EspBridge.begin()), and the
+link (default password "espbridge", set via EspBridge.ble.begin()), and the
 boards talk to each other over ESP-NOW (~250 bytes per packet, delivery ACKs).
 
 Run on each machine:
 
     uv run espnow_pair.py                          # prints this board's MAC, listens
     uv run espnow_pair.py a0:b1:c2:d3:e4:f5        # chat with the MAC the other side printed
-    uv run espnow_pair.py a0:b1:c2:... relays      # pick which bridge by name (or MAC)
+    uv run espnow_pair.py a0:b1:c2:... c0:49:...   # ...and pick which bridge, by its MAC
 
 send() returns True when the peer's radio acknowledged the packet — instant
 delivery feedback without any connection setup.
@@ -20,11 +20,11 @@ from espbridge import Bridge
 
 args = sys.argv[1:]
 peer = args[0] if args else None
-board = args[1] if len(args) > 1 else True
+board = args[1] if len(args) > 1 else None
 
-with Bridge(ble=board, password="espbridge") as esp:
+with Bridge(board, ble=True, password="espbridge") as esp:
     mac = esp.espnow.begin()
-    print(f"connected over Bluetooth: {esp.info.name or esp.info.mac}")
+    print(f"connected over Bluetooth: {esp.info.ident}")
     print(f"this board's ESP-NOW MAC: {mac}  (pass it to the other side)")
 
     esp.espnow.on_receive(

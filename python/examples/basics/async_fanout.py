@@ -20,7 +20,7 @@ ADC_PINS = [34, 35, 36, 39]
 async def main() -> None:
     async with AsyncBridge(ble=False) as esp:
         info = esp.info  # plain attributes pass through (no await needed)
-        print(f"connected to {info.chip.name} ({info.name or info.mac})\n")
+        print(f"connected to {info.chip.name} ({info.ident})\n")
 
         await esp.gpio.mode(LED, "output")
         await esp.gpio.write(LED, 1)

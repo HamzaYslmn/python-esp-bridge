@@ -1,51 +1,61 @@
-#if defined(ARDUINO_ARCH_ESP32)
-// 1-Wire bit-timing primitives. Higher-level logic (ROM search, CRC, device
-// drivers) runs host-side to keep firmware simple.
-// Each bit slot masks IRQs for up to 70 µs, so these run INLINE on rx_task
-// (the app core): masking interrupts on the radio core — where slow_task
-// lives — would violate the BT controller's real-time deadlines.
-// Wiring: 4.7 kΩ pull-up to 3V3 required.
-// power=1 on OW_WRITE drives the line high push-pull after the last byte,
-// supplying parasite power to bus-powered devices.
+// 1-Wire bit-timing primitives. Architecture-independent: pure Arduino GPIO
+// calls, so ESP and nRF share one copy of the slot timings — which is the point,
+// because a timing fix that reached only one arch would be a silent bug.
+// Higher-level logic (ROM search, CRC, device drivers) runs host-side.
+//
+// Each bit slot masks IRQs for up to 70 µs, so these run INLINE on rx_task (the
+// app core): masking interrupts on the radio core, where slow_task lives, would
+// violate the BT controller's real-time deadlines.
+// Wiring: 4.7 kΩ pull-up to 3V3 required. power=1 on OW_WRITE drives the line
+// high push-pull after the last byte, for parasite-powered devices.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 
 #if BRIDGE_HAS_ONEWIRE
 
+// The one thing that differs per arch: ESP's portENTER_CRITICAL needs a portMUX,
+// vanilla FreeRTOS on nRF uses the plain Arduino pair.
+#if defined(ARDUINO_ARCH_ESP32)
 static portMUX_TYPE ow_mux = portMUX_INITIALIZER_UNLOCKED;
+#define OW_ENTER() portENTER_CRITICAL(&ow_mux)
+#define OW_EXIT()  portEXIT_CRITICAL(&ow_mux)
+#else
+#define OW_ENTER() noInterrupts()
+#define OW_EXIT()  interrupts()
+#endif
 
 static bool ow_reset(uint8_t pin) {
   pinMode(pin, OUTPUT);
   digitalWrite(pin, LOW);
   delayMicroseconds(480);
-  portENTER_CRITICAL(&ow_mux);
+  OW_ENTER();
   pinMode(pin, INPUT_PULLUP);
   delayMicroseconds(70);
   bool present = digitalRead(pin) == LOW;
-  portEXIT_CRITICAL(&ow_mux);
+  OW_EXIT();
   delayMicroseconds(410);
   return present;
 }
 
 static void ow_write_bit(uint8_t pin, uint8_t b) {
-  portENTER_CRITICAL(&ow_mux);
+  OW_ENTER();
   pinMode(pin, OUTPUT);
   digitalWrite(pin, LOW);
   delayMicroseconds(b ? 6 : 60);
   pinMode(pin, INPUT_PULLUP);
-  portEXIT_CRITICAL(&ow_mux);
+  OW_EXIT();
   delayMicroseconds(b ? 64 : 10);
 }
 
 static uint8_t ow_read_bit(uint8_t pin) {
-  portENTER_CRITICAL(&ow_mux);
+  OW_ENTER();
   pinMode(pin, OUTPUT);
   digitalWrite(pin, LOW);
   delayMicroseconds(6);
   pinMode(pin, INPUT_PULLUP);
   delayMicroseconds(9);
   uint8_t r = digitalRead(pin);
-  portEXIT_CRITICAL(&ow_mux);
+  OW_EXIT();
   delayMicroseconds(55);
   return r;
 }
@@ -73,7 +83,7 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
     case 0x02: {  // WRITE: pin|power|data..
       NEED(3);
       for (uint16_t i = 2; i < len; i++) ow_write_byte(pin, p[i]);
-      if (p[1]) { pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); }  // hold line high (strong pull-up) for parasite-powered devices
+      if (p[1]) { pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); }  // strong pull-up
       proto_reply_ok(seq, cmd);
       break;
     }
@@ -103,5 +113,4 @@ void onewire_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
 
 UNSUPPORTED_STUB(onewire_handle, MOD_ONEWIRE)
 
-#endif
-#endif  // ARDUINO_ARCH_ESP32
+#endif  // BRIDGE_HAS_ONEWIRE

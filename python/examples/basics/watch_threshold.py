@@ -37,7 +37,7 @@ def to_255(v12): return round(v12 / _FS12 * _FS8)    # 0..4095 -> 0..255
 def main():
     # Bluetooth push notifications. Use ble=False for the same thing over USB.
     esp = espbridge.connect(ble=True)
-    print(f"connected: {esp.info.name or esp.info.mac} "
+    print(f"connected: {esp.info.ident} "
           f"(fw v{'.'.join(map(str, esp.info.fw_version))})")
 
     def on_analog(ev):

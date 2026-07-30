@@ -1,5 +1,5 @@
 #if defined(ARDUINO_ARCH_ESP32)
-// SYS: ping, info, baud switch, reset, heap stats, persistent device name.
+// SYS: ping, info, baud switch, reset, heap stats, device name.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
@@ -10,16 +10,16 @@
 #include <driver/gpio.h>
 #include <Preferences.h>
 
-// Device name persisted in NVS so hosts can identify boards by name rather than serial port path.
+// Device name persisted in NVS, so a host can say Bridge("relays") instead of
+// reading MACs off boards. Loaded lazily on first use.
 static char bridge_name[BRIDGE_NAME_MAX + 1];
 static bool name_loaded = false;
 
 static void load_device_name() {
   if (name_loaded) return;
   Preferences prefs;
-  if (prefs.begin("bridge", true)) {  // open read-only; silently absent on first boot (bridge_name stays empty)
-    String n = prefs.getString("name", "");
-    strlcpy(bridge_name, n.c_str(), sizeof(bridge_name));
+  if (prefs.begin("bridge", true)) {  // read-only; absent on first boot (name stays empty)
+    prefs.getString("name", "").toCharArray(bridge_name, sizeof(bridge_name));
     prefs.end();
   }
   name_loaded = true;
@@ -43,71 +43,40 @@ uint16_t sys_build_info(uint8_t* out) {
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   memcpy(p, mac, 6); p += 6;
 
-  uint32_t caps = CAP_WIFI;
-#if BRIDGE_HAS_DAC
-  caps |= CAP_DAC;
-#endif
-#if BRIDGE_HAS_TOUCH
-  caps |= CAP_TOUCH;
-#endif
-#if BRIDGE_HAS_BT_CLASSIC
-  caps |= CAP_BT_CLASSIC;
-#endif
-#if BRIDGE_HAS_BLE
-  caps |= CAP_BLE;
-#endif
-#if BRIDGE_BLE
-  caps |= CAP_BLE_FW;
-#endif
-#if BRIDGE_NATIVE_USB
-  caps |= CAP_NATIVE_USB;
-#endif
-#if BRIDGE_HAS_ESPNOW
-  caps |= CAP_ESPNOW;
-#endif
-#if BRIDGE_HAS_RMT
-  caps |= CAP_RMT;
-#endif
-#if BRIDGE_HAS_ONEWIRE
-  caps |= CAP_ONEWIRE;
-#endif
-#if BRIDGE_HAS_TWAI
-  caps |= CAP_TWAI;
-#endif
-#if BRIDGE_HAS_I2S
-  caps |= CAP_I2S;
-#endif
-#if BRIDGE_HAS_FS
-  caps |= CAP_FS;
-#endif
-#if BRIDGE_HAS_NVS
-  caps |= CAP_NVS;
-#endif
-#if BRIDGE_HAS_OTA
-  caps |= CAP_OTA;
-#endif
-#if BRIDGE_ETH
-  caps |= CAP_ETH;
-#endif
-#if BRIDGE_HAS_MCPWM
-  caps |= CAP_MCPWM;
-#endif
-#if BRIDGE_HAS_SLEEP
-  caps |= CAP_SLEEP;
-#endif
-#if BRIDGE_CAM
-  if (psramFound()) caps |= CAP_CAM;  // frame buffers need PSRAM
-#endif
-  if (psramFound())        caps |= CAP_PSRAM;
-  if (link_ble_enabled()) caps |= CAP_BLE_LINK;  // runtime check — BLE transport may be enabled or disabled per build
+  // Every BRIDGE_* flag is defined to 0 or 1 by config.h (never left undefined),
+  // so this folds at compile time exactly like the #if-per-capability ladder it
+  // replaces — and reads as the flag -> bit table it actually is.
+  uint32_t caps = CAP_WIFI
+      | CAPIF(BRIDGE_HAS_DAC,     CAP_DAC)
+      | CAPIF(BRIDGE_HAS_TOUCH,   CAP_TOUCH)
+      | CAPIF(BRIDGE_HAS_BT_CLASSIC, CAP_BT_CLASSIC)
+      | CAPIF(BRIDGE_HAS_BLE,     CAP_BLE)
+      | CAPIF(BRIDGE_BLE,         CAP_BLE_FW)
+      | CAPIF(BRIDGE_NATIVE_USB,  CAP_NATIVE_USB)
+      | CAPIF(BRIDGE_HAS_ESPNOW,  CAP_ESPNOW)
+      | CAPIF(BRIDGE_HAS_RMT,     CAP_RMT)
+      | CAPIF(BRIDGE_HAS_ONEWIRE, CAP_ONEWIRE)
+      | CAPIF(BRIDGE_HAS_TWAI,    CAP_TWAI)
+      | CAPIF(BRIDGE_HAS_I2S,     CAP_I2S)
+      | CAPIF(BRIDGE_HAS_FS,      CAP_FS)
+      | CAPIF(BRIDGE_HAS_NVS,     CAP_NVS)
+      | CAPIF(BRIDGE_HAS_OTA,     CAP_OTA)
+      | CAPIF(BRIDGE_ETH,         CAP_ETH)
+      | CAPIF(BRIDGE_HAS_MCPWM,   CAP_MCPWM)
+      | CAPIF(BRIDGE_HAS_SLEEP,   CAP_SLEEP)
+      | CAPIF(BRIDGE_WIFI_LINK,   CAP_WIFI_LINK);  // built in; LINK_STATUS says if it runs
+  // Runtime, not build-time: PSRAM presence and whether the BLE link came up.
+  if (psramFound()) caps |= CAP_PSRAM | CAPIF(BRIDGE_CAM, CAP_CAM);  // cam needs PSRAM
+  if (link_ble_enabled()) caps |= CAP_BLE_LINK;
   write_be32(p, caps); p += 4;
 
   *p++ = SOC_GPIO_PIN_COUNT;
   *p++ = (uint8_t)(ESP.getFlashChipSize() / (1024UL * 1024UL));
 
+  // Name as the tail, unlength-prefixed: the frame already carries the length,
+  // so "the rest of the payload" needs no byte of its own.
   load_device_name();
   uint8_t nlen = strlen(bridge_name);
-  *p++ = nlen;
   memcpy(p, bridge_name, nlen); p += nlen;
   return p - out;
 }
@@ -148,7 +117,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       ESP.restart();
       break;
 
-    case 0x06: {  // SET_NAME: payload = name (0..32 bytes), persisted in NVS
+    case 0x06: {  // SET_NAME: payload = name (0..BRIDGE_NAME_MAX bytes), persisted in NVS
       if (len > BRIDGE_NAME_MAX) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       Preferences prefs;
       if (!prefs.begin("bridge", false)) { proto_reply_err(seq, cmd, ST_IO); return; }

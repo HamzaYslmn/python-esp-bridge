@@ -1,6 +1,7 @@
 """Bridge: connection, reader thread, request/response correlation, events."""
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import logging
 import struct
@@ -22,6 +23,7 @@ from .errors import (
 )
 from .protocol import Frame, FrameSplitter, decode_frame, encode_frame, mac_to_str
 from .transports import SerialTransport, find_ports
+from .transports.tcp import TcpListener, TcpTransport, find_wifi_devices
 
 from typing import TYPE_CHECKING
 
@@ -59,31 +61,79 @@ class Info:
     caps: C.Cap
     gpio_count: int
     flash_mb: int
-    name: str = ""  # user-assigned device name (see Bridge.set_name)
+    name: str = ""   # stored device name (see Bridge.set_name), "" when unset
+
+    @property
+    def ident(self) -> str:
+        """What you would pass to ``Bridge()`` to get this board back: its name,
+        or its MAC when it hasn't been named. Print this rather than the MAC —
+        it's the string that actually selects the board."""
+        return self.name or self.mac
 
     @classmethod
-    def parse(cls, payload: bytes) -> "Info":
-        """Decode a SYS_INFO payload into an :class:`Info` (used at handshake)."""
+    def parse(cls, payload: bytes) -> Info:
+        """Decode a SYS_INFO payload into an :class:`Info` (used at handshake).
+
+        The name is simply the rest of the payload — the frame already carries
+        the length, so it needs no length byte of its own. Firmware that sends
+        no name yields "".
+        """
         if len(payload) < 18:
             raise ProtocolError(f"short SYS_INFO payload: {len(payload)} bytes")
         proto, maj, mnr, pat, model, rev = struct.unpack_from(">6B", payload)
         mac = mac_to_str(payload[6:12])
         (caps,) = struct.unpack_from(">I", payload, 12)
-        gpio_count, flash_mb = payload[16], payload[17]
-        name = ""
-        if len(payload) > 18:  # optional trailing name field: len u8 | name bytes
-            nlen = payload[18]
-            name = payload[19 : 19 + nlen].decode("utf-8", "replace")
         try:
             chip = C.ChipModel(model)
         except ValueError:
             chip = C.ChipModel.UNKNOWN
         return cls(proto, (maj, mnr, pat), chip, rev, mac, C.Cap(caps),
-                   gpio_count, flash_mb, name)
+                   payload[16], payload[17],
+                   payload[18:].decode("utf-8", "replace"))
 
 
 def _norm_mac(mac: str) -> str:
+    """A MAC as bare lowercase hex, however it was punctuated."""
     return mac.replace(":", "").replace("-", "").lower()
+
+
+def _is(target: str, name: str, mac: str) -> bool:
+    """Does this board answer to ``target`` — its stored name, or its MAC?
+
+    The whole of identity matching. Used twice: on an advertisement or discovery
+    reply before connecting, and on SYS_INFO after — the authoritative one, since
+    a broadcast is untrusted input. Whichever halves a link publishes arrive in
+    full, so there is no prefix matching and no special case per link.
+    """
+    return target == name or _norm_mac(target) == _norm_mac(mac)
+
+
+def _selector(name, mac):
+    """The identity selector, however it was spelled.
+
+    ``Bridge("relays")``, ``Bridge(name="relays")`` and ``Bridge(mac="c0:49:…")``
+    all mean the same thing — one board — and both keywords accept either form.
+    ``mac=`` is there because it reads better when you *are* passing a MAC.
+    """
+    if name is not None and mac is not None:
+        raise TypeError("give a board's identity once: name= or mac=, not both")
+    return name if name is not None else mac
+
+
+def _targets(name) -> tuple[str, ...] | None:
+    """The selector as a tuple of targets: one board, or a list of them.
+
+    Both arities share this, so every filter downstream is the same loop.
+    """
+    if name is None:
+        return None
+    out = (name,) if isinstance(name, str) else tuple(name)
+    if not all(out):
+        # "" is the unnamed board's name, so it would match every unnamed board
+        # — exactly the silent wrong-board pick the selector exists to prevent.
+        raise ValueError("a board selector cannot be empty; pass a name or a "
+                         "MAC, or nothing at all to get every board")
+    return out
 
 
 class _Pending:
@@ -94,6 +144,112 @@ class _Pending:
         self.frame: Frame | None = None
 
 
+# Which Bridge() keywords decide *which boards exist*, as opposed to how each
+# link is then driven. _connect_many() forwards only these to _candidates().
+_ENUM_KWARGS = ("transport", "port", "host", "tcp_port", "name", "ble", "wifi",
+                "baud")
+
+
+def _candidates(*, transport=None, port=None, host=None, tcp_port, name=None,
+                ble=None, wifi=False, baud=115200):
+    """Every board matching these filters, as (factory, label, usb_chip) tuples.
+
+    The single enumeration behind both arities: :class:`Bridge` probes this list
+    and keeps the first board that handshakes, while a :class:`BridgeSet` opens
+    all of them. An explicit ``transport``/``host``/``port`` is a list of one.
+    """
+    if transport is not None:
+        return [(lambda t=transport: t, "transport",
+                 getattr(transport, "usb_chip", None))]
+    if host is not None:
+        return [(lambda h=host, p=tcp_port: TcpTransport(h, p),
+                 f"{host}:{tcp_port}", None)]
+    if port is not None:
+        chip = next((p.usb_chip for p in find_ports() if p.device == port), None)
+        return [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
+                 port, chip)]
+
+    # A truthy transport flag *pins* that link: wifi=True is Wi-Fi only, ble=True
+    # Bluetooth only, ble=False USB only. Quietly falling back to a link you
+    # didn't ask for is how you end up measuring USB and calling it Bluetooth.
+    want = _targets(name)
+    if wifi:
+        # May legitimately come back empty: dial-home boards are not
+        # discoverable, they arrive on the accept socket instead.
+        return _wifi_candidates(want, tcp_port)
+    out = []
+    if ble is not False:                # None (prefer) or True (only)
+        try:
+            out += _ble_candidates(want)
+        except NoDeviceError:
+            if ble:
+                raise                   # Bluetooth only: nothing else to try
+        except ImportError:
+            if ble:
+                raise
+            log.debug("Bluetooth unavailable (pip install "
+                      "'python-esp-bridge[ble]'); using USB serial")
+    if not ble:                         # USB too, unless pinned to Bluetooth
+        out += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
+                 p.device, p.usb_chip) for p in find_ports()]
+    if not out:
+        raise NoDeviceError(
+            "no bridge found — power the board (and flash it: docs/FIRMWARE.md), "
+            "then pass port='COM5'/'/dev/ttyUSB0', ble=True or wifi=True")
+    return out
+
+
+def _wanted(want: tuple[str, ...] | None, d) -> bool:
+    """Does this advertised / discovered board match any requested target?"""
+    return want is None or any(_is(t, d.name, d.mac) for t in want)
+
+
+def _wifi_candidates(want: tuple[str, ...] | None, tcp_port: int):
+    # tcp_port is also where WE accept dial-home boards; 0 means "bind anywhere",
+    # which is not an address a board can be reached on, so probe the standard one.
+    devs = [d for d in find_wifi_devices(port=tcp_port or C.BRIDGE_LINK_PORT)
+            if _wanted(want, d)]
+    return [(lambda d=d: TcpTransport(d.host, d.port),
+             f"wifi {d.host}:{d.port}", None) for d in devs]
+
+
+def _ble_candidates(want: tuple[str, ...] | None):
+    from .transports.ble import (
+        BleTransport, find_ble_devices, find_ble_devices_fast)
+
+    # BleDeviceInfo.name/.mac come from the advertised "espbridge_<identity>",
+    # so they line up with Info.name/Info.mac. d.address does NOT: that is the
+    # OS's handle for the radio — a CoreBluetooth UUID on macOS, and elsewhere
+    # the Bluetooth MAC, which is not the base MAC the firmware reports.
+    def matches(d) -> bool:
+        return _wanted(want, d)
+
+    # Fast path: stop scanning the moment a matching bridge appears instead of
+    # waiting out the whole discover() window, so the common case connects in
+    # well under a second. A full scan is the fallback.
+    devs = find_ble_devices_fast(matches)
+    if not devs:
+        every = find_ble_devices()
+        devs = [d for d in every if matches(d)]
+        # Only one identity fits an advertisement, so what a board broadcasts may
+        # not be the half you asked for: a *named* board never advertises its
+        # MAC, and a freshly named one still advertises its MAC until it resets.
+        # Either way the advert can't answer, so hand over every bridge in range
+        # and let the post-connect check — which sees the full SYS_INFO — decide.
+        # Costs one connect per board, and only when the fast match found nothing.
+        if not devs and want:
+            log.debug(f"no advert matched {want}; asking {len(every)} bridge(s) "
+                      f"over the link")
+            devs = every
+    if not devs:
+        what = f" named {' or '.join(want)}" if want else ""
+        raise NoDeviceError(
+            f"no bridge{what} found over Bluetooth — is the board powered, "
+            f"in range, and flashed with BRIDGE_BLE_LINK enabled?")
+    return [(lambda d=d: BleTransport(d.address),
+             f"ble {d.ident or d.address}", None) for d in devs]
+
+
 class Bridge:
     """Connection to a python-esp-bridge ESP32.
 
@@ -102,19 +258,47 @@ class Bridge:
     ...     esp.gpio.mode(2, "output")
     ...     esp.gpio.write(2, 1)
 
-    Pick the transport with ``ble`` (firmware default password "espbridge",
-    change it via EspBridge.begin("...") in the sketch):
+    **Name a board and you get that board**, name several and you get those, name
+    none and you get all of them. There is no separate call for several boards,
+    and none for a Wi-Fi fleet — the selector decides how many you are talking to.
 
-    >>> esp = Bridge()                  # ble=True: Bluetooth, else USB serial
-    >>> esp = Bridge(ble=False)         # USB / COM port only (Bluetooth off)
-    >>> esp = Bridge(ble="relays")      # a named board over Bluetooth only
-    >>> esp = Bridge(port="COM7")       # a specific serial port
+    >>> esp = Bridge("relays")                  # by stored name
+    >>> esp = Bridge(mac="c0:49:ef:d0:3f:e0")   # ...or by MAC
+    >>> esp = Bridge(port="COM7")               # a specific serial port
+    >>> esp = Bridge(host="192.168.1.50")       # a specific Wi-Fi address
+    >>>
+    >>> boards = Bridge(["relays", "sensors"])  # exactly these  -> BridgeSet
+    >>> boards = Bridge()               # every board found      -> BridgeSet
+    >>> boards = Bridge(ble=False)      # every USB board        -> BridgeSet
+    >>> boards = Bridge(wifi=True)      # every board on Wi-Fi   -> BridgeSet
 
-    With several boards attached, select one by persistent name or MAC
-    (assign names once with ``Bridge(port=...).set_name("relays")``):
+    The first argument is the board's **identity**: the name you gave it with
+    :meth:`set_name`, or its MAC if you never did. ``name=`` and ``mac=`` are the
+    keyword spellings and both accept either form — ``mac=`` simply reads better
+    when you are passing a MAC. ``espbridge scan`` lists what's attached;
+    ``esp.info.ident`` is the string for a board you already hold.
 
-    >>> esp = Bridge(name="relays")
-    >>> esp = Bridge(mac="24:a1:60:12:34:56")
+    It is *only* an identity — never a COM port, never an IP address, which have
+    their own keywords. Nothing is inferred from the shape of the string.
+
+    A named board answers to its name on every link. Its MAC works too, though
+    over Bluetooth that costs a moment: only one identity fits an advertisement,
+    so a named board broadcasts its name, and finding it by MAC means asking the
+    bridges in range over the link instead of reading the answer off the scan.
+
+    A :class:`BridgeSet` holding exactly one board forwards attribute access to
+    it, so the one-board case reads identically to a single Bridge. With several,
+    an unqualified ``boards.gpio`` raises and tells you how to choose — silently
+    auto-selecting is how a test suite once passed against a board that was not
+    under test.
+
+    Each transport keyword pins its link rather than merely preferring it:
+    ``ble=False`` is USB only, ``ble=True`` Bluetooth only, and ``wifi=True``
+    Wi-Fi only, which also accepts boards that dial home (see
+    :class:`BridgeSet` and ``esp.wifi.link_setup``). Wireless links authenticate:
+    the firmware default password is "espbridge", changed with
+    ``EspBridge.ble.begin("...")`` / ``wifi.begin(..., password)`` in the sketch
+    and passed here as ``password=``.
 
     Thread-safe: share **one** Bridge across threads rather than opening several
     (a serial/BLE link can't be opened twice). Requests from different threads
@@ -159,13 +343,31 @@ class Bridge:
         mcpwm: Mcpwm
         watch: Watch
 
+    # Naming one board — or any of these keywords — means "this one board".
+    # Without one, or with a *list* of names, there is nothing to disambiguate
+    # on, so __new__ returns every match instead of silently picking one.
+    _SELECTORS = ("port", "host", "transport")
+
+    def __new__(cls, name: str | list[str] | None = None, *,
+                mac: str | list[str] | None = None, **kw):
+        target = _selector(name, mac)
+        if isinstance(target, str) or any(kw.get(k) is not None
+                                          for k in cls._SELECTORS):
+            return super().__new__(cls)
+        # Plural: Python skips __init__ because this is not a cls instance.
+        return _connect_many(**({"name": target} if target is not None else {}),
+                             **kw)
+
     def __init__(
         self,
-        port: str | None = None,
+        name: str | list[str] | None = None,
         *,
-        name: str | None = None,
-        mac: str | None = None,
-        ble: bool | str | None = True,
+        mac: str | list[str] | None = None,
+        port: str | None = None,
+        host: str | None = None,
+        tcp_port: int = C.BRIDGE_LINK_PORT,
+        wifi: bool = False,
+        ble: bool | None = None,
         password: str | None = None,
         baud: int = 115200,
         upgrade_baud: bool = True,
@@ -176,35 +378,24 @@ class Bridge:
         reset_on_exit: bool = False,
         transport=None,
     ):
+        # Reached only for a single board; see __new__ for the plural path.
         self.timeout = timeout
         # Guards lazy sub-API creation in __getattr__ so two threads that first
         # touch e.g. esp.gpio at once can't both build (and leak) a sub-API.
         self._subapi_lock = threading.Lock()
-        # How many times request() re-sends after a response timeout.
-        # Only commands that are safe to execute more than once are retried
-        # (see constants.NON_IDEMPOTENT for the exceptions); this lets a lost
-        # frame on a busy or lossy link heal without the caller noticing.
+        # request() re-sends this many times after a response timeout, so a lost
+        # frame heals unnoticed. Only idempotent commands are retried (see
+        # constants.NON_IDEMPOTENT).
         self.retries = retries
         self.reset_on_exit = False  # set for real only once connected (see below)
         self.info: Info | None = None
+        self._password = password
 
-        # Build the ordered list of connection candidates to probe, each a
-        # (transport factory, label, usb_chip) tuple. The `ble` flag decides
-        # which transports are tried:
-        #   ble=True (default) : prefer Bluetooth, then fall back to USB serial
-        #   ble=False          : USB serial only — Bluetooth disabled
-        #   ble="name"/"mac"   : that Bluetooth device only (no USB fallback)
-        # An explicit transport= or port= overrides `ble` entirely.
-        if transport is not None:
-            candidates = [(lambda t=transport: t, "transport",
-                           getattr(transport, "usb_chip", None))]
-        elif port is not None:
-            chip = next((p.usb_chip for p in find_ports() if p.device == port), None)
-            candidates = [(lambda p=port, c=chip: SerialTransport(p, baud, usb_chip=c),
-                           port, chip)]
-        else:
-            candidates = self._auto_candidates(ble, name, mac, baud)
-
+        target = _selector(name, mac)
+        want = _targets(target)
+        candidates = _candidates(transport=transport, port=port, host=host,
+                                 tcp_port=tcp_port, name=target, ble=ble,
+                                 wifi=wifi, baud=baud)
         probing = len(candidates) > 1
         errors: list[str] = []
         for factory, label, chip in candidates:
@@ -225,28 +416,20 @@ class Bridge:
                 else:
                     self._handshake(reset_on_open)
                 assert self.info is not None
-                if self._matches(name, mac):
+                # Re-checked over the link on purpose: BLE adverts and Wi-Fi
+                # discovery replies are broadcasts, i.e. untrusted input, and
+                # SYS_INFO is the board answering for itself.
+                if want is None or any(_is(t, self.info.name, self.info.mac)
+                                       for t in want):
                     if upgrade_baud and getattr(self._t, "has_baud", True):
                         self._upgrade_baud(baud, target_baud)
                     self.reset_on_exit = reset_on_exit
-                    if probing and name is None and mac is None:
-                        others = ", ".join(l for _, l, _ in candidates
-                                           if l != label) or "none"
-                        log.info(
-                            f"auto-selected {label}: "
-                            f"name={self.info.name or '(unnamed)'} "
-                            f"mac={self.info.mac} "
-                            f"chip={self.info.chip.name} "
-                            f"(other candidates: {others}; pin one with "
-                            f"port=, name=, mac= or ble='name-or-mac')")
                     return
-                errors.append(f"{label}: name={self.info.name!r} "
-                              f"mac={self.info.mac} (no match)")
+                errors.append(f"{label}: {self.info.ident} (no match)")
                 self.close()
             except (BridgeTimeoutError, ProtocolError, AuthError) as e:
-                # While probing several candidates (e.g. BLE-then-serial in the
-                # default path), a timeout/auth-failure on one just moves on to
-                # the next; with a single explicit candidate it propagates.
+                # While probing, a failure on one candidate moves on to the next;
+                # with a single explicit candidate it propagates.
                 self.close()
                 if not probing:
                     raise
@@ -255,91 +438,14 @@ class Bridge:
             except BaseException:
                 self.close()
                 raise
-        raise NoDeviceError("no matching bridge found — " + "; ".join(errors))
-
-    def _auto_candidates(self, ble, name, mac, baud):
-        """Candidates for the no-port path: Bluetooth and/or USB serial per `ble`.
-
-        ble=False -> USB serial only (Bluetooth disabled); ble="name"/"mac" ->
-        that Bluetooth device only (no USB fallback); ble=True/None (default) ->
-        prefer Bluetooth, then fall back to USB serial.
-        """
-        ble_only = isinstance(ble, str)   # a named target: Bluetooth, no USB fallback
-        candidates = []
-        if ble is not False:              # True / None / "name": Bluetooth wanted
-            try:
-                candidates += self._ble_candidates(ble, name, mac)
-            except NoDeviceError:
-                if ble_only:
-                    raise                 # the named board must be present
-            except ImportError:
-                if ble_only:
-                    raise
-                log.debug("Bluetooth unavailable (pip install "
-                          "'python-esp-bridge[ble]'); using USB serial")
-        if not ble_only:                  # USB serial too, unless pinned to a BLE name.
-            # First port that handshakes (and matches name=/mac= if given) wins;
-            # non-bridge boards simply time out and are skipped.
-            candidates += [(lambda p=p: SerialTransport(p.device, baud, usb_chip=p.usb_chip),
-                            p.device, p.usb_chip) for p in find_ports()]
-        if not candidates:
-            raise NoDeviceError(
-                "no bridge found — power the board (and flash it: "
-                "docs/FIRMWARE.md), then pass port='COM5'/'/dev/ttyUSB0', "
-                "ble=True, or ble='name'")
-        return candidates
-
-    @staticmethod
-    def _ble_candidates(ble: bool | str | None, name: str | None, mac: str | None):
-        from .transports.ble import (
-            BleTransport, find_ble_devices, find_ble_devices_fast)
-
-        target = ble if isinstance(ble, str) else None
-
-        def _is_target(d) -> bool:
-            tmac = _norm_mac(target)
-            return (d.name == target or d.device_name == target
-                    or _norm_mac(d.address) == tmac or _norm_mac(d.mac) == tmac)
-
-        def _strict_match(d) -> bool:
-            if target is not None and not _is_target(d):
-                return False
-            if mac is not None and _norm_mac(d.mac) != _norm_mac(mac):
-                return False
-            if name is not None and d.device_name != name:
-                return False
-            return True
-
-        # Fast path: stop scanning as soon as the first matching bridge appears,
-        # rather than waiting for the full discover() window to expire —
-        # the common single-board case then connects in well under a second.
-        devs = find_ble_devices_fast(_strict_match)
-        if not devs:
-            # Nothing matched the fast filter. Fall back to a full scan and
-            # apply the looser name/mac filtering below. Advertised names can
-            # be stale or truncated by the OS; the post-connect _matches()
-            # check is the authoritative comparison.
-            devs = find_ble_devices()
-            if target is not None:
-                devs = [d for d in devs if _is_target(d)]
-            if mac is not None:
-                devs = [d for d in devs if _norm_mac(d.mac) == _norm_mac(mac)] or devs
-            if name is not None:
-                devs = [d for d in devs if d.device_name == name] or devs
-        if not devs:
-            what = f" named/at {target!r}" if target else ""
-            raise NoDeviceError(
-                f"no bridge{what} found over Bluetooth — is the board powered, "
-                f"in range, and flashed with BRIDGE_BLE_LINK enabled?"
-            )
-        # If several bridges are advertising, probe them in advertisement order;
-        # the first one that passes auth + handshake wins. The caller logs
-        # which device was auto-selected.
-        return [(lambda d=d: BleTransport(d.address),
-                 f"BLE {d.name or d.address}", None) for d in devs]
+        raise NoDeviceError(
+            "no matching bridge found — " + "; ".join(errors) if errors else
+            "no bridge answered — nothing was found to try (a dial-home board is "
+            "not discoverable; collect those with Bridge(wifi=True))")
 
     def _auth(self, password: str | None) -> None:
         """Authenticate a wireless link (SYS_AUTH) before the handshake."""
+        self._password = password  # remembered so _reconnect can re-authenticate
         pw = (C.DEFAULT_PASSWORD if password is None else password).encode()
         try:
             self.request(C.SYS_AUTH, pw, timeout=5.0)
@@ -347,7 +453,7 @@ class Bridge:
             if e.status == C.Status.DENIED:
                 raise AuthError(
                     "bridge rejected the password — check the password passed "
-                    "to EspBridge.begin() in the firmware"
+                    "to EspBridge.ble.begin() in the firmware"
                 ) from None
             raise
 
@@ -385,14 +491,6 @@ class Bridge:
         self.info = None
         self.on_event(C.SYS_READY, self._on_ready)
         self.on_event(C.SYS_LOG, self._on_sys_log)
-
-    def _matches(self, name: str | None, mac: str | None) -> bool:
-        assert self.info is not None
-        if name is not None and self.info.name != name:
-            return False
-        if mac is not None and _norm_mac(self.info.mac) != _norm_mac(mac):
-            return False
-        return True
 
     # ---- lifecycle -----------------------------------------------------------
 
@@ -490,7 +588,19 @@ class Bridge:
         self._reader.start()
 
     def _reconnect(self, baud: int) -> None:
-        """Reopen the serial port and redo the handshake (recovers a dead link)."""
+        """Reopen the link and redo the handshake (recovers a dead link)."""
+        host = getattr(self._t, "host", None)
+        if host is not None:  # TCP: reconnect to the same address
+            tcp_port = self._t.port
+            log.warning(f"link lost; reconnecting to {host}:{tcp_port}")
+            self._t.close()
+            self._reader.join(timeout=1.0)
+            self._reset_state()
+            self._t = TcpTransport(host, tcp_port)
+            self._start_reader()
+            self._auth(self._password)
+            self._handshake(reset_on_open=False)
+            return
         port = getattr(getattr(self._t, "ser", None), "port", None)
         chip = getattr(self._t, "usb_chip", None)
         if port is None:
@@ -508,8 +618,7 @@ class Bridge:
         info = getattr(self, "info", None)
         if info is None:
             return f"<{type(self).__name__} connecting>"
-        label = f" {info.name!r}" if info.name else ""
-        return (f"<{type(self).__name__} {info.chip.name}{label} "
+        return (f"<{type(self).__name__} {info.chip.name} {info.ident} "
                 f"fw{'.'.join(map(str, info.fw_version))}>")
 
     def close(self) -> None:
@@ -522,17 +631,11 @@ class Bridge:
         with self._flow:  # unblock any writer waiting on the in-flight window
             self._flow.notify_all()
         if self.reset_on_exit and self._ready.is_set():
-            try:
+            with contextlib.suppress(Exception):
                 self.request(C.SYS_RESET, timeout=1.0)
-            except Exception:
-                pass
         self._t.close()
         if self._reader is not threading.current_thread():
             self._reader.join(timeout=1.0)
-
-    def is_closing(self) -> bool:
-        """True once close() has been called (the link is down or going down)."""
-        return self._closing
 
     def is_alive(self) -> bool:
         """False once the link is closing, or the board has stopped answering (a
@@ -541,7 +644,7 @@ class Bridge:
         this to transparently reconnect."""
         return not self._closing and not self._link_dead
 
-    def __enter__(self) -> "Bridge":
+    def __enter__(self) -> Bridge:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -615,11 +718,8 @@ class Bridge:
     def off_event(self, cmd: int | None, callback) -> None:
         """Unregister an event callback previously added with :meth:`on_event`
         (no-op if it isn't registered)."""
-        with self._handlers_lock:
-            try:
-                self._handlers.get(cmd, []).remove(callback)
-            except ValueError:
-                pass
+        with self._handlers_lock, contextlib.suppress(ValueError):
+            self._handlers.get(cmd, []).remove(callback)
 
     # ---- request/response -------------------------------------------------------------
 
@@ -935,10 +1035,21 @@ class Bridge:
             self._upgrade_baud(base, self._baud_target)
 
     def set_name(self, name: str) -> None:
-        """Persist a device name on the ESP32 (NVS) for `Bridge(name=...)` lookup."""
+        """Give the board a name, persisted on it, so ``Bridge("relays")`` finds
+        it on any link and you never have to read a MAC.
+
+        Capped at :data:`constants.BRIDGE_NAME_MAX` characters, which is what
+        keeps the Bluetooth advertisement — ``espbridge_<name>`` — inside the 26
+        the scan response fits. A longer name would be truncated over the air and
+        stop matching, so it is refused here instead.
+
+        The advertised name updates on the board's next reset.
+        """
         data = name.encode()
         if len(data) > C.BRIDGE_NAME_MAX:
-            raise ValueError(f"name must be at most {C.BRIDGE_NAME_MAX} bytes")
+            raise ValueError(
+                f"name must be at most {C.BRIDGE_NAME_MAX} bytes (got "
+                f"{len(data)}) — it has to fit the Bluetooth advertisement")
         self.request(C.SYS_SET_NAME, data)
         if self.info is not None:
             self.info = dataclasses.replace(self.info, name=name)
@@ -1005,54 +1116,206 @@ class Bridge:
 
 
 class BridgeSet(list):
-    """A list of Bridges with convenience helpers (returned by connect_all)."""
+    """Every board that matched, as returned by ``Bridge()`` without a selector.
 
-    def by_name(self, name: str) -> "Bridge":
-        """Return the bridge whose persistent name matches; raise
-        :class:`NoDeviceError` if none is connected."""
-        for b in self:
-            if b.info is not None and b.info.name == name:
-                return b
-        raise NoDeviceError(f"no connected bridge named {name!r}")
+    Index it by position or by identity — ``boards[0]``, ``boards["relays"]``,
+    ``boards["c0:49:ef:d0:3f:e0"]`` — the same keys :meth:`each` reports results
+    under. Holding exactly one board it forwards attribute access to it, so the
+    one-board case is indistinguishable from a single :class:`Bridge`.
+    """
 
-    def by_mac(self, mac: str) -> "Bridge":
-        """Return the bridge with this MAC (separators/case ignored); raise
-        :class:`NoDeviceError` if none is connected."""
+    _listener = None   # accept socket for dial-home boards; closed by close_all()
+
+    def wait_for(self, count: int = 1, timeout: float | None = None) -> int:
+        """Block until at least `count` boards are in the set; returns how many.
+
+        Only useful for a set that is still filling up, i.e. ``Bridge(wifi=True)``
+        collecting boards as they dial home.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while len(self) < count:
+            if deadline is not None and time.monotonic() > deadline:
+                raise BridgeTimeoutError(
+                    f"only {len(self)}/{count} boards connected within {timeout:g}s")
+            time.sleep(0.05)
+        return len(self)
+
+    def each(self, fn, *, workers: int = 64) -> dict[str, object]:
+        """Run ``fn(bridge)`` on every board, at most `workers` at a time.
+
+        Returns ``{mac: result}``. A board that raised maps to its exception
+        instead of failing the whole sweep — across hundreds of boards some are
+        always mid-reboot or out of range.
+
+        `workers` bounds threads, not throughput: each request is a millisecond
+        or ten, so 64 in flight already saturates a LAN full of boards.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(b):
+            try:
+                return fn(b)
+            except Exception as e:  # noqa: BLE001 — reported per board
+                return e
+
+        boards = list(self)
+        if not boards:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(workers, len(boards))) as pool:
+            results = pool.map(one, boards)
+        return {b.info.ident if b.info else f"?{i}": r
+                for i, (b, r) in enumerate(zip(boards, results))}
+
+    def __getitem__(self, key):
+        """``boards[0]`` by position, ``boards["relays"]`` by name or MAC."""
+        if not isinstance(key, str):
+            return super().__getitem__(key)
         for b in self:
-            if b.info is not None and _norm_mac(b.info.mac) == _norm_mac(mac):
+            if b.info is not None and _is(key, b.info.name, b.info.mac):
                 return b
-        raise NoDeviceError(f"no connected bridge with MAC {mac}")
+        raise NoDeviceError(f"no connected bridge named {key!r} — connected: "
+                            f"{', '.join(self.idents()) or 'none'}")
+
+    def idents(self) -> list[str]:
+        """What each connected board answers to — its name, or its MAC."""
+        return [b.info.ident for b in self if b.info is not None]
+
+    def __getattr__(self, attr: str):
+        """Forward to the only board, so a one-board set reads like one Bridge.
+
+        ``Bridge()`` returns a set, and on the overwhelmingly common one-board
+        desk ``esp.gpio.write(2, 1)`` should just work. With several boards there
+        is no defensible answer to "which one", so this raises and says how to
+        choose — the old behaviour, silently auto-selecting, is how a test suite
+        once passed 10/10 against a board that was not under test.
+        """
+        if attr.startswith("_"):        # never forward private/dunder lookups
+            raise AttributeError(attr)
+        if len(self) == 1:
+            return getattr(self[0], attr)
+        if not self:
+            raise NoDeviceError(
+                f"no boards connected, so there is no .{attr} — nothing answered "
+                f"the scan yet (wait_for() if they are still dialling in)")
+        found = self.idents()
+        pick = f"boards[{found[0]!r}]" if found else "boards[0]"
+        raise NoDeviceError(
+            f"{len(self)} boards connected, so .{attr} is ambiguous: "
+            f"{', '.join(found)}. Pick one — {pick} — or fan out with each(fn). "
+            f"To connect to just one: Bridge('{found[0] if found else '...'}').")
+
+    def close(self) -> None:
+        """Alias for :meth:`close_all` — closing "all of them" is the only thing
+        ``.close()`` can mean on a set, so it needs no disambiguation."""
+        self.close_all()
 
     def close_all(self) -> None:
         """Close every bridge in the set (also done by the ``with`` block exit)."""
+        if self._listener is not None:
+            self._listener.close()
+            self._listener = None    # also the accept loop's stop flag
         for b in self:
             b.close()
 
-    def __enter__(self) -> "BridgeSet":
+    def __enter__(self) -> BridgeSet:
         return self
 
     def __exit__(self, *exc) -> None:
         self.close_all()
 
 
-def connect_all(**kwargs) -> BridgeSet:
-    """Connect to every attached bridge.
+def _connect_many(*, wifi=False, tcp_port: int = C.BRIDGE_LINK_PORT,
+                  bind: str = "0.0.0.0", on_connect=None, backlog: int = 512,
+                  **kwargs) -> BridgeSet:
+    """Every board that matches, as a :class:`BridgeSet`. Reached via ``Bridge()``.
 
-    >>> import espbridge
-    >>> with espbridge.connect_all() as boards:
-    ...     for esp in boards:
-    ...         print(esp.info.name or esp.info.mac, esp.info.chip.name)
-    ...     boards.by_name("relays").gpio.write(2, 1)
+    Uses the same :func:`_candidates` enumeration the single-board path probes —
+    it just opens all of them instead of stopping at the first. With ``wifi=True``
+    it also accepts boards that dial home, which go on arriving for as long as the
+    set is open (see :class:`Bridge` for the full description).
     """
     out = BridgeSet()
+
+    def adopt(esp, where: str, *, incoming: bool = False) -> None:
+        """Add a board, keeping exactly one live link per MAC.
+
+        Which link survives a duplicate depends on who opened it:
+
+        * enumeration (``incoming=False``) — one board can be reachable on
+          several links at once, advertising over Bluetooth *and* sitting on a
+          USB port, so the same MAC turns up twice. Candidates are enumerated in
+          preference order, so the incumbent is the preferred link: keep it and
+          drop the redundant newcomer.
+        * dial-home (``incoming=True``) — a board connecting in is asserting a
+          fresh session, which means whatever we still hold for it is stale even
+          if the socket has not noticed yet. Newcomer wins, the same rule the
+          firmware applies to a reconnecting host in link_tcp.cpp.
+        """
+        # Keyed by MAC, not by name: names are user-assigned and need not be
+        # unique, the MAC always is.
+        mac = esp.info.mac if esp.info else ""
+        drop = [b for b in out
+                if not b.is_alive() or (incoming and b.info and b.info.mac == mac)]
+        for stale in drop:
+            stale.close()
+            out.remove(stale)
+        if any(b.info and b.info.mac == mac for b in out):
+            log.debug(f"{mac} already connected on a preferred link; "
+                      f"dropping the redundant {where}")
+            esp.close()
+            return
+        out.append(esp)
+        log.info(f"{esp.info.ident if esp.info else mac} online from {where} "
+                 f"({len(out)} boards)")
+        if on_connect is not None:
+            on_connect(esp)
+
+    enum = {k: v for k, v in kwargs.items() if k in _ENUM_KWARGS}
     errors: list[str] = []
-    for p in find_ports():
+    for factory, label, _chip in _candidates(tcp_port=tcp_port, wifi=wifi, **enum):
         try:
-            out.append(Bridge(p.device, **kwargs))
+            adopt(Bridge(transport=factory(), **kwargs), label)
         except BridgeError as e:
-            log.warning(f"connect_all: skipping {p.device}: {e}")
-            errors.append(f"{p.device}: {e}")
-    if not out:
-        raise NoDeviceError("no bridges connected"
-                            + (" — " + "; ".join(errors) if errors else ""))
+            log.warning(f"skipping {label}: {e}")
+            errors.append(f"{label}: {e}")
+
+    if not wifi:
+        # An explicit list is a promise about which boards we drive, so a partial
+        # result fails loudly: quietly running on two of the three you asked for
+        # is the same class of bug as auto-selecting one out of several. (With
+        # wifi=True there is nothing to judge yet — the rest may still dial in.)
+        want = _targets(kwargs.get("name")) or ()
+        missing = [t for t in want
+                   if not any(_is(t, b.info.name, b.info.mac)
+                              for b in out if b.info)]
+        if missing:
+            out.close_all()
+            raise NoDeviceError(
+                f"{len(missing)} of {len(want)} requested boards not found: "
+                f"{', '.join(missing)}"
+                + (" — " + "; ".join(errors) if errors else ""))
+        if not out:
+            raise NoDeviceError("no bridges connected"
+                                + (" — " + "; ".join(errors) if errors else ""))
+        return out
+
+    # Dial-home boards: nothing to enumerate, they come to us.
+
+    out._listener = listener = TcpListener(tcp_port, bind, backlog=backlog)
+    log.info(f"accepting dial-home boards on {bind}:{listener.port}")
+
+    def accept_loop():
+        while out._listener is not None:
+            transport = listener.accept()
+            if transport is None:
+                continue
+            try:
+                adopt(Bridge(transport=transport, **kwargs), transport.host,
+                      incoming=True)
+            except BridgeError as e:
+                log.warning(f"rejected {transport.host}: {e}")
+                transport.close()
+
+    threading.Thread(target=accept_loop, daemon=True,
+                     name="espbridge-accept").start()
     return out

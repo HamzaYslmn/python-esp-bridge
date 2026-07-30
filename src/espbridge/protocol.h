@@ -41,6 +41,14 @@ void proto_tx_flush();
 
 uint32_t proto_dropped_events();
 
+// The Wi-Fi link's frame buffers (~4.5 KB: one TX stream + one RX accumulator),
+// allocated on demand by link_tcp_begin() rather than living in BSS, so a board
+// that never enables the link keeps the RAM. alloc() is idempotent, false when
+// the heap can't take it; reset() drops a half-received frame and queued replies.
+bool proto_link_tcp_alloc();
+void proto_link_tcp_free();
+void proto_link_tcp_reset();
+
 uint16_t crc16_ccitt(const uint8_t* data, uint16_t len);
 
 // Big-endian read/write helpers used throughout the protocol layer.

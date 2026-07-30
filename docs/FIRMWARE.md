@@ -1,14 +1,18 @@
 # python esp bridge (Arduino library)
 
 Flash-once ESP32 firmware that exposes **every** peripheral to Python over USB
-serial **or Bluetooth**. Install the library, flash the one-line example, then
+serial, **Bluetooth or Wi-Fi**. Install the library, flash the example, then
 drive the board live from the host with `pip install python-esp-bridge` — no
-firmware edits per project.
+firmware edits per project. One line per link, in any order:
 
 ```cpp
 #include <PythonEspBridge.h>
-void setup() { EspBridge.begin(); }   // BLE password "espbridge", Bluetooth on
-void loop()  {}                       // never runs — begin() owns the board
+void setup() {
+  EspBridge.usb.begin();   // USB serial
+  EspBridge.ble.begin();   // Bluetooth, password "espbridge"
+  EspBridge.run();         // hands this task to the bridge
+}
+void loop()  {}            // never runs unless you drop the run() call
 ```
 
 ```python
@@ -52,7 +56,7 @@ capability-gated set of modules:
 
 The host gates every call on `SYS_INFO` capabilities, so unavailable modules are
 simply never offered; `esp.info.chip` reads `NRF52840`. Flash the
-**`Bridge_nRF52`** example (same one-liner `EspBridge.begin()`).
+**`Bridge_nRF52`** example (same per-link `begin()` calls, minus Wi-Fi).
 
 Notes specific to this build:
 - **BLE transport** uses Bluefruit's `BLEUart`, whose UUIDs are exactly the
@@ -84,12 +88,49 @@ per-architecture peripheral implementations split into `src/esp/` and
 
 ## API
 
-`EspBridge.begin(password = "espbridge", ble = true, exclusive = true)` —
-start the bridge. It spins up the FreeRTOS task model (separate TX / RX /
-blocking-handler tasks so a blocking TCP or BLE connect never stalls
-GPIO/I2C/SPI) and, by default, **does not return**: it deletes the Arduino
-loop task to hand its 8 KB stack back to the heap, which a classic ESP32
-running Wi-Fi + Bluedroid needs badly.
+One link per line, in any order — the bridge core starts with the first of
+them and is idempotent, so nothing has to be sequenced or remembered:
+
+```cpp
+void setup() {
+  EspBridge.usb.begin();                 // USB serial (never authenticated)
+  EspBridge.ble.begin();                 // password defaults to "espbridge"
+  EspBridge.wifi.begin("ssid", "pass");  // TCP link, port 3232
+  EspBridge.run();                       // optional: frees the 8 KB loop stack
+}
+void loop() { /* yours, unless run() was called */ }
+```
+
+| call | what it does |
+|---|---|
+| `usb.begin()` | starts the core; USB serial link |
+| `ble.begin(password = "espbridge")` | BLE link; `""` = open access |
+| `wifi.begin(ssid, pass)` | joins and **listens** on port 3232 |
+| `wifi.begin(ssid, pass, "10.0.0.5")` | **dials out** to your host, reconnecting forever (`Bridge(wifi=True)` accepts it) |
+| `wifi.begin()` | uses credentials provisioned over USB/BLE (NVS) |
+| `wifi.end()` | drops the link, gives the Wi-Fi heap back |
+| `run()` | deletes the loop task and never returns |
+
+`wifi.begin()` returns `false` if the link could not be armed (no credentials,
+not enough heap, or ESP-NOW already owns the radio) — the board runs on
+without it. A board provisioned once with `esp.wifi.link_setup(...)` starts its
+link automatically on every later boot, so the prebuilt image is fleet-capable
+with no reflash.
+
+**Radio combinations.** BLE + Wi-Fi link coexist, but the firmware then keeps
+Wi-Fi modem sleep on (`WIFI_PS_NONE` destabilises the coex arbiter), which
+roughly triples link latency, and a classic ESP32 runs ~10 KB free with both —
+measured 108 KB with the Wi-Fi link alone. ESP-NOW and the Wi-Fi link are
+mutually exclusive (`ST_BUSY`): ESP-NOW owns the radio channel and an AP
+association cannot survive it.
+
+The first `begin()` spins up the FreeRTOS task model — separate TX / RX /
+blocking-handler tasks, so a blocking TCP or BLE connect never stalls
+GPIO/I2C/SPI. `run()` then deletes the Arduino loop task to hand its 8 KB stack
+back to the heap, which a classic ESP32 running Wi-Fi + Bluedroid needs badly.
+Omit `run()` and `loop()` keeps running instead: the sketch can do its own work
+(on core 1, next to the command handlers) while the bridge serves the host, at
+the cost of that 8 KB — fine for USB-only boards, risky with BLE + Wi-Fi up.
 
 On dual-core chips the bridge uses **both cores**, grouped by domain: core 0
 (the radio core) carries the Wi-Fi/BT stacks plus the TX path and the
@@ -99,14 +140,9 @@ timing must stay away from radio interrupts. Reply N transmits on core 0
 while command N+1 executes on core 1. See `src/espbridge/config.h` for the
 named per-task core/priority/stack table.
 
-- `password` — secret a Bluetooth client must send via `SYS_AUTH` before any
-  command is accepted (`""` = open access). USB never asks for a password.
-- `ble` — start the Bluetooth link. Pass `false` for USB-only at runtime
-  (ignored on builds compiled without BLE).
-- `exclusive` — pass `false` to make `begin()` return so `loop()` keeps
-  running and the sketch can do its own work (on core 1, next to the command
-  handlers) while the bridge serves the host. Costs the 8 KB loop stack —
-  fine for USB-only boards; with BLE + Wi-Fi active the default is safer.
+Authentication is per link: USB never asks for a password (holding the cable is
+the credential), while BLE and Wi-Fi require the client to send `SYS_AUTH` with
+the password before any command is accepted. `""` makes a wireless link open.
 
 ## Partition scheme (pick one)
 
@@ -169,7 +205,7 @@ Flags: `BRIDGE_ENABLE_ETH=1` (RMII or SPI W5500), `BRIDGE_ENABLE_CAM=1`
 (OV-series + PSRAM on esp32/s2/s3), `BRIDGE_ENABLE_BLE=0` (USB-only build),
 `BRIDGE_SINGLE_CORE=<0|1>` (pin all bridge tasks to one core instead of the
 default dual-core layout: `1` leaves the radio core untouched, `0` leaves
-core 1 entirely to the sketch — pair with `begin(..., exclusive=false)`).
+core 1 entirely to the sketch — pair with omitting `EspBridge.run()`).
 
 **Classic-ESP32 IRAM trade-off:** Wi-Fi + Bluedroid fill the chip's instruction
 RAM, so the default classic build ships without SD-card support (LittleFS still
@@ -179,9 +215,11 @@ everything in every build.
 
 ## Bluetooth discovery
 
-The board advertises as `espbridge_<mac>` — or `espbridge_<mac>_<name>` once you
-assign a name (`espbridge set-name relays`; updates on the next reset).
-`espbridge scan --ble` lists every bridge in range.
+The board advertises as `espbridge_<name>` — or `espbridge_<mac>` until you name
+it — so the string you address it by is visible before connecting.
+`espbridge scan --ble` lists every bridge in range; `espbridge set-name relays`
+assigns a name (max 16 characters, so it fits the advertisement; updates on the
+next reset).
 
 ## Layout
 
@@ -189,7 +227,7 @@ assign a name (`espbridge set-name relays`; updates on the next reset).
 library.properties      Library Manager metadata
 keywords.txt            IDE syntax highlighting
 examples/Bridge/        the one-line example sketch
-src/PythonEspBridge.*    public API (EspBridge.begin)
+src/PythonEspBridge.*    public API (EspBridge.usb/ble/wifi/run)
 src/espbridge/          bridge core: protocol contract, framing, links, config
 src/mod_*.cpp           peripheral/task modules (GPIO, I2C, Wi-Fi, BLE, ...)
 src/link_ble.cpp        Bluetooth transport (NUS-style GATT service)

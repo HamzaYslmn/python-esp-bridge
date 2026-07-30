@@ -171,10 +171,7 @@ class NRF24:
 
     def _write_reg(self, reg: int, data) -> int:
         """Write `data` (int or bytes) to register `reg`; returns STATUS."""
-        if isinstance(data, int):
-            data = bytes([data])
-        else:
-            data = bytes(data)
+        data = bytes([data]) if isinstance(data, int) else bytes(data)
         rx = self._spi.transfer(bytes([_W_REGISTER | reg]) + data, cs=self._cs)
         return rx[0]
 

@@ -77,11 +77,12 @@ is the same pattern, no firmware change**. See
 | `usb_vs_ble_benchmark.py` | latency + throughput, first over USB then over Bluetooth |
 | `stress_test.py` | soak test: sustained, concurrent, multi-radio (Wi-Fi + BLE + ESP-NOW) load |
 
-Bridges advertise as `espbridge_<mac>` (or `espbridge_<mac>_<name>` once you
-`espbridge set-name`), so `espbridge scan --ble` finds and labels every board.
+Bridges advertise as `espbridge_<name>` (just `espbridge_<mac>` until you name
+one), so `espbridge scan --ble` finds every board in range and prints the
+identity you address it by.
 
 The Bluetooth password defaults to `espbridge`; change it by passing it to
-`EspBridge.begin("yourpassword")` in the Arduino sketch and reflashing.
+`EspBridge.ble.begin("yourpassword")` in the Arduino sketch and reflashing.
 
 ## network/ — Wi-Fi through the ESP32 radio
 
@@ -91,6 +92,8 @@ The Bluetooth password defaults to `espbridge`; change it by passing it to
 | `wifi_ap.py` | the ESP32 as a Wi-Fi access point (coexists with ESP-NOW and STA) |
 | `tcp_through_bridge.py` | join Wi-Fi, HTTP + raw TCP through the ESP32 |
 | `udp_through_bridge.py` | UDP datagrams through the ESP32 |
+| `wifi_link.py` | control a board **over Wi-Fi** instead of a cable — provision once, then `Bridge(host=...)` |
+| `many_boards.py` | every board on the Wi-Fi via `Bridge(wifi=True)` — discovered *and* dial-home |
 
 ## displays/
 
@@ -117,10 +120,11 @@ One folder per ecosystem — existing code from these libraries runs unchanged:
   pings the board every 5 s and transparently reconnects after an unplug,
   reset, or brown-out — your code keeps using the same object
   (`shared_connection.py` shows the pattern).
-- **Address boards by name, not port.** USB COM numbers hop; a stored name
-  doesn't. Name each board once (`espbridge -p COM7 set-name sensors`), then
-  `Bridge(name="sensors")` finds it on any port — or over Bluetooth with
-  `Bridge(ble="sensors")`.
+- **Address boards by name, not port.** USB COM numbers hop between reboots; a
+  stored name doesn't, and it is the same string over USB, Bluetooth and Wi-Fi.
+  Name each board once (`espbridge -p COM7 set-name sensors`), then
+  `Bridge("sensors")` finds it on any link. A MAC works in the same argument if
+  you'd rather not name them.
 - **Re-attach without rebooting.** Opening the serial port resets the board by
   default; pass `Bridge(reset_on_open=False)` to reconnect to the running
   firmware with all peripheral state intact.

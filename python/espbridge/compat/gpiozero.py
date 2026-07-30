@@ -50,7 +50,7 @@ def _board_info(gpio_count: int, chip: str) -> BoardInfo:
 
 
 class EspBridgePin(Pin):
-    def __init__(self, factory: "EspBridgeFactory", info: PinInfo):
+    def __init__(self, factory: EspBridgeFactory, info: PinInfo):
         super().__init__()
         self._factory = factory
         self._info = info

@@ -26,11 +26,11 @@ devs = find_ble_devices()
 if len(devs) < 2:
     sys.exit(f"need two advertising bridges, found {len(devs)}")
 sel_a, sel_b = devs[0], devs[1]
-print(f"pinger:  {sel_a.name}")
-print(f"ponger:  {sel_b.name}")
+print(f"pinger:  {sel_a.ident}")
+print(f"ponger:  {sel_b.ident}")
 
-with Bridge(ble=sel_a.mac, password="espbridge") as a, \
-     Bridge(ble=sel_b.mac, password="espbridge") as b:
+with Bridge(sel_a.ident, ble=True, password="espbridge") as a, \
+     Bridge(sel_b.ident, ble=True, password="espbridge") as b:
     mac_a = a.espnow.begin()
     mac_b = b.espnow.begin()
     a.espnow.add_peer(mac_b)

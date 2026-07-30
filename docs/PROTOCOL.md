@@ -75,7 +75,9 @@ cycle, not a 115200 link. `SYS_SET_BAUD` is not persisted — after
 
 ## Transports
 
-The frame stream is transport-agnostic; two links carry it today:
+The frame stream is transport-agnostic; three links carry it today, and a board
+can run all of them at once (routing is per-link: a reply goes back only on the
+link its request arrived on; events broadcast to every authenticated link).
 
 **USB serial** — the default. Boot handshake and baud negotiation as above.
 
@@ -87,22 +89,64 @@ The frame stream is transport-agnostic; two links carry it today:
 | RX (host → board) | `6e400002-…` write / write-no-response |
 | TX (board → host) | `6e400003-…` notify, chunked to ATT MTU |
 
-Boards advertise the service plus the name `espbridge_<mac>` (or
-`espbridge_<mac>_<name>` once a custom name is stored via `SYS_SET_NAME` —
-the advertised name updates on the next reset), so hosts can discover,
-display and address every bridge without connecting.
+Boards advertise the service plus the device name `espbridge_<identity>`, where
+the identity is the stored name or, until one is set, the 12-hex MAC. The prefix
+marks a board as a bridge in any BLE scanner; the scan response fits ~26
+characters and the prefix spends 10, which is why only one identity fits and why
+`BRIDGE_NAME_MAX` is 16.
+
+A *named* board therefore does not broadcast its MAC. Hosts selecting by MAC
+should fall back to connecting and reading `SYS_INFO`, which carries both.
 
 Frames are byte-identical to the serial link; COBS `0x00` delimiters make MTU
 chunk reassembly trivial. `SYS_SET_BAUD` is meaningless over BLE (skip it).
 
+**Wi-Fi (TCP)** — the same frame stream over a plain socket, port 3232 by
+default. No WebSocket, no HTTP: a raw stream that already has its own framing.
+`TCP_NODELAY` is set on both ends (Nagle would add ~40 ms per round trip) and
+keepalive (idle 5 s / interval 2 s / 3 probes) reaps a peer that vanished.
+One peer at a time; a new connection replaces the previous one, because a
+crashed host leaves a half-open socket that would otherwise lock the board out.
+
+Two directions, chosen by `WIFI_LINK_SETUP`'s `server` field:
+
+| mode | `server` | who connects | use for |
+|---|---|---|---|
+| listen | empty | host → board | a few boards on a known LAN |
+| dial-home | `"host"` / `"host:port"` | board → host | fleets: no IP bookkeeping, survives DHCP churn and NAT |
+
+Dial-home retries with backoff (attempt *N* waits *N* seconds, capped at 10 s)
+**plus up to 1 s of jitter** — with a thousand boards, an un-jittered retry
+storm after a server restart is a self-inflicted outage.
+
+Credentials and the server address persist in NVS (namespace `bridge`, keys
+`wl_*`), so a board provisioned once over USB or BLE comes back on Wi-Fi after
+every reboot with no reflash: the firmware auto-starts a stored link ~2 s into
+boot, unless the sketch already called `EspBridge.wifi.begin(...)`.
+
+In *listen* mode the board also answers a UDP discovery probe on the same port:
+send `ESPB?` to the broadcast address, get back
+`ESPB! | mac[6] | port u16 | name[]` — the name is the rest of the datagram, so
+it needs no length byte. That is exactly what the BLE advertisement already
+exposes. Dial-home boards don't answer — they announce themselves by connecting.
+
+**Wi-Fi link vs ESP-NOW:** mutually exclusive, first one wins (`ST_BUSY`).
+ESP-NOW pins/steals the radio channel and an AP association cannot survive it.
+BLE + Wi-Fi link do coexist, at a cost: the firmware keeps Wi-Fi modem sleep
+on whenever BLE is up (`WIFI_PS_NONE` destabilises the coex arbiter), which
+roughly triples link latency, and a classic ESP32 runs ~10 KB free with both.
+`WIFI_SCAN` and `WIFI_DISCONNECT` are refused with `ST_BUSY` while the link is
+armed — the first stalls it for seconds of channel hopping, the second cuts the
+branch the host is sitting on.
+
 ### Wireless authentication (`SYS_AUTH`)
 
-USB implies physical access and needs no password. Over BLE, every command
-except `SYS_AUTH` is rejected with `ST_DENIED (0x0D)` until the client sends
-`SYS_AUTH` with the password as payload (firmware default `"espbridge"`,
-set via `EspBridge.begin("...")` in the sketch; empty string
-= open access). On success the firmware replies OK and then emits the
-`SYS_READY` banner to that client, so the handshake proceeds exactly like
+USB implies physical access and needs no password. Over BLE **and TCP**, every
+command except `SYS_AUTH` is rejected with `ST_DENIED (0x0D)` until the client
+sends `SYS_AUTH` with the password as payload (firmware default `"espbridge"`,
+set via `EspBridge.ble.begin("...")` / `EspBridge.wifi.begin(..., password)`;
+empty string = open access). On success the firmware replies OK and then emits
+the `SYS_READY` banner to that client, so the handshake proceeds exactly like
 USB. Auth state is per-connection and resets on disconnect.
 
 ## Link flow control (fire-and-forget bursts)
@@ -148,7 +192,7 @@ on core 0 while command N+1 executes on core 1.
 | `bridge_rx`   | 1    | 10   | decodes frames; runs fast handlers (SYS/GPIO/ADC/DAC/TOUCH/PWM/I2C/SPI/UART/NVS/MCPWM, plus 1-Wire — its IRQ-masking bit slots must stay off the radio core) inline; pumps GPIO edge + UART RX events |
 | `bridge_slow` | 0    | 9    | owns all Wi-Fi/NET/ESP-NOW/BLE + FS/OTA/RMT/TWAI/I2S/camera state; executes their (possibly blocking) handlers from a request queue; polls sockets and scan results |
 
-With `EspBridge.begin(..., exclusive=false)` the sketch's `loop()` keeps
+When the sketch omits `EspBridge.run()` its `loop()` keeps
 running on core 1 (prio 1) next to `bridge_rx`, so user code gets the app
 core's slack while the bridge serves the host.
 
@@ -317,11 +361,24 @@ a time. Battery boards can shrink the window; window 0 disables RX entirely
 
 ### Device identity (multi-device setups)
 
-`SYS_SET_NAME` (payload = 0..32 raw bytes) persists a user-assigned name in
-the ESP32's NVS flash. The name is appended to the `SYS_INFO` / `SYS_READY`
-payload as a length-prefixed string tail, letting hosts pick a specific board
-(`Bridge(name="relays")`) regardless of which serial port it enumerated on.
-Hosts must treat the tail as optional for compatibility with older firmware.
+A board answers to two strings: its **MAC**, and the **name** persisted by
+`SYS_SET_NAME` (payload = 0..`BRIDGE_NAME_MAX` raw bytes, stored in NVS on ESP32
+and LittleFS on nRF52). Both travel together on every link:
+
+| | carries |
+|---|---|
+| `SYS_INFO` / `SYS_READY` | `mac[6]` … then the name as the payload tail |
+| Wi-Fi discovery reply | `ESPB! \| mac[6] \| port u16 \| name[]` |
+| BLE advertised name | `espbridge_<name>`, or `espbridge_<mac>` while unnamed |
+
+Neither tail is length-prefixed — the frame and the datagram already delimit
+them — and both are optional, so a host reading the head still works against
+firmware that sends no name, and vice versa.
+
+Only the advertisement is forced to choose (see the budget above), so it carries
+whichever identity you would actually type. `BRIDGE_NAME_MAX` is 16; hosts
+should refuse a longer name rather than store one that gets truncated over the
+air and then stops matching.
 
 ### Known quirks encoded in the protocol
 

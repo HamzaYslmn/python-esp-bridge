@@ -22,13 +22,13 @@ def _drain_frames(fw):
 
 
 def test_ble_auth_ok():
-    fw = FakeFirmware(password="espbridge", name="relays")
+    fw = FakeFirmware(password="espbridge", mac="c049efd03fe0")
     # boot() is intentionally skipped here: on a real BLE link the READY banner
     # is only sent after the host authenticates successfully, not at startup.
     with Bridge(transport=fw.transport, password="espbridge",
                 reset_on_open=False) as esp:
         assert esp.info is not None
-        assert esp.info.name == "relays"
+        assert esp.info.mac == "c0:49:ef:d0:3f:e0"
         esp.ping()
 
 

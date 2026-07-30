@@ -73,5 +73,5 @@ static inline bool pin_is_adc2(uint8_t pin) {
 // Used for both the SYS_INFO response and the SYS_READY boot-banner event.
 uint16_t sys_build_info(uint8_t* out);
 
-// NVS-persisted device name ("" when unset); appended to the BLE adv name.
+// Stored device name ("" when unset); the second half of the advertised identity.
 const char* sys_device_name();

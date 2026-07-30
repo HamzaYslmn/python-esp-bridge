@@ -12,6 +12,10 @@
 #define RADIO_STA    0x01
 #define RADIO_AP     0x02
 #define RADIO_ESPNOW 0x04
+// The Wi-Fi transport link (link_tcp.cpp). A separate bit so that a host
+// WIFI_DISCONNECT releasing RADIO_STA cannot power the driver off underneath
+// the link that request arrived on.
+#define RADIO_LINK   0x08
 
 // Claim `user`'s radio bit, heap-guarded: with an authed BLE central,
 // returns false when the acquire's actual cost (full driver bring-up when

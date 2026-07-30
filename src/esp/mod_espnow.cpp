@@ -11,6 +11,7 @@
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/radio.h"
+#include "espbridge/link.h"
 
 #if BRIDGE_HAS_ESPNOW
 
@@ -78,6 +79,13 @@ static uint8_t map_espnow_error(esp_err_t e) {
 static void do_init(uint8_t seq, uint16_t cmd, const uint8_t* p, uint16_t len) {
   NEED(2);
   uint8_t channel = p[0], flags = p[1];
+
+  // Mutually exclusive with the Wi-Fi transport link: ESP-NOW owns the channel
+  // and drags the radio off it on every cross-channel send, which the link's
+  // AP association cannot survive. BLE + Wi-Fi link is fine, BLE + ESP-NOW is
+  // fine, and so is ESP-NOW alongside a plain WIFI_CONNECT/AP — only ESP-NOW
+  // plus the transport link is refused.
+  if (link_tcp_enabled()) { proto_reply_err(seq, cmd, ST_BUSY); return; }
 
   // ESP-NOW requires the Wi-Fi driver running and sends through the STA
   // interface, even when not associated. radio_acquire applies the BLE heap

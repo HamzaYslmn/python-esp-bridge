@@ -1,6 +1,9 @@
-"""Full hardware stress suite for python-esp-bridge (radio refactor validation).
+"""Full hardware stress suite for python-esp-bridge.
 
-Boards: COM3 = "relays" board (OLED on I2C; NO gpio writes), COM7 = spare bench.
+Two boards, identified by MAC — never by port, because port numbers hop between
+reboots and driving the wrong board's GPIO can switch a relay:
+  relays — OLED on I2C at 0x3c; no GPIO writes (GPIO2 may drive a relay)
+  spare  — bench board; gpio/pwm/dac/touch are free to poke
 Runs the whole suite N times, tracks heap at the end of every iteration.
 """
 import sys
@@ -9,6 +12,9 @@ import threading
 
 import espbridge
 from espbridge.errors import RemoteError
+
+RELAYS_MAC = "c0:49:ef:d0:3f:e0"
+SPARE_MAC = "c0:49:ef:d4:54:44"
 
 ITERATIONS = 5
 results = []   # (iteration, test, ok, detail)
@@ -27,10 +33,19 @@ def run_test(it, name, fn):
     check(it, name, ok, detail)
 
 
-a = espbridge.Bridge(port="COM3")
-b = espbridge.Bridge(port="COM7")
-print(f"COM3: fw {a.info.fw_version} name={a.info.name!r} mac={a.info.mac}")
-print(f"COM7: fw {b.info.fw_version} name={b.info.name!r} mac={b.info.mac}")
+def open_by_mac(mac, role):
+    """Open the board with this MAC, whatever port it landed on this boot."""
+    try:
+        esp = espbridge.Bridge(mac, ble=False)
+    except espbridge.BridgeError as e:
+        raise SystemExit(f"no board with MAC {mac} ({role}): {e}") from None
+    print(f"{role:<7} mac={esp.info.mac} "
+          f"fw {'.'.join(map(str, esp.info.fw_version))}")
+    return esp
+
+
+a = open_by_mac(RELAYS_MAC, "relays")
+b = open_by_mac(SPARE_MAC, "spare")
 
 # ESP-NOW RX counters, registered once (callbacks persist across begin/end).
 rx_a, rx_b = [], []
@@ -50,7 +65,7 @@ for it in range(1, ITERATIONS + 1):
             a.ping()
         avg = (time.perf_counter() - t0) / n * 1000
         return avg < 15, f"300 pings, avg {avg:.2f} ms"
-    run_test(it, "sys: ping x300 (COM3)", t_ping)
+    run_test(it, "sys: ping x300 (relays)", t_ping)
 
     def t_power_mode():
         bat = a.power_mode("battery")
@@ -59,7 +74,7 @@ for it in range(1, ITERATIONS + 1):
         # to be attached -- both correct; assert the CPU knob only.
         ok = bat["cpu_mhz"] == 80 and perf["cpu_mhz"] == 240
         return ok, f"battery={bat} performance={perf}"
-    run_test(it, "sys: power_mode cycle (COM3)", t_power_mode)
+    run_test(it, "sys: power_mode cycle (relays)", t_power_mode)
 
     # ---- GPIO ----------------------------------------------------------------
     def t_gpio_b():
@@ -68,7 +83,7 @@ for it in range(1, ITERATIONS + 1):
             b.gpio.write(2, v & 1)
         rb = b.gpio.write(2, 0, verify=True)
         return rb == 0, "200 toggles + verified low"
-    run_test(it, "gpio: toggle x200 pin2 (COM7)", t_gpio_b)
+    run_test(it, "gpio: toggle x200 pin2 (spare)", t_gpio_b)
 
     def t_gpio_read():
         ra, rb_ = a.gpio.read_all(), b.gpio.read_all()
@@ -94,14 +109,14 @@ for it in range(1, ITERATIONS + 1):
             b.espnow.end()               # radio back off
         v1 = b.adc.read(26)              # readable again
         return True, f"off={v0}, radio-up refused ({refused}), off-again={v1}"
-    run_test(it, "adc: ADC2 guard vs radio (COM7)", t_adc2_guard)
+    run_test(it, "adc: ADC2 guard vs radio (spare)", t_adc2_guard)
 
     def t_touch_dac():
         tv = b.touch.read(4)
         b.dac.write(25, 128)
         b.dac.disable(25)
         return tv > 0, f"touch4={tv}, dac25 write+disable ok"
-    run_test(it, "analog: touch + dac (COM7)", t_touch_dac)
+    run_test(it, "analog: touch + dac (spare)", t_touch_dac)
 
     # ---- PWM ------------------------------------------------------------------
     def t_pwm():
@@ -110,7 +125,7 @@ for it in range(1, ITERATIONS + 1):
             b.pwm.duty_pct(2, pct)
         b.pwm.detach(2)
         return True, "attach/duty 10-50-90/detach"
-    run_test(it, "pwm: cycle pin2 (COM7)", t_pwm)
+    run_test(it, "pwm: cycle pin2 (spare)", t_pwm)
 
     # ---- I2C ------------------------------------------------------------------
     def t_i2c():
@@ -120,10 +135,10 @@ for it in range(1, ITERATIONS + 1):
         finally:
             a.i2c.deinit()
         return 0x3C in found, f"scan: {[hex(x) for x in found]}"
-    run_test(it, "i2c: scan finds OLED 0x3c (COM3)", t_i2c)
+    run_test(it, "i2c: scan finds OLED 0x3c (relays)", t_i2c)
 
     # ---- NVS ------------------------------------------------------------------
-    def t_nvs(esp=a, tag="COM3"):
+    def t_nvs(esp=a, tag="relays"):
         esp.nvs.set("hw_i", it * 1234)
         esp.nvs.set("hw_s", f"iter{it}")
         esp.nvs.set("hw_b", bytes(range(16)))
@@ -134,8 +149,8 @@ for it in range(1, ITERATIONS + 1):
             esp.nvs.delete(k)
         gone = esp.nvs.get("hw_i") is None
         return ok and gone, "set/get int+str+bytes, delete verified"
-    run_test(it, "nvs: roundtrip (COM3)", lambda: t_nvs(a))
-    run_test(it, "nvs: roundtrip (COM7)", lambda: t_nvs(b))
+    run_test(it, "nvs: roundtrip (relays)", lambda: t_nvs(a))
+    run_test(it, "nvs: roundtrip (spare)", lambda: t_nvs(b))
 
     # ---- FS -------------------------------------------------------------------
     def t_fs(esp):
@@ -151,8 +166,8 @@ for it in range(1, ITERATIONS + 1):
             return ok, f"8KB roundtrip, df {used}/{total} KB"
         finally:
             fs.umount()
-    run_test(it, "fs: 8KB write/read/remove (COM3)", lambda: t_fs(a))
-    run_test(it, "fs: 8KB write/read/remove (COM7)", lambda: t_fs(b))
+    run_test(it, "fs: 8KB write/read/remove (relays)", lambda: t_fs(a))
+    run_test(it, "fs: 8KB write/read/remove (spare)", lambda: t_fs(b))
 
     # ---- UART (no loopback wired: init/write/close paths) ----------------------
     def t_uart():
@@ -160,7 +175,7 @@ for it in range(1, ITERATIONS + 1):
         u.write(b"x" * 64)
         u.close()
         return True, "init/write64/close"
-    run_test(it, "uart: port1 cycle (COM7)", t_uart)
+    run_test(it, "uart: port1 cycle (spare)", t_uart)
 
     # ---- WATCH (heap source: no wiring needed) ----------------------------------
     def t_watch(esp):
@@ -172,15 +187,15 @@ for it in range(1, ITERATIONS + 1):
         finally:
             esp.watch.remove(wid)
         return ok, f"heap rule id={wid} fired"
-    run_test(it, "watch: heap rule fires (COM3)", lambda: t_watch(a))
-    run_test(it, "watch: heap rule fires (COM7)", lambda: t_watch(b))
+    run_test(it, "watch: heap rule fires (relays)", lambda: t_watch(a))
+    run_test(it, "watch: heap rule fires (spare)", lambda: t_watch(b))
 
     # ---- Wi-Fi ------------------------------------------------------------------
     def t_scan(esp):
         nets = esp.wifi.scan()
         return len(nets) > 0, f"{len(nets)} networks"
-    run_test(it, "wifi: scan (COM3)", lambda: t_scan(a))
-    run_test(it, "wifi: scan (COM7)", lambda: t_scan(b))
+    run_test(it, "wifi: scan (relays)", lambda: t_scan(a))
+    run_test(it, "wifi: scan (spare)", lambda: t_scan(b))
 
     # ---- ESP-NOW exchange --------------------------------------------------------
     mac_a = a.espnow.begin()
@@ -199,7 +214,7 @@ for it in range(1, ITERATIONS + 1):
             b.espnow.broadcast(b"bc")
             time.sleep(0.02)
         time.sleep(0.4)
-        return len(rx_a) >= 12, f"{len(rx_a)}/20 received on COM3"
+        return len(rx_a) >= 12, f"{len(rx_a)}/20 received on relays"
     run_test(it, "espnow: broadcast x20 B->A", t_broadcast)
 
     def t_ff_rapid():
@@ -229,7 +244,7 @@ for it in range(1, ITERATIONS + 1):
         time.sleep(0.3)
         lit = len(rx_b)
         return dark == 0 and lit >= 3, f"window0: {dark}/5 (want 0), restored: {lit}/5"
-    run_test(it, "espnow: power_save window (COM7)", t_power_save)
+    run_test(it, "espnow: power_save window (spare)", t_power_save)
 
     # ---- multi-user radio: AP + ESP-NOW hold each other ---------------------------
     def t_radio_multiuser():
@@ -258,7 +273,7 @@ for it in range(1, ITERATIONS + 1):
                 f"ap={ip}, heap {h_pre}->{h_ap}, ACK with AP {with_ap}/5"
                 f"{f' (err: {err_ap})' if err_ap else ''}, after ap_stop {after_ap}/5"
                 f"{f' (err: {err_post})' if err_post else ''}")
-    run_test(it, "radio: AP + ESP-NOW multi-user (COM3)", t_radio_multiuser)
+    run_test(it, "radio: AP + ESP-NOW multi-user (relays)", t_radio_multiuser)
 
     # ---- teardown + radio-off heap reclaim ----------------------------------------
     def t_radio_off():
@@ -277,12 +292,11 @@ for it in range(1, ITERATIONS + 1):
         time.sleep(0.3)
         h = b.free_heap()["free"]
         return h > 40000, f"5x begin/end, heap {h}"
-    run_test(it, "radio: 5x begin/end cycle (COM7)", t_radio_cycle)
+    run_test(it, "radio: 5x begin/end cycle (spare)", t_radio_cycle)
 
     # ---- BLE dual-link phase ----------------------------------------------------------
     def t_ble():
-        name = a.info.name or True
-        ble = espbridge.Bridge(ble=name)
+        ble = espbridge.Bridge(RELAYS_MAC, ble=True)
         try:
             t0 = time.perf_counter()
             for _ in range(10):
@@ -319,13 +333,13 @@ for it in range(1, ITERATIONS + 1):
                 return True, detail + f", disconnect after {time.time()-t0:.1f}s"
             time.sleep(1)
         return True, detail + ", WARNING: central still attached after 30s"
-    run_test(it, "ble: dual-link session (COM3 board)", t_ble)
+    run_test(it, "ble: dual-link session (relays board)", t_ble)
 
     # ---- iteration heap snapshot --------------------------------------------------------
     ha, hb = a.free_heap(), b.free_heap()
     heap_log.append((it, ha["free"], hb["free"]))
-    print(f"  [{it}] heap end-of-iteration: COM3 {ha['free']} (min {ha['min_free']}), "
-          f"COM7 {hb['free']} (min {hb['min_free']})  [{time.time()-t_iter:.0f}s]")
+    print(f"  [{it}] heap end-of-iteration: relays {ha['free']} (min {ha['min_free']}), "
+          f"spare {hb['free']} (min {hb['min_free']})  [{time.time()-t_iter:.0f}s]")
 
 # ---- summary ------------------------------------------------------------------------------
 print("\n" + "=" * 70)
@@ -334,10 +348,10 @@ total = len(results)
 print(f"RESULT: {total - len(fails)}/{total} checks passed over {ITERATIONS} iterations")
 print("heap trend (end of each iteration):")
 for it, hfa, hfb in heap_log:
-    print(f"  iter {it}: COM3 {hfa}  COM7 {hfb}")
+    print(f"  iter {it}: relays {hfa}  spare {hfb}")
 drift_a = heap_log[-1][1] - heap_log[0][1]
 drift_b = heap_log[-1][2] - heap_log[0][2]
-print(f"heap drift iter1->iter{ITERATIONS}: COM3 {drift_a:+d} B, COM7 {drift_b:+d} B")
+print(f"heap drift iter1->iter{ITERATIONS}: relays {drift_a:+d} B, spare {drift_b:+d} B")
 if fails:
     print("\nFAILED checks:")
     for it, name, _, detail in fails:

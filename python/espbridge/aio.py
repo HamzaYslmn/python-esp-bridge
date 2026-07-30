@@ -136,15 +136,14 @@ class AsyncBridge:
     surfaced here (events, ``on_event``, device drivers).
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, **kwargs):
         # Bridge() connects (and blocks) in its constructor, so defer it.
-        self._args = args
         self._kwargs = kwargs
         self._bridge = None
         self._owned = True  # we opened it, so we close it
 
     @classmethod
-    def wrap(cls, bridge: Bridge) -> "AsyncBridge":
+    def wrap(cls, bridge: Bridge) -> AsyncBridge:
         """Wrap an already-connected Bridge for ``await`` use, sharing its link.
 
         Lets an async app reuse the one shared connection instead of opening a
@@ -153,7 +152,6 @@ class AsyncBridge:
         (e.g. the BridgeManager behind connect()) closes it.
         """
         self = cls.__new__(cls)
-        self._args = ()
         self._kwargs = {}
         self._bridge = bridge
         self._owned = False
@@ -171,12 +169,11 @@ class AsyncBridge:
             )
         return self._bridge
 
-    async def connect(self) -> "AsyncBridge":
+    async def connect(self) -> AsyncBridge:
         """Open the link off the event loop (Bridge() blocks while connecting).
         Usually you don't call this directly — use ``async with AsyncBridge():``."""
         if self._bridge is None:
-            self._bridge = await asyncio.to_thread(
-                Bridge, *self._args, **self._kwargs)
+            self._bridge = await asyncio.to_thread(Bridge, **self._kwargs)
         return self
 
     async def close(self) -> None:
@@ -186,7 +183,7 @@ class AsyncBridge:
             await asyncio.to_thread(self._bridge.close)
         self._bridge = None
 
-    async def __aenter__(self) -> "AsyncBridge":
+    async def __aenter__(self) -> AsyncBridge:
         return await self.connect()
 
     async def __aexit__(self, *exc) -> None:

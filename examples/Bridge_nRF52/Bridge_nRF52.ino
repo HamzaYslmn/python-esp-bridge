@@ -27,9 +27,12 @@
 #include <PythonEspBridge.h>
 
 void setup() {
-  EspBridge.begin();               // BLE password "espbridge", Bluetooth enabled
-  // EspBridge.begin("secret");    // custom Bluetooth password
-  // EspBridge.begin("", false);   // USB-only mode (Bluetooth off)
+  EspBridge.usb.begin();   // USB serial — the bridge core starts with this
+  EspBridge.ble.begin();   // Bluetooth, password "espbridge"
+  // EspBridge.ble.begin("secret");   // ...or a password of your own ("" = open)
+  // EspBridge.wifi.begin(...) does not exist on this part — no Wi-Fi radio.
+
+  EspBridge.run();         // hands this task to the bridge; frees the loop task's stack
 }
 
-void loop() {}                     // intentionally empty — begin() owns the board
+void loop() {}             // never runs — remove the run() call above to use it

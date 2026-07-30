@@ -30,7 +30,7 @@ def worker(n: int, stop: threading.Event) -> int:
 
 def main() -> None:
     esp = espbridge.connect(ble=False)        # opens the link on first call
-    print(f"connected to {esp.info.chip.name} ({esp.info.name or esp.info.mac})")
+    print(f"connected to {esp.info.chip.name} ({esp.info.ident})")
     esp.adc.config(34, atten=11)
 
     stop = threading.Event()

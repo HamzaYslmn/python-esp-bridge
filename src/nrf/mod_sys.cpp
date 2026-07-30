@@ -1,6 +1,6 @@
-// SYS (nRF52): ping, info, reset, heap stats, persistent device name, deep
-// sleep. Counterpart to src/esp/mod_sys.cpp. This build has no CPU-freq scaling
-// or Wi-Fi; CPU_FREQ and light sleep report ST_UNSUPPORTED.
+// SYS (nRF52): ping, info, reset, heap stats, device name, deep sleep.
+// Counterpart to src/esp/mod_sys.cpp. This build has no CPU-freq scaling or
+// Wi-Fi; CPU_FREQ and light sleep report ST_UNSUPPORTED.
 #if defined(ARDUINO_ARCH_NRF52)
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
@@ -16,8 +16,8 @@ bool nrf_internalfs_begin();       // plat_nrf.cpp
 uint32_t plat_resetreas();         // plat_nrf.cpp — raw RESETREAS captured at boot
 extern const uint32_t g_ADigitalPinMap[];  // Arduino pin -> nRF GPIO number
 
-// Device name persisted to LittleFS (/bridge_name) so it survives reboot, like
-// the ESP NVS-backed name. Loaded lazily on first use.
+// Device name persisted to LittleFS (/bridge_name), the counterpart to the ESP
+// NVS-backed name. Loaded lazily on first use.
 static char bridge_name[BRIDGE_NAME_MAX + 1];
 static bool name_loaded = false;
 #define NAME_PATH "/bridge_name"
@@ -58,28 +58,16 @@ uint16_t sys_build_info(uint8_t* out) {
   nrf_read_mac(mac);
   memcpy(p, mac, 6); p += 6;
 
-  uint32_t caps = 0;  // no Wi-Fi / DAC / touch / ESP-NOW / RMT / CAN / I2S on nRF52
-#if BRIDGE_HAS_BLE
-  caps |= CAP_BLE;
-#endif
-#if BRIDGE_BLE
-  caps |= CAP_BLE_FW;
-#endif
-#if BRIDGE_NATIVE_USB
-  caps |= CAP_NATIVE_USB;
-#endif
-#if BRIDGE_HAS_ONEWIRE
-  caps |= CAP_ONEWIRE;
-#endif
-#if BRIDGE_HAS_FS
-  caps |= CAP_FS;
-#endif
-#if BRIDGE_HAS_NVS
-  caps |= CAP_NVS;
-#endif
-#if BRIDGE_HAS_SLEEP
-  caps |= CAP_SLEEP;
-#endif
+  // No Wi-Fi / DAC / touch / ESP-NOW / RMT / CAN / I2S on nRF52. CAPIF folds at
+  // compile time — see commands.h.
+  uint32_t caps =
+        CAPIF(BRIDGE_HAS_BLE,     CAP_BLE)
+      | CAPIF(BRIDGE_BLE,         CAP_BLE_FW)
+      | CAPIF(BRIDGE_NATIVE_USB,  CAP_NATIVE_USB)
+      | CAPIF(BRIDGE_HAS_ONEWIRE, CAP_ONEWIRE)
+      | CAPIF(BRIDGE_HAS_FS,      CAP_FS)
+      | CAPIF(BRIDGE_HAS_NVS,     CAP_NVS)
+      | CAPIF(BRIDGE_HAS_SLEEP,   CAP_SLEEP);
   if (link_ble_enabled()) caps |= CAP_BLE_LINK;
   write_be32(p, caps); p += 4;
 
@@ -90,9 +78,9 @@ uint16_t sys_build_info(uint8_t* out) {
 #endif
   *p++ = 1;   // 1 MB internal flash
 
+  // Name as the tail, unlength-prefixed: the frame already carries the length.
   load_device_name();
   uint8_t nlen = strlen(bridge_name);
-  *p++ = nlen;
   memcpy(p, bridge_name, nlen); p += nlen;
   return p - out;
 }
@@ -122,7 +110,7 @@ void sys_handle(uint8_t op, uint8_t seq, const uint8_t* p, uint16_t len) {
       NVIC_SystemReset();
       break;
 
-    case 0x06: {  // SET_NAME: payload = name (0..32 bytes), persisted to LittleFS
+    case 0x06: {  // SET_NAME: payload = name (0..BRIDGE_NAME_MAX bytes), persisted to LittleFS
       if (len > BRIDGE_NAME_MAX) { proto_reply_err(seq, cmd, ST_BAD_ARGS); return; }
       memcpy(bridge_name, p, len);
       bridge_name[len] = 0;

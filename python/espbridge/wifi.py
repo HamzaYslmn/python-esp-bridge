@@ -45,6 +45,22 @@ class WifiStatus:
         return self.status == WL_CONNECTED
 
 
+LINK_STATES = {0: "off", 1: "joining", 2: "listening", 3: "connected"}
+
+
+@dataclass(frozen=True)
+class LinkStatus:
+    """State of the Wi-Fi *transport* link — how the host reaches this board.
+    ``state`` is off / joining / listening (which covers dialing out to a host)
+    / connected; ``ip`` and ``port`` say where a listening board answers."""
+
+    state: str
+    ip: str
+    port: int
+    peer: bool
+    tx_errors: int
+
+
 class Wifi:
     """Wi-Fi station/AP control: scan, join, status, host an access point.
 
@@ -152,3 +168,43 @@ class Wifi:
     def hostname(self, name: str) -> None:
         """Set the DHCP hostname used on the network (call before connect())."""
         self._b.request(C.WIFI_HOSTNAME, lp(name))
+
+    # ---- the Wi-Fi transport link (bridge protocol over TCP) ------------------
+    # Not the same thing as connect() above: that joins a network so NET sockets
+    # can be proxied; these provision the link the HOST talks to the board over.
+
+    def link_setup(self, ssid: str, password: str = "", *, server: str = "",
+                   port: int = C.BRIDGE_LINK_PORT, persist: bool = True,
+                   start: bool = True) -> None:
+        """Provision the Wi-Fi transport link (send this over USB or Bluetooth).
+
+        ``server=""`` is listen mode: the board waits on ``port`` for
+        ``Bridge(host=...)``. A ``"host"`` or ``"host:port"`` makes it dial your
+        host and reconnect forever, where ``Bridge(wifi=True)`` picks it up —
+        the mode to use past a handful of boards.
+
+        Credentials persist in NVS, so the board comes back on Wi-Fi after every
+        reboot with no reflash. Same password as Bluetooth.
+
+            >>> esp.wifi.link_setup("ssid", "pass")                      # listen
+            >>> esp.wifi.link_setup("ssid", "pass", server="10.0.0.5")  # dials home
+        """
+        flags = (0x01 if persist else 0) | (0x02 if start else 0)
+        payload = (lp(ssid) + lp(password) + lp(server)
+                   + port.to_bytes(2, "big") + bytes([flags]))
+        self._b.request(C.WIFI_LINK_SETUP, payload, timeout=10.0)
+
+    def link_stop(self) -> None:
+        """Stop the Wi-Fi transport link and erase its stored configuration."""
+        self._b.request(C.WIFI_LINK_STOP, timeout=5.0)
+
+    def link_status(self) -> LinkStatus:
+        """State of the Wi-Fi transport link (off / joining / listening / connected)."""
+        p = self._b.request(C.WIFI_LINK_STATUS)
+        return LinkStatus(
+            state=LINK_STATES.get(p[0], "unknown"),
+            ip=_ip(p[1:5]),
+            port=int.from_bytes(p[5:7], "big"),
+            peer=bool(p[7]),
+            tx_errors=int.from_bytes(p[8:12], "big"),
+        )

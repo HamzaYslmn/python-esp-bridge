@@ -13,6 +13,9 @@ EspBridgeClass	KEYWORD1
 #######################################
 
 begin	KEYWORD2
+run	KEYWORD2
+usb	KEYWORD2
+wifi	KEYWORD2
 
 #######################################
 # Instances (KEYWORD2)

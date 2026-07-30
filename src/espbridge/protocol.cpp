@@ -14,6 +14,7 @@
 #include <queue.h>
 #endif
 #include <atomic>  // inter-task counters/flags: atomic is the correct primitive (volatile is not)
+#include <new>     // nothrow allocation of the on-demand Wi-Fi link buffers
 
 // ---- CRC-16/CCITT-FALSE (table-driven) --------------------------------------
 // 256-entry table (512 B rodata) replaces the per-byte bit loop on the hot path.
@@ -64,7 +65,7 @@ uint16_t crc16_ccitt(const uint8_t* data, uint16_t len) {
   return crc16_update(0xFFFF, data, len);
 }
 
-// ---- COBS (Consistent Overhead Byte Stuffing) ---------------------------------
+// ---- COBS (Consistent Overhead Byte Stuffing) -------------------------------
 // Incremental encoder: header/payload/CRC fed straight to the output in pieces,
 // so no 2 KB scratch frame. out needs len + len/254 + 1 bytes (worst case).
 struct CobsEnc {
@@ -116,7 +117,7 @@ static uint16_t cobs_decode(const uint8_t* in, uint16_t len, uint8_t* out) {
   return wi;
 }
 
-// ---- outbound per-link streams + tx task ------------------------------------------
+// ---- outbound per-link streams + tx task ------------------------------------
 // dest controls routing at enqueue time:
 //   DEST_ALL  — a copy to every link that is up (serial always; BLE when authed).
 //   LINK_USB / LINK_BLE — that link only (replies; the pre-auth SYS_AUTH exchange).
@@ -137,6 +138,11 @@ struct TxStream {
 static TxStream tx_usb;
 #if BRIDGE_BLE
 static TxStream tx_ble;        // ~2 KB wire buffer + queue: only on BLE builds
+#endif
+#if BRIDGE_WIFI_LINK
+// Heap, not BSS: allocated by proto_link_tcp_alloc() when the Wi-Fi link is
+// actually enabled. nullptr = link absent, which every seam below checks.
+static TxStream* tx_net = nullptr;
 #endif
 static TaskHandle_t tx_task_h;  // enqueue_frame notifies it out of its idle wait
 static std::atomic<uint32_t> dropped{0};  // frames dropped across all producer tasks
@@ -184,8 +190,13 @@ static void enqueue_frame(uint8_t flags, uint8_t seq, uint16_t cmd,
   if (dest == LINK_BLE || (dest == DEST_ALL && link_ble_authed()))
     enqueue_copy(tx_ble, flags, seq, cmd, data, len);
 #endif
+#if BRIDGE_WIFI_LINK
+  if (tx_net && (dest == LINK_TCP || (dest == DEST_ALL && link_tcp_authed())))
+    enqueue_copy(*tx_net, flags, seq, cmd, data, len);
+#endif
   if (tx_task_h) xTaskNotifyGive(tx_task_h);  // wake the drainer (latched if it isn't waiting)
 }
+
 
 // Dequeue the next frame of `s` (if any) and encode it into the stream's wire
 // buffer — header, payload and CRC fed incrementally, no scratch copy. tx_task only.
@@ -222,38 +233,66 @@ static bool advance_usb_stream() {
   return true;
 }
 
-#if BRIDGE_BLE
-static bool advance_ble_stream() {
-  if (tx_ble.len == 0) load_stream_frame(tx_ble);
-  if (tx_ble.len == 0) return false;
-  if (!link_ble_up()) {
-    // Central gone: drop the in-flight frame and the queue — undeliverable, and
-    // holding them would leak into the next session.
-    tx_ble.len = 0;
-    Frame f;
-    while (xQueueReceive(tx_ble.q, &f, 0) == pdTRUE) {
-      free(f.buf);
-      dropped++;
-    }
-    return false;
+// Peer gone: drop the in-flight frame and the queue — undeliverable, and
+// holding them would leak into the next session.
+static void drop_stream(TxStream& s) {
+  s.len = 0;
+  Frame f;
+  while (xQueueReceive(s.q, &f, 0) == pdTRUE) {
+    free(f.buf);
+    dropped++;
   }
-  uint16_t n = link_ble_write_chunk(tx_ble.wire + tx_ble.pos, tx_ble.len - tx_ble.pos);
-  if (n == 0) return false;  // BT stack congested: skip, retry next pass
-  tx_ble.pos += n;
-  if (tx_ble.pos == tx_ble.len) tx_ble.len = 0;
+}
+
+// Both wireless links have the identical shape: chunked writes, 0 bytes means
+// "congested, retry next pass", and the peer can vanish mid-frame. Only which
+// pair of link functions to call differs — indirect calls cost nothing here,
+// once per tx_task pass rather than per byte.
+static bool advance_chunked(TxStream& s, bool (*up)(),
+                            uint16_t (*write_chunk)(const uint8_t*, uint16_t)) {
+  if (s.len == 0) load_stream_frame(s);
+  if (s.len == 0) return false;
+  if (!up()) { drop_stream(s); return false; }
+  uint16_t n = write_chunk(s.wire + s.pos, s.len - s.pos);
+  if (n == 0) return false;
+  s.pos += n;
+  if (s.pos == s.len) s.len = 0;
   return true;
 }
-static bool tx_streams_idle() { return tx_usb.len == 0 && tx_ble.len == 0; }
+
+static bool advance_ble_stream() {
+#if BRIDGE_BLE
+  return advance_chunked(tx_ble, link_ble_up, link_ble_write_chunk);
 #else
-static bool advance_ble_stream() { return false; }
-static bool tx_streams_idle() { return tx_usb.len == 0; }
+  return false;
 #endif
+}
+
+static bool advance_net_stream() {
+#if BRIDGE_WIFI_LINK
+  return tx_net && advance_chunked(*tx_net, link_tcp_up, link_tcp_write_chunk);
+#else
+  return false;
+#endif
+}
+
+static bool tx_streams_idle() {
+  if (tx_usb.len) return false;
+#if BRIDGE_BLE
+  if (tx_ble.len) return false;
+#endif
+#if BRIDGE_WIFI_LINK
+  if (tx_net && tx_net->len) return false;
+#endif
+  return true;
+}
 
 static void tx_task(void*) {
   uint16_t spins = 0;
   for (;;) {
     bool moved = advance_usb_stream();
     moved = advance_ble_stream() || moved;
+    moved = advance_net_stream() || moved;
     if (!moved) {
       spins = 0;
       if (tx_streams_idle()) {
@@ -311,7 +350,7 @@ void proto_tx_flush() {
 
 uint32_t proto_dropped_events() { return dropped; }
 
-// ---- blocking-handler queue (bridge_slow) -----------------------------------------
+// ---- blocking-handler queue (bridge_slow) -----------------------------------
 // WIFI/NET/BLE/etc. handlers can block for seconds (TCP/BLE connect) and share
 // state with socket polling, so they run on slow_task (on CORE_RADIO, next to
 // the stacks they call) instead of stalling rx_task.
@@ -355,6 +394,9 @@ static void slow_task(void*) {
     }
     wifi_poll();
     net_poll();
+#if BRIDGE_WIFI_LINK
+    link_tcp_poll();  // accept / dial-home / reconnect backoff (may block briefly)
+#endif
     twai_poll();
     watch_poll();  // polled (non-ISR) user watch rules -> WATCH_EVT
   }
@@ -374,7 +416,7 @@ static void slow_enqueue(uint16_t cmd, uint8_t seq, uint8_t origin,
   }
 }
 
-// ---- RX & dispatch (rx_task) -------------------------------------------------------
+// ---- RX & dispatch (rx_task) ------------------------------------------------
 // Per-link COBS accumulator: USB and BLE bytes arrive independently and may
 // interleave. Frames decode in place here (cobs_decode), so no scratch buffer.
 struct RxState {
@@ -383,6 +425,16 @@ struct RxState {
   bool overflow = false;
 };
 static RxState rxstate[BRIDGE_BLE ? 2 : 1];  // [LINK_USB], [LINK_BLE]
+#if BRIDGE_WIFI_LINK
+static RxState* rx_net = nullptr;  // heap, like tx_net — see proto_link_tcp_alloc
+#endif
+
+static RxState* rx_for(uint8_t origin) {
+#if BRIDGE_WIFI_LINK
+  if (origin == LINK_TCP) return rx_net;
+#endif
+  return &rxstate[origin];
+}
 
 static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
                      const uint8_t* p, uint16_t len) {
@@ -414,41 +466,69 @@ static void dispatch(uint8_t origin, uint8_t seq, uint16_t cmd,
   }
 }
 
+// ---- per-link auth policy (see link.h) --------------------------------------
+// USB is trusted (you are holding the cable); BLE and TCP must pass SYS_AUTH.
+bool link_needs_auth(uint8_t link) { return link == LINK_BLE || link == LINK_TCP; }
+
+bool link_authed(uint8_t link) {
+  if (link == LINK_BLE) return link_ble_authed();
+#if BRIDGE_WIFI_LINK
+  if (link == LINK_TCP) return link_tcp_authed();
+#endif
+  return true;  // USB
+}
+
+void link_set_authed(uint8_t link, bool v) {
+  if (link == LINK_BLE) link_ble_set_authed(v);
+#if BRIDGE_WIFI_LINK
+  else if (link == LINK_TCP) link_tcp_set_authed(v);
+#endif
+}
+
+const char* link_auth_password(uint8_t link) {
+#if BRIDGE_WIFI_LINK
+  if (link == LINK_TCP) return link_tcp_password();
+#endif
+  (void)link;
+  return link_ble_password();
+}
+
 // Constant-time-ish password compare (no early exit on mismatch).
-static bool password_ok(const uint8_t* p, uint16_t len) {
-  const char* pw = link_ble_password();
+static bool password_ok(uint8_t origin, const uint8_t* p, uint16_t len) {
+  const char* pw = link_auth_password(origin);
   uint16_t pwlen = strlen(pw);
   uint8_t diff = (len == pwlen) ? 0 : 1;
   for (uint16_t i = 0; i < len; i++) diff |= p[i] ^ (uint8_t)pw[i % (pwlen ? pwlen : 1)];
   return diff == 0;  // empty BRIDGE_PASSWORD = open access
 }
 
-// SYS_AUTH + the BLE auth gate run here, before normal dispatch, because they
-// are link-layer concerns: replies must reach a not-yet-authenticated client.
+// Runs before normal dispatch because it is a link-layer concern: replies must
+// reach a not-yet-authenticated client.
 static bool handle_auth(uint8_t origin, uint8_t seq, uint16_t cmd,
                         const uint8_t* p, uint16_t len) {
-  uint8_t dest = origin == LINK_BLE ? LINK_BLE : DEST_ALL;
+  bool gated = link_needs_auth(origin);
+  uint8_t dest = gated ? origin : DEST_ALL;
   if (cmd == SYS_AUTH) {
-    if (origin != LINK_BLE) {  // USB implies physical access: always granted
+    if (!gated) {  // USB implies physical access: always granted
       enqueue_frame(0, seq, cmd, nullptr, 0, dest);
       return true;
     }
-    if (password_ok(p, len)) {
-      link_ble_set_authed(true);
-      enqueue_frame(0, seq, cmd, nullptr, 0, LINK_BLE);
+    if (password_ok(origin, p, len)) {
+      link_set_authed(origin, true);
+      enqueue_frame(0, seq, cmd, nullptr, 0, origin);
       // Boot-banner equivalent so the host handshake works like USB.
       uint8_t info[64];
-      enqueue_frame(FLAG_EVENT, 0, SYS_READY, info, sys_build_info(info), LINK_BLE);
-      proto_log_heap("ble: authed");  // heap visibility on every session
+      enqueue_frame(FLAG_EVENT, 0, SYS_READY, info, sys_build_info(info), origin);
+      proto_log_heap(origin == LINK_TCP ? "wifi: authed" : "ble: authed");
     } else {
       uint8_t st = ST_DENIED;
-      enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, LINK_BLE);
+      enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, origin);
     }
     return true;
   }
-  if (origin == LINK_BLE && !link_ble_authed()) {
+  if (gated && !link_authed(origin)) {
     uint8_t st = ST_DENIED;
-    enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, LINK_BLE);
+    enqueue_frame(FLAG_ERROR, seq, cmd, &st, 1, origin);
     return true;
   }
   return false;
@@ -475,7 +555,9 @@ static void decode_and_dispatch(uint8_t origin, uint8_t* enc, uint16_t enclen) {
 }
 
 static void pump_link_bytes(uint8_t origin, const uint8_t* chunk, int n) {
-  RxState& rx = rxstate[origin];
+  RxState* rxp = rx_for(origin);
+  if (!rxp) return;  // link torn down mid-drain
+  RxState& rx = *rxp;
   int i = 0;
   while (i < n) {
     if (chunk[i] == 0x00) {  // frame delimiter
@@ -524,6 +606,14 @@ static bool proto_pump_rx() {
     pump_link_bytes(LINK_BLE, chunk, n);
   }
 #endif
+#if BRIDGE_WIFI_LINK
+  for (;;) {
+    uint16_t n = link_tcp_read(chunk, sizeof(chunk));
+    if (n == 0) break;
+    any = true;
+    pump_link_bytes(LINK_TCP, chunk, n);
+  }
+#endif
   return any;
 }
 
@@ -545,10 +635,8 @@ static void rx_task(void*) {
   }
 }
 
-// ---- init / start -----------------------------------------------------------------
-// proto_init: create the per-link TX queues and the slow-handler queue. Must
-// be called before any proto_* function. proto_start: spawn the three bridge
-// tasks; call at the end of setup() after all other init is done.
+// ---- init / start -----------------------------------------------------------
+
 void proto_init() {
   tx_usb.q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
 #if BRIDGE_BLE
@@ -557,10 +645,45 @@ void proto_init() {
   slowq = xQueueCreate(SLOWQ_DEPTH, sizeof(Req));
 }
 
+#if BRIDGE_WIFI_LINK
+// ~4.5 KB on the heap, charged only when the Wi-Fi link is on. See protocol.h.
+bool proto_link_tcp_alloc() {
+  if (!tx_net) {
+    TxStream* s = new (std::nothrow) TxStream();
+    if (!s) return false;
+    s->q = xQueueCreate(TXQ_DEPTH, sizeof(Frame));
+    if (!s->q) { delete s; return false; }
+    tx_net = s;
+  }
+  if (!rx_net) {
+    rx_net = new (std::nothrow) RxState();
+    if (!rx_net) return false;
+  }
+  return true;
+}
+
+void proto_link_tcp_reset() {
+  if (rx_net) { rx_net->len = 0; rx_net->overflow = false; }
+  if (tx_net) drop_stream(*tx_net);
+}
+
+void proto_link_tcp_free() {
+  TxStream* s = tx_net;
+  RxState* r = rx_net;
+  tx_net = nullptr;
+  rx_net = nullptr;
+  // A task may be one instruction inside a seam that just read the pointer;
+  // give it a couple of ticks to leave before the memory goes away.
+  vTaskDelay(2);
+  if (s) { drop_stream(*s); vQueueDelete(s->q); delete s; }
+  delete r;
+}
+#endif  // BRIDGE_WIFI_LINK
+
 void proto_start() {
-  // Both cores work on dual-core chips — see the task-layout note in config.h:
-  // TX and the blocking handlers ride the radio core, RX + fast handlers own
-  // the app core, so reply N transmits while command N+1 executes.
+  // Both cores on a dual-core chip (task-layout note in config.h): TX + blocking
+  // handlers on the radio core, RX + fast handlers on the app core, so reply N
+  // transmits while command N+1 executes.
   xTaskCreatePinnedToCore(tx_task, "bridge_tx", TX_TASK_STACK, nullptr,
                           TX_TASK_PRIO, &tx_task_h, TX_TASK_CORE);
   xTaskCreatePinnedToCore(rx_task, "bridge_rx", RX_TASK_STACK, nullptr,

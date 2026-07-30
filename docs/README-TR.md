@@ -42,7 +42,8 @@ gerekir.*
    Kendiniz derlemek isterseniz Arduino IDE Library Manager'dan
    **`python esp bridge`** kütüphanesini kurun, *File → Examples →
    python esp bridge → Bridge* örneğini açın, partition scheme olarak
-   *Huge APP* seçin ve Upload'a basın. Sketch'in tamamı `EspBridge.begin();`
+   *Huge APP* seçin ve Upload'a basın. Sketch yalnızca `EspBridge.usb.begin();`
+   `EspBridge.ble.begin(); EspBridge.run();` satırlarından oluşur
    çağrısından ibarettir. Ayrıntılar: [`FIRMWARE.md`](FIRMWARE.md).
 
 2. **Python kütüphanesini** Pi'ye ya da PC'ye kurun. pip ile:
@@ -87,19 +88,19 @@ gerekir.*
        status, body = esp.net.http_get("http://example.com/")  # ...modeminiz olur
    ```
 
-   **USB kablosu olmadan** da kullanabilirsiniz. Kartlar `espbridge_<mac>`
-   adıyla, ayrıca verdiğiniz özel adla, yayın yapar ve parola ister. Varsayılan
-   parola `espbridge`; sketch içinde `EspBridge.begin("yourpassword")` ile
-   değiştirilebilir:
+   **USB kablosu olmadan** da kullanabilirsiniz. Kartlar `espbridge_<name>` adıyla
+   yayın yapar ve parola ister. Varsayılan parola `espbridge`; sketch içinde
+   `EspBridge.ble.begin("yourpassword")` ile değiştirilebilir:
 
    ```python
    with Bridge(ble=True, password="espbridge") as esp:   # Bluetooth üzerinden
        esp.gpio.write(2, 1)
    ```
 
-   `Bridge()` önce Bluetooth'u dener, sonra USB serial'a düşer. Yalnızca
-   **USB / COM** kullanmak için `ble=False`, belirli bir Bluetooth kartına
-   bağlanmak için `ble="name"`, belirli bir seri port için `port="COM7"`
+   `Bridge()` önce Bluetooth'u dener, sonra USB serial'a düşer. Her taşıma
+   anahtarı kendi bağlantısını sabitler: `ble=False` yalnızca **USB / COM**,
+   `ble=True` yalnızca Bluetooth, `wifi=True` yalnızca Wi-Fi. Belirli bir kartı
+   seçmek için `Bridge("relays")`, belirli bir seri port için `port="COM7"`
    verin.
 
    Komut satırında `espbridge` bağlantı bilgisini yazdırır; `espbridge ports`
@@ -322,20 +323,33 @@ Antigravity ve Ollama dahil asistan bazlı kurulum: [`MCP.md`](MCP.md).**
 
 ### Birden çok ESP32
 
-Her karta bir kez kalıcı ad verin (`espbridge -p COM7 set-name relays`);
-ad ESP32'nin flash'ına yazılır, yeniden başlatmadan ve port numarası
-değişiminden etkilenmez. Sonra:
+Her karta bir kez ad verin (`espbridge -p COM7 set-name relays`); ad kartın
+flash'ına yazılır, yeniden başlatmadan ve port numarası değişiminden
+etkilenmez. Sonra ne portları ne de MAC'leri düşünmeniz gerekir:
 
 ```python
-import espbridge
 from espbridge import Bridge
 
-esp = Bridge(name="relays")                  # veya Bridge(mac="aa:bb:cc:dd:ee:ff")
+esp = Bridge("relays")                    # tek ad  -> yalnızca o kart
+esp = Bridge("c0:49:ef:d0:3f:e0")         # MAC de aynı argümanda çalışır
 
-with espbridge.connect_all() as boards:    # ya da hepsini açın
-    boards.by_name("sensors").adc.read(34)
-    boards.by_name("relays").gpio.write(2, 1)
+with Bridge(["relays", "sensors"]) as boards:   # liste -> tam olarak onlar
+    boards["relays"].gpio.write(2, 1)
+
+with Bridge() as boards:                  # seçici yok -> tüm kartlar
+    boards.each(lambda esp: esp.ping())
 ```
+
+Bu argüman kartın **kimliğidir**: adı, ad vermediyseniz MAC'i. Her iki değer de
+Bluetooth reklamında, Wi-Fi keşif yanıtında ve `SYS_INFO` içinde tam olarak
+taşındığı için USB, Bluetooth ve Wi-Fi üzerinde aynı şekilde çalışır. Asla bir
+COM portu veya IP adresi değildir — onların kendi anahtarları var, yani dizenin
+şeklinden hiçbir şey tahmin edilmez.
+
+Adlar 16 karakterle sınırlıdır; bu, reklam edilen `espbridge_<name>` dizesini
+Bluetooth tarama yanıtının aldığı ~26 karakterin içinde tutar. Daha uzun bir ad
+havada kırpılacağı için baştan reddedilir. İstenen kartların hepsi bulunamazsa
+sonuç kısmi bir çalışma değil, hatadır.
 
 ## Sorun giderme
 
@@ -365,7 +379,7 @@ Manager'a yayımlanabilir. Python paketi `python/` altında yer alır.
 
 | yol | açıklama |
 |-----|----------|
-| [`../src/`](../src/) + [`../examples/Bridge/`](../examples/Bridge/) | Arduino kütüphanesi: bir kez flash edilen firmware (C/C++) + örnek sketch (`EspBridge.begin()`) |
+| [`../src/`](../src/) + [`../examples/Bridge/`](../examples/Bridge/) | Arduino kütüphanesi: bir kez flash edilen firmware (C/C++) + örnek sketch (`EspBridge.usb/ble/wifi.begin()`) |
 | `../library.properties`, `../keywords.txt` | Arduino Library Manager metadata'sı (registry'nin istediği gibi repo kökünde) |
 | [`../python/`](../python/) | Python paketi `python-esp-bridge` (`import espbridge`), kendi `tests/` klasörü ve gruplanmış `examples/` dizinleri (`basics/`, `devices/`, `system/`, `wireless/`, `network/`, `displays/`, `compat/`) |
 | [`MCP.md`](MCP.md) | MCP sunucusu (`espbridge-mcp`): bridge'i bir AI agent üzerinden kullanma |

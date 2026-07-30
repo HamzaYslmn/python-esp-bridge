@@ -1,29 +1,23 @@
-// python-esp-bridge — wireless link layer: the same COBS frame stream the USB
-// serial port carries, over a Nordic-UART-style BLE GATT service.
-//
-//   service 6e400001-b5a3-f393-e0a9-e50e24dcca9e
-//     RX  6e400002-... host -> board (write / write-no-response)
-//     TX  6e400003-... board -> host (notify, chunked to the ATT MTU)
-//
-// BLE clients must authenticate with SYS_AUTH (payload = password) before any
-// other command is accepted; protocol.cpp enforces this per connection.
+// python-esp-bridge — wireless link layer. BLE and TCP carry the exact same COBS
+// frame stream as the USB serial port; only the pipe differs. Both require
+// SYS_AUTH before any other command (protocol.cpp enforces it per connection).
 // MUST stay in sync with the Python package: src/espbridge/constants.py.
 #pragma once
 #include <Arduino.h>
 #include "config.h"
 
-// Link origin / destination constants used by protocol.cpp for routing frames.
+// Link origin / destination, used by protocol.cpp for routing frames.
 #define LINK_USB 0
 #define LINK_BLE 1
+#define LINK_TCP 2
 
+// Nordic-UART-style service: RX = host -> board (write), TX = board -> host
+// (notify, chunked to the ATT MTU).
 #define BLE_LINK_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_LINK_RX_UUID      "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_LINK_TX_UUID      "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-// Register the GATT service and start advertising. Call from setup() after
-// proto_start(). `password` is what BLE clients must present via SYS_AUTH
-// (passed in from EspBridge.begin()).
-// No-op on chips without BLE or when BRIDGE_ENABLE_BLE is 0.
+// Register the GATT service and start advertising. No-op on chips without BLE.
 void link_ble_init(const char* password);
 
 // Classic ESP32 only: releases Classic BT memory back to the heap and starts
@@ -40,26 +34,57 @@ uint32_t link_serial_rx_errors();  // UART overflow/framing error events (0 on n
 void link_ble_set_authed(bool v);
 const char* link_ble_password();
 
-// TX (tx_task only) — non-blocking chunk interface. tx_task owns the pacing:
-// it sends one MTU-sized chunk per pass while link_ble_writable() and moves
-// on to the other link the moment this one is congested or down.
+// TX (tx_task only) — non-blocking. tx_task sends one MTU-sized chunk per pass
+// while writable, then moves on to the other link.
 bool link_ble_up();        // a central is connected (frames may be in flight)
-bool link_ble_power(bool battery);  // conn-params profile; false when no central is connected
+bool link_ble_power(bool battery);  // conn-params profile; false if no central
 bool link_ble_writable();  // ...and the BT stack can take a notification now
-// Send at most one MTU-sized notification from data; returns bytes consumed
-// (0 when not writable).
-uint16_t link_ble_write_chunk(const uint8_t* data, uint16_t len);
+uint16_t link_ble_write_chunk(const uint8_t* data, uint16_t len);  // bytes consumed
 
-// RX: drain bytes written by the BLE client into buf; returns bytes copied.
+// RX (rx_task only): drain bytes written by the BLE client; returns bytes copied.
 uint16_t link_ble_read(uint8_t* buf, uint16_t maxlen);
 
-// Returns the BLEServer* created by the link layer, so mod_ble.cpp can
-// reuse it rather than creating a second GATT server. Returns nullptr
-// when BLE is disabled or link_ble_init() has not been called.
+// The link layer's BLEServer*, so mod_ble.cpp reuses it instead of creating a
+// second GATT server. nullptr when BLE is disabled or uninitialised.
 void* link_ble_server();
 
-// SYS_RADIO_OFF support: shut the whole BT stack down until reboot (returns
-// false while a central is connected), and the sticky flag that keeps
-// mod_ble from re-initing the dead stack afterwards.
+// SYS_RADIO_OFF: shut the BT stack down until reboot (false while a central is
+// connected), plus the sticky flag that stops mod_ble re-initing it.
 bool link_ble_shutdown();
 bool link_bt_dead();
+
+// ---- Wi-Fi (TCP) link -------------------------------------------------------
+// server = nullptr/"" -> listen on `port`; otherwise dial "host" or "host:port"
+// (dial-home is the mode for hundreds of boards — see link_tcp.cpp).
+// ssid = nullptr/"" -> use the credentials stored in NVS by WIFI_LINK_SETUP.
+// Returns false if the link could not be armed (no credentials, no heap, or
+// ESP-NOW already owns the radio); the board keeps running without it.
+bool link_tcp_begin(const char* ssid, const char* pass, const char* server,
+                    uint16_t port, const char* password);
+void link_tcp_stop();
+// WIFI_LINK_SETUP: store the config (optionally in NVS) without starting it.
+bool link_tcp_configure(const char* ssid, const char* pass, const char* server,
+                        uint16_t port, bool persist);
+void link_tcp_forget();  // erase the stored config
+bool link_tcp_enabled();   // armed (joining, listening, dialing or connected)
+bool link_tcp_up();        // a peer socket is open
+bool link_tcp_authed();    // ...and it presented the correct password
+void link_tcp_set_authed(bool v);
+uint32_t link_tcp_tx_errors();  // sends that failed for a non-transient reason
+const char* link_tcp_password();
+
+// WIFI_LINK_STATUS: 0 off | 1 joining | 2 listening/dialing | 3 peer connected.
+uint8_t link_tcp_state();
+uint32_t link_tcp_ip();
+uint16_t link_tcp_port();
+
+void link_tcp_poll();  // accept / dial / backoff, on slow_task
+uint16_t link_tcp_write_chunk(const uint8_t* data, uint16_t len);
+uint16_t link_tcp_read(uint8_t* buf, uint16_t maxlen);
+
+// Auth gate over both wireless links: USB implies physical access and is always
+// trusted; BLE and TCP must present the password via SYS_AUTH first.
+bool link_needs_auth(uint8_t link);
+bool link_authed(uint8_t link);
+void link_set_authed(uint8_t link, bool v);
+const char* link_auth_password(uint8_t link);

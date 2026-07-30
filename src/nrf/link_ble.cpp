@@ -56,15 +56,18 @@ void link_ble_init(const char* password) {
   Bluefruit.begin();          // 1 peripheral connection, 0 central
   Bluefruit.setTxPower(4);    // dBm — max range; the board is wired-powered
 
-  // Device name espbridge_<mac>[_<custom>], matching SYS_INFO so a host can
-  // identify a specific board from scan results without connecting first.
-  uint8_t mac[6];
-  nrf_read_mac(mac);
-  char devname[10 + 12 + 1 + BRIDGE_NAME_MAX + 1];
-  int n = snprintf(devname, sizeof(devname), "espbridge_%02x%02x%02x%02x%02x%02x",
-                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  // Advertised name "espbridge_<name-or-mac>" — see the ESP counterpart in
+  // src/esp/link_ble.cpp for why only one identity fits.
   const char* custom = sys_device_name();
-  if (custom[0]) snprintf(devname + n, sizeof(devname) - n, "_%s", custom);
+  char devname[10 + BRIDGE_NAME_MAX + 1];
+  if (custom[0]) {
+    snprintf(devname, sizeof(devname), "espbridge_%s", custom);
+  } else {
+    uint8_t mac[6];
+    nrf_read_mac(mac);
+    snprintf(devname, sizeof(devname), "espbridge_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
   Bluefruit.setName(devname);
 
   Bluefruit.Periph.setConnectCallback(connect_cb);

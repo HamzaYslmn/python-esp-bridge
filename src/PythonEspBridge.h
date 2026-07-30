@@ -1,44 +1,48 @@
-// python-esp-bridge — flash-once firmware that exposes every ESP32 peripheral
-// to the Python `python-esp-bridge` package over USB serial or Bluetooth.
+// python-esp-bridge — flash-once firmware exposing every ESP32 peripheral to the
+// Python `python-esp-bridge` package over USB serial, Bluetooth or Wi-Fi.
 //
-// Minimal sketch:
-//   #include <PythonEspBridge.h>
-//   void setup() { EspBridge.begin(); }  // BLE password "espbridge", BLE enabled
-//   void loop()  {}                       // never called — begin() does not return
+//   void setup() {
+//     EspBridge.usb.begin();                 // the bridge core boots here
+//     EspBridge.ble.begin();                 // password defaults to "espbridge"
+//     EspBridge.wifi.begin("ssid", "pass");  // TCP link, port 3232
+//     EspBridge.run();                       // optional; see below
+//   }
+//   void loop() { /* yours — runs unless run() was called */ }
 //
-// begin() starts the FreeRTOS bridge tasks and spreads them across both cores
-// of a dual-core ESP32 (see the task-layout note in espbridge/config.h):
-// TX and the blocking handlers share core 0 with the radio stacks they call
-// into; RX + the bus-touching fast handlers own core 1 — so replies transmit
-// while the next command executes, and nothing timing-sensitive runs next to
-// radio interrupts. It then deletes the Arduino loop task so its 8 KB stack
-// is returned to the heap. This is required on a classic ESP32 running
-// Wi-Fi + Bluedroid: free heap that low causes Bluedroid to stop delivering
-// notifications and break the BLE link.
-//
-// To run your own code alongside the bridge, pass exclusive=false:
-//   void setup() { EspBridge.begin("espbridge", true, /*exclusive=*/false); }
-//   void loop()  { /* yours — runs on core 1 next to the command handlers */ }
-//
-// Optional features (heavy peripherals such as Ethernet or camera, and
-// BLE-free builds) are compile-time opt-ins — see the README for flags.
+// The core starts on the FIRST *.begin() and is idempotent, so order never
+// matters. Docs: README.md, docs/FIRMWARE.md.
 #pragma once
 #include <Arduino.h>
 
 class EspBridgeClass {
  public:
-  // password  — Bluetooth authentication secret the host must present before
-  //             commands are accepted. Pass "" for an open (unauthenticated)
-  //             link. USB serial never requires authentication.
-  // ble       — set false to leave Bluetooth off entirely (saves heap).
-  //             Ignored on builds compiled without BRIDGE_BLE.
-  // exclusive — true (default): begin() never returns; the loop task is
-  //             deleted and its 8 KB stack goes back to the heap (the safe
-  //             choice with BLE + Wi-Fi on a classic ESP32). false: begin()
-  //             returns and loop() keeps running, so the sketch can do its
-  //             own work next to the bridge — at the cost of that 8 KB.
-  void begin(const char* password = "espbridge", bool ble = true,
-             bool exclusive = true);
+  // USB serial (or native USB CDC). Never authenticated — holding the cable is
+  // the authentication.
+  struct UsbLink {
+    void begin();
+  } usb;
+
+  // Bluetooth LE. `password` is what hosts present via SYS_AUTH ("" = open).
+  struct BleLink {
+    void begin(const char* password = "espbridge");
+  } ble;
+
+  // Wi-Fi: the same protocol over TCP.
+  //   begin("ssid", "pass")                    -> board listens on `port`
+  //   begin("ssid", "pass", "10.0.0.5")        -> board dials that host
+  //   begin()                                  -> credentials stored in NVS
+  // Returns false if the link could not be armed (no credentials, not enough
+  // heap, or ESP-NOW owns the radio); the board runs on regardless.
+  struct WifiLink {
+    bool begin(const char* ssid = nullptr, const char* pass = nullptr,
+               const char* server = nullptr, uint16_t port = 0,
+               const char* password = "espbridge");
+    void end();
+  } wifi;
+
+  // Deletes the Arduino loop task and never returns, giving its 8 KB stack back
+  // to the heap — which BLE needs on a classic ESP32 running Wi-Fi too.
+  void run();
 };
 
 extern EspBridgeClass EspBridge;

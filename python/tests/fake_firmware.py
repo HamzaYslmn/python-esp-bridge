@@ -13,7 +13,7 @@ import struct
 
 from espbridge import constants as C
 from espbridge.protocol import FrameSplitter, decode_frame, encode_frame
-from espbridge.transport import MockTransport
+from espbridge.transports import MockTransport
 
 CAPS = (C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH | C.Cap.ESPNOW
         | C.Cap.RMT | C.Cap.ONEWIRE | C.Cap.TWAI | C.Cap.I2S | C.Cap.FS | C.Cap.NVS
@@ -22,12 +22,12 @@ CAPS = (C.Cap.WIFI | C.Cap.BLE | C.Cap.BLE_FW | C.Cap.DAC | C.Cap.TOUCH | C.Cap.
 
 class FakeFirmware:
     def __init__(self, proto_version: int = C.PROTOCOL_VERSION,
-                 name: str = "", mac: str = "24a160123456",
+                 mac: str = "24a160123456", name: str = "",
                  password: str | None = None):
         self.transport = MockTransport(responder=self._on_host_bytes)
         self.proto_version = proto_version
-        self.name = name
         self.mac = mac
+        self.name = name
         # When a password is given the fake behaves like a BLE link: it rejects
         # every command except SYS_AUTH with ST_DENIED until authentication succeeds.
         self.password = password
@@ -140,13 +140,13 @@ class FakeFirmware:
         self.emit(C.ESPNOW_RX_EVT, src_mac + struct.pack(">b", rssi) + data)
 
     def _info(self) -> bytes:
-        nbytes = self.name.encode()
+        # ... | gpio_count u8 | flash_mb u8 | name[] (rest of the payload)
         return (
             bytes([self.proto_version, 0, 3, 0, C.ChipModel.ESP32, 3])
             + bytes.fromhex(self.mac)
             + struct.pack(">I", int(CAPS))
             + bytes([40, 4])
-            + bytes([len(nbytes)]) + nbytes
+            + self.name.encode()
         )
 
     def _reply(self, seq: int, cmd: int, payload: bytes = b"") -> None:

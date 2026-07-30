@@ -4,13 +4,11 @@
 #include <stdint.h>
 
 #define PROTOCOL_VERSION 1
-// Firmware version — kept identical to the library/package release version
-// (library.properties and python/pyproject.toml), so a host can read SYS_INFO
-// and know exactly which release the firmware came from. PROTOCOL_VERSION
-// above stays the hard compatibility gate; this one signals feature parity.
-// tests/test_contract_sync.py enforces the lockstep.
-#define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 16
+// Firmware version, identical to library.properties and python/pyproject.toml so
+// SYS_INFO names the exact release (test_contract_sync.py enforces the lockstep).
+// PROTOCOL_VERSION above remains the hard compatibility gate.
+#define FW_VERSION_MAJOR 1
+#define FW_VERSION_MINOR 0
 #define FW_VERSION_PATCH 0
 
 // Frame (logical, pre-COBS):
@@ -69,8 +67,13 @@ enum Status : uint8_t {
 #define CAP_CAM        (1UL << 19)  // camera (compile-time opt-in, needs PSRAM)
 #define CAP_MCPWM      (1UL << 20)  // complementary PWM pair with deadtime
 #define CAP_SLEEP      (1UL << 21)  // deep/light sleep (IRAM-gated off on classic+BLE)
+#define CAP_WIFI_LINK  (1UL << 22)  // bridge reachable over the Wi-Fi (TCP) transport
 
-// ---- chip models -------------------------------------------------------------
+// SYS_INFO caps assembly: `flag ? bit : 0` for a config.h BRIDGE_* flag, which
+// is always defined to 0 or 1, so the whole expression folds at compile time.
+#define CAPIF(flag, bit) ((flag) ? (bit) : 0UL)
+
+// ---- chip models ------------------------------------------------------------
 // Values 1..6 are Espressif parts; 7+ are non-ESP ports that speak the same
 // protocol over a capability-gated subset of modules (the host degrades by caps).
 enum ChipModel : uint8_t {
@@ -111,11 +114,11 @@ enum ChipModel : uint8_t {
 
 // SYS
 #define SYS_PING        CMD(MOD_SYS, 0x01)  // payload echoed back
-#define SYS_INFO        CMD(MOD_SYS, 0x02)  // -> proto u8|fw[3]|model u8|rev u8|mac[6]|caps u32|gpio_count u8|flash_mb u8|name_len u8|name
+#define SYS_INFO        CMD(MOD_SYS, 0x02)  // -> proto u8|fw[3]|model u8|rev u8|mac[6]|caps u32|gpio_count u8|flash_mb u8|name[] (rest of frame, may be empty)
 #define SYS_SET_BAUD    CMD(MOD_SYS, 0x03)  // baud u32 (reply sent at old baud, then switch)
 #define SYS_RESET       CMD(MOD_SYS, 0x04)
 #define SYS_FREE_HEAP   CMD(MOD_SYS, 0x05)  // -> free u32|min_free u32|largest u32|dropped_events u32|ble_rx_dropped u32|serial_rx_errors u32
-#define SYS_SET_NAME    CMD(MOD_SYS, 0x06)  // payload = device name (0..32 bytes), persisted in NVS
+#define SYS_SET_NAME    CMD(MOD_SYS, 0x06)  // payload = device name (0..BRIDGE_NAME_MAX bytes), persisted
 #define SYS_AUTH        CMD(MOD_SYS, 0x07)  // payload = password; required over BLE before any other cmd
 #define SYS_SLEEP       CMD(MOD_SYS, 0x08)  // mode u8 (0 deep,1 light)|us u64|wake_pin i8 (-1 none)|wake_level u8
                                             // deep: replies OK, flushes, sleeps (link drops; board reboots on wake)
@@ -133,7 +136,12 @@ enum ChipModel : uint8_t {
 #define SYS_READY       CMD(MOD_SYS, 0x80)  // event at boot; payload = same as SYS_INFO
 #define SYS_LOG         CMD(MOD_SYS, 0x81)  // event: level u8|msg
 
-#define BRIDGE_NAME_MAX 32
+// Device name cap. 16 is not arbitrary: the BLE scan response fits 26
+// characters, and the advertised name is "espbridge_" + the board's identity
+// (10 + 16 = 26). Capping the name here is what makes advert truncation
+// impossible instead of something the host has to compensate for.
+#define BRIDGE_NAME_MAX 16
+#define BRIDGE_LINK_PORT 3232  // default TCP port for the Wi-Fi transport link
 
 // GPIO
 #define GPIO_SET_MODE   CMD(MOD_GPIO, 0x01) // pin u8|mode u8 (0 in,1 out,2 in_pullup,3 in_pulldown,4 out_open_drain)
@@ -248,6 +256,18 @@ enum ChipModel : uint8_t {
 #define WIFI_AP_START   CMD(MOD_WIFI, 0x05) // ssid_len u8|ssid|pass_len u8|pass|channel u8|max_conn u8 -> ip[4]
 #define WIFI_AP_STOP    CMD(MOD_WIFI, 0x06)
 #define WIFI_HOSTNAME   CMD(MOD_WIFI, 0x07) // name str
+// WIFI_LINK_* — the Wi-Fi (TCP) transport for the bridge protocol itself, not
+// to be confused with WIFI_CONNECT (which joins a network for NET sockets).
+// Sent over USB/BLE to provision a board; the credentials and server address
+// persist in NVS, so the board is reachable over Wi-Fi on every later boot
+// without a reflash. server_len=0 -> listen mode (host connects to the board);
+// otherwise the board dials out to that "host" or "host:port" and reconnects
+// with backoff forever — the mode built for hundreds of boards.
+#define WIFI_LINK_SETUP CMD(MOD_WIFI, 0x08) // ssid_len u8|ssid|pass_len u8|pass|srv_len u8|server|port u16|
+                                            // flags u8 (bit0 persist to NVS, bit1 start now)
+#define WIFI_LINK_STOP  CMD(MOD_WIFI, 0x09) // drop the link and forget the stored config
+#define WIFI_LINK_STATUS CMD(MOD_WIFI, 0x0A) // -> state u8 (0 off,1 joining,2 listening/dialing,3 connected)|
+                                             //    ip[4]|port u16|peer u8|tx_errors u32
 #define WIFI_STATE_EVT  CMD(MOD_WIFI, 0x80) // event u8 (1 connected,2 got_ip,3 disconnected)|ip[4]
 #define WIFI_SCAN_RES   CMD(MOD_WIFI, 0x81) // idx u8|total u8|rssi i8|auth u8|channel u8|bssid[6]|ssid_len u8|ssid
 #define WIFI_SCAN_DONE  CMD(MOD_WIFI, 0x82) // count u8

@@ -61,6 +61,7 @@ class Cap(enum.IntFlag):
     CAM = 1 << 19  # camera (compile-time opt-in, needs PSRAM)
     MCPWM = 1 << 20  # complementary PWM pair with deadtime
     SLEEP = 1 << 21  # deep/light sleep (IRAM-gated on classic+BLE)
+    WIFI_LINK = 1 << 22  # bridge reachable over the Wi-Fi (TCP) transport
 
 
 class ChipModel(enum.IntEnum):
@@ -119,7 +120,8 @@ SYS_RADIO_OFF = _cmd(MOD_SYS, 0x0C)  # all radios off; BT until reboot (frees AD
 SYS_READY = _cmd(MOD_SYS, 0x80)
 SYS_LOG = _cmd(MOD_SYS, 0x81)
 
-BRIDGE_NAME_MAX = 32
+BRIDGE_NAME_MAX = 16  # keeps "espbridge_<name>" inside the advert's ~26 chars
+BRIDGE_LINK_PORT = 3232  # default TCP port for the Wi-Fi transport link
 
 # GPIO
 GPIO_SET_MODE = _cmd(MOD_GPIO, 0x01)
@@ -213,6 +215,9 @@ WIFI_STATUS = _cmd(MOD_WIFI, 0x04)
 WIFI_AP_START = _cmd(MOD_WIFI, 0x05)
 WIFI_AP_STOP = _cmd(MOD_WIFI, 0x06)
 WIFI_HOSTNAME = _cmd(MOD_WIFI, 0x07)
+WIFI_LINK_SETUP = _cmd(MOD_WIFI, 0x08)  # provision the Wi-Fi transport link
+WIFI_LINK_STOP = _cmd(MOD_WIFI, 0x09)
+WIFI_LINK_STATUS = _cmd(MOD_WIFI, 0x0A)
 WIFI_STATE_EVT = _cmd(MOD_WIFI, 0x80)
 WIFI_SCAN_RES = _cmd(MOD_WIFI, 0x81)
 WIFI_SCAN_DONE = _cmd(MOD_WIFI, 0x82)
@@ -383,7 +388,7 @@ KNOWN_USB_IDS = {
 BLE_LINK_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 BLE_LINK_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # host -> board (write)
 BLE_LINK_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # board -> host (notify)
-DEFAULT_PASSWORD = "espbridge"  # firmware default; change via EspBridge.begin()
+DEFAULT_PASSWORD = "espbridge"  # firmware default; change via EspBridge.ble.begin()
 
 # Upgraded baud per bridge chip — optimistic targets, not guarantees:
 # Bridge._upgrade_baud() probes the driver and ladders down to 921600 on

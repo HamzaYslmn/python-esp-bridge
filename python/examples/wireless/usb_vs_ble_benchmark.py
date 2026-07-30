@@ -80,7 +80,7 @@ def bench_bridge(esp: Bridge, ping_count: int = 200) -> None:
             link += " (native USB — baud is ignored)"
     else:
         link = f"Bluetooth {getattr(esp._t, 'address', '?')}"
-    print(f"{info.name or '(unnamed)'}  {info.chip.name}  {link}\n")
+    print(f"{info.ident}  {info.chip.name}  {link}\n")
 
     bench_latency(esp, n=ping_count)
     print()

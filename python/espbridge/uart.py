@@ -61,7 +61,6 @@ class UartPort:
 
     def flush(self) -> None:
         """No-op (writes are synchronous requests); for pyserial compatibility."""
-        pass  # writes are synchronous requests; nothing left to flush
 
     def readline(self, timeout: float | None = None) -> bytes:
         """Read until newline (or timeout); returns what arrived, partial included."""

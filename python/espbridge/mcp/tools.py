@@ -104,7 +104,8 @@ def register_system(mcp, mgr) -> None:
     @mcp.tool
     @guarded
     def system_set_name(name: str) -> str:
-        """Persist a device name on the board (NVS) for later name-based selection."""
+        """Name the board (persisted), so bridge_connect(name=...) finds it on
+        any link. Max 16 characters — it has to fit the BLE advertisement."""
         mgr.bridge().set_name(name)
         return f"name set to {name!r}"
 

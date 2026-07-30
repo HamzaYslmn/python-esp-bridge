@@ -1,11 +1,11 @@
 """Serial (USB) transport with ESP32 auto-detection."""
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass
 
 from ..constants import KNOWN_USB_IDS
-from ..errors import NoDeviceError
 
 
 @dataclass(frozen=True)
@@ -28,19 +28,6 @@ def find_ports() -> list[PortInfo]:
                 found.append(PortInfo(p.device, chip, p.description or ""))
                 break
     return found
-
-
-def autodetect_port() -> PortInfo:
-    ports = find_ports()
-    if not ports:
-        raise NoDeviceError(
-            "no ESP32 serial port found (CP210x/CH340/CH9102/native USB); "
-            "pass port='COM5' / '/dev/ttyUSB0' explicitly"
-        )
-    if len(ports) > 1:
-        names = ", ".join(p.device for p in ports)
-        raise NoDeviceError(f"multiple ESP32-like ports found ({names}); pass port= explicitly")
-    return ports[0]
 
 
 class SerialTransport:
@@ -85,7 +72,5 @@ class SerialTransport:
         self.ser.rts = False
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.ser.close()
-        except Exception:
-            pass

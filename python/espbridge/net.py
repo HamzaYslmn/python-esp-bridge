@@ -6,6 +6,7 @@ as the application consumes data, so fast peers get normal TCP backpressure.
 """
 from __future__ import annotations
 
+import contextlib
 import queue
 import struct
 import threading
@@ -37,7 +38,7 @@ class TcpSocket:
     Usable as a context manager (closes on exit).
     """
 
-    def __init__(self, net: "Net", handle: int, peer: tuple[str, int] | None = None):
+    def __init__(self, net: Net, handle: int, peer: tuple[str, int] | None = None):
         self._net = net
         self._b = net._b
         self.handle = handle
@@ -123,10 +124,8 @@ class TcpSocket:
         """Close the connection and release its handle (idempotent)."""
         if self._open:
             self._open = False
-            try:
+            with contextlib.suppress(BridgeError):
                 self._b.request(C.NET_CLOSE, bytes([self.handle]))
-            except BridgeError:
-                pass
         self._net._forget(self.handle)
 
     def __enter__(self):
@@ -147,7 +146,7 @@ class TcpServer:
     Usable as a context manager (closes on exit).
     """
 
-    def __init__(self, net: "Net", handle: int, port: int):
+    def __init__(self, net: Net, handle: int, port: int):
         self._net = net
         self.handle = handle
         self.port = port
@@ -166,10 +165,8 @@ class TcpServer:
 
     def close(self) -> None:
         """Stop listening and release the server handle."""
-        try:
+        with contextlib.suppress(BridgeError):
             self._net._b.request(C.NET_CLOSE, bytes([self.handle]))
-        except BridgeError:
-            pass
         self._net._forget(self.handle)
 
     def __enter__(self):
@@ -191,7 +188,7 @@ class UdpSocket:
     silently if the receive queue fills up (connectionless semantics).
     """
 
-    def __init__(self, net: "Net", handle: int, local_port: int):
+    def __init__(self, net: Net, handle: int, local_port: int):
         self._net = net
         self._b = net._b
         self.handle = handle
@@ -236,10 +233,8 @@ class UdpSocket:
 
     def close(self) -> None:
         """Close the UDP socket and release its handle."""
-        try:
+        with contextlib.suppress(BridgeError):
             self._b.request(C.NET_CLOSE, bytes([self.handle]))
-        except BridgeError:
-            pass
         self._net._forget(self.handle)
 
     def __enter__(self):

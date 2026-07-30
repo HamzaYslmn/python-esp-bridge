@@ -3,12 +3,10 @@
 // so a host can communicate with the board over Bluetooth without a USB cable.
 // See espbridge/link.h for the public API.
 //
-// RX path: the host writes to the RX characteristic; Bluedroid's BT task
-//   invokes the onWrite callback, which pushes bytes into a FreeRTOS stream
-//   buffer. rx_task drains that buffer through the same COBS framing pump
-//   used by the USB serial path.
-// TX path: tx_task calls link_ble_write(), which sends the data in chunks
-//   no larger than (ATT_MTU - 3) bytes via GATT notifications.
+// RX: the host writes the RX characteristic, Bluedroid's BT task pushes the bytes
+//   into a stream buffer, and rx_task drains it through the same COBS pump the
+//   USB serial path uses.
+// TX: tx_task sends (ATT_MTU - 3)-byte chunks as GATT notifications.
 #include "espbridge/protocol.h"
 #include "espbridge/modules.h"
 #include "espbridge/link.h"
@@ -44,12 +42,10 @@ void bt_prepare_ble_only() {
 #endif
 }
 
-// RX stream buffer (host-to-board). The Python side caps in-flight bytes at
-// 4300 — two max-size wire frames, which already saturates BLE (the central's
-// per-connection-event write rate is the bottleneck, not in-flight count) —
-// and the ring holds that cap plus one more frame, so it can't overflow.
-// Kept lean: on a classic ESP32 with Wi-Fi + Bluedroid + ESP-NOW every KB
-// here is one the radio stack loses.
+// RX stream buffer (host-to-board), sized at the host's 4300-byte in-flight cap
+// plus one frame so it cannot overflow. Two max-size frames already saturate BLE
+// — the central's per-connection-event write rate is the bottleneck, not
+// in-flight count — and every KB here is one the radio stack loses.
 #define LINK_RX_BUF 6400
 
 static bool enabled = false;
@@ -116,12 +112,9 @@ static LinkSrvCb link_srv_cb;
 class LinkRxCb : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
     if (rx_buf == nullptr) return;
-    // This callback runs on a Bluedroid BT task (not an ISR), so the
-    // plain (non-ISR) stream buffer send is correct here.
-    // We allow a short blocking timeout (50 ms) so that pipelined write
-    // bursts naturally backpressure the BT task instead of dropping bytes.
-    // If the buffer is still full after 50 ms, something is very wrong;
-    // at that point the host will time out and retry anyway.
+    // A Bluedroid BT task, not an ISR, so the plain stream-buffer send is right.
+    // The 50 ms timeout lets a pipelined burst backpressure that task instead of
+    // dropping bytes; still full after 50 ms means the host will retry anyway.
     size_t n = xStreamBufferSend(rx_buf, c->getData(), c->getLength(),
                                  pdMS_TO_TICKS(50));
     if (n < c->getLength()) {
@@ -180,8 +173,7 @@ static void link_gap_evt(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* p
 
 // Min free heap before BLEDevice::init(): Bluedroid + the GATT service need this
 // much atop the controller, and below it init() aborts in operator new with no
-// recoverable path. We check explicitly to fail gracefully — skip BLE, log why,
-// keep USB + Wi-Fi + ESP-NOW working.
+// recoverable path. Checked explicitly so BLE is skipped, not fatal.
 #define BLE_MIN_FREE_HEAP 55000
 
 void link_ble_init(const char* password) {
@@ -195,15 +187,21 @@ void link_ble_init(const char* password) {
   rx_buf = xStreamBufferCreate(LINK_RX_BUF, 1);
   if (rx_buf == nullptr) return;
 
-  // Device name espbridge_<mac>[_<custom>], matching SYS_INFO so a host can
-  // identify a specific board from scan results without connecting first.
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  char devname[10 + 12 + 1 + BRIDGE_NAME_MAX + 1];
-  int n = snprintf(devname, sizeof(devname), "espbridge_%02x%02x%02x%02x%02x%02x",
-                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  // Advertised name "espbridge_<identity>": the prefix marks the board as ours
+  // in any BLE scanner, and the identity is its name, or its MAC while unnamed —
+  // whichever one you'd pass to Bridge(). The scan response fits ~26 characters
+  // and the prefix spends 10, so only one identity fits: BRIDGE_NAME_MAX (16) is
+  // what keeps a named board's advert whole.
   const char* custom = sys_device_name();
-  if (custom[0]) snprintf(devname + n, sizeof(devname) - n, "_%s", custom);
+  char devname[10 + BRIDGE_NAME_MAX + 1];
+  if (custom[0]) {
+    snprintf(devname, sizeof(devname), "espbridge_%s", custom);
+  } else {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(devname, sizeof(devname), "espbridge_%02x%02x%02x%02x%02x%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
   BLEDevice::init(devname);
   // Max TX power (adv + connections): fewer retransmits, more range, for ~3 mA
   // — a fine trade on a wired-powered board.

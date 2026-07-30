@@ -363,7 +363,7 @@ def phase_espnow_coex(a: Bridge, b: Bridge, count: int) -> None:
 def run_suite(esp: Bridge, *, pings: int, secs: float, workers: int) -> None:
     info = esp.info
     print("=" * 70)
-    print(f"{info.name or '(unnamed)'}  {info.chip.name}  fw{'.'.join(map(str, info.fw_version))}  "
+    print(f"{info.ident}  {info.chip.name}  fw{'.'.join(map(str, info.fw_version))}  "
           f"{link_label(esp)}   free heap {esp.free_heap()['free']} B")
     print("=" * 70)
     phase_ping_soak(esp, pings)
@@ -375,9 +375,8 @@ def run_suite(esp: Bridge, *, pings: int, secs: float, workers: int) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-p", "--port")
-    ap.add_argument("--ble", nargs="?", const=True, default=False,
-                    metavar="MAC|NAME",
-                    help="run over Bluetooth; optional value pins a specific board "
+    ap.add_argument("--ble", nargs="?", const=True, default=False, metavar="MAC",
+                    help="run over Bluetooth; optional MAC pins a specific board "
                          "(so --peer can use the other one for ESP-NOW)")
     ap.add_argument("--peer", help="second board's USB port for the ESP-NOW coex phase")
     ap.add_argument("--espnow-only", action="store_true",
@@ -389,8 +388,9 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.ble:
-        # args.ble is True (autodetect) or a MAC/name string pinning one board.
-        primary = Bridge(ble=args.ble, password=args.password, timeout=10.0)
+        # args.ble is True (any advertising board) or a MAC pinning one.
+        primary = Bridge(None if args.ble is True else args.ble,
+                         ble=True, password=args.password, timeout=10.0)
         time.sleep(1.5)  # let post-auth link tuning settle
         workers = 4      # the BLE link self-paces; few threads keep it readable
     else:
@@ -413,8 +413,8 @@ def main() -> None:
                   f"{_retries[0]} retry(ies) — all recovered)")
     if _fail_lines:
         print(f"FAILED — {len(_fail_lines)} problem(s):{healed}")
-        for l in _fail_lines:
-            print(l)
+        for line in _fail_lines:
+            print(line)
         raise SystemExit(1)
     print(f"ALL PHASES PASSED — link is solid{healed}")
 

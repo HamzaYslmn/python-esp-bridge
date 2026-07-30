@@ -48,7 +48,7 @@ class UnsupportedError(BridgeError):
 
 class AuthError(BridgeError):
     """The bridge rejected the wireless-link password (the one passed to
-    EspBridge.begin() in the firmware)."""
+    EspBridge.ble.begin() in the firmware)."""
 
 
 class RemoteError(BridgeError):

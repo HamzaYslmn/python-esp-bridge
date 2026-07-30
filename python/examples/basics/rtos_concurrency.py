@@ -149,7 +149,7 @@ def _pctl(xs: list[float], p: float) -> float:
 def main() -> None:
     # ble=False: drive this over USB — see the module docstring for why.
     with Bridge(ble=False) as esp:
-        print(f"connected to {esp.info.chip.name} ({esp.info.name or esp.info.mac})\n")
+        print(f"connected to {esp.info.chip.name} ({esp.info.ident})\n")
         esp.adc.config(ADC_PIN, atten=11)
 
         stop = threading.Event()

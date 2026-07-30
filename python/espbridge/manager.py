@@ -24,6 +24,7 @@ For explicit lifetime control (own it, close it deterministically) construct a
 """
 from __future__ import annotations
 
+import contextlib
 import threading
 
 from .bridge import Bridge
@@ -52,11 +53,6 @@ class BridgeManager:
             self._ka_thread = threading.Thread(
                 target=self._keepalive_loop, name="espbridge-keepalive", daemon=True)
             self._ka_thread.start()
-
-    @property
-    def connect_kwargs(self) -> dict:
-        """A copy of the settings used to (re)open the Bridge."""
-        return dict(self._kwargs)
 
     @staticmethod
     def _stale(b: Bridge | None) -> bool:
@@ -126,10 +122,8 @@ class BridgeManager:
         """Tear down the current Bridge. Subclasses extend this to drop any
         per-connection state (mounted volumes, open ports) they layer on top."""
         if self._bridge is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._bridge.close()
-            except Exception:
-                pass
             self._bridge = None
 
     def shutdown(self) -> None:
@@ -139,7 +133,7 @@ class BridgeManager:
         self._ka_stop.set()
         self.disconnect()
 
-    def __enter__(self) -> "BridgeManager":
+    def __enter__(self) -> BridgeManager:
         return self
 
     def __exit__(self, *exc) -> None:
@@ -149,26 +143,26 @@ class BridgeManager:
 # ---- process-wide shared links -------------------------------------------------
 # connect() hands out one manager per distinct set of settings, so the common
 # espbridge.connect(ble=False) returns the same link everywhere in the process.
-_shared: dict[tuple, BridgeManager] = {}
+_shared: dict[str, BridgeManager] = {}
 _shared_lock = threading.Lock()
 
 
-def _key(kwargs: dict):
-    try:
-        return tuple(sorted(kwargs.items()))
-    except TypeError:
-        return None  # unhashable arg (e.g. transport=) -> never shared
+def _key(kwargs: dict) -> str:
+    """A sharing key for any set of Bridge settings.
+
+    Rendered as text so nothing has to be hashable or mutually comparable —
+    ``mac=[...]`` is a list, and ``transport=`` is an arbitrary object whose repr
+    carries its id, which gives exactly the semantics you want there: the same
+    transport shares a manager, a different one doesn't.
+    """
+    return str(sorted(kwargs.items(), key=str))
 
 
-def shared_manager(*, keepalive: float | None = None, **kwargs) -> BridgeManager:
+def _shared_manager(*, keepalive: float | None = None, **kwargs) -> BridgeManager:
     """The process-wide :class:`BridgeManager` for these settings, created once
-    and reused. Unhashable settings (e.g. ``transport=``) get a fresh manager.
-
-    ``keepalive`` (seconds) only takes effect when the manager is first created
-    for a given set of settings; it is not part of the sharing key."""
+    and reused. ``keepalive`` (seconds) only takes effect when the manager is
+    first created for a given set of settings; it is not part of the key."""
     key = _key(kwargs)
-    if key is None:
-        return BridgeManager(keepalive=keepalive, **kwargs)
     with _shared_lock:
         mgr = _shared.get(key)
         if mgr is None:
@@ -183,12 +177,12 @@ def connect(*, keepalive: float | None = None, **kwargs) -> Bridge:
 
     Same settings -> same live link, so any thread / handler can call this and
     share one connection (a board's link can't be opened twice). Accepts the
-    same keyword arguments as ``Bridge`` (``port=``, ``ble=``, ``name=``, ...).
+    same keyword arguments as ``Bridge`` (``port=``, ``mac=``, ``ble=``, ...).
 
     Pass ``keepalive=<seconds>`` to run a background heartbeat that keeps the
     link warm and transparently reconnects it if the board resets / drops.
     """
-    return shared_manager(keepalive=keepalive, **kwargs).bridge()
+    return _shared_manager(keepalive=keepalive, **kwargs).bridge()
 
 
 def disconnect_all() -> None:

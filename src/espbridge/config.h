@@ -132,7 +132,7 @@
   #define BRIDGE_SPI_HOST1   FSPI
 #endif
 
-// ---- v0.3.0 modules ----------------------------------------------------------
+// ---- v0.3.0 modules ---------------------------------------------------------
 // The primitives below are present on every supported chip.
 // Chip-specific peripherals are gated by SOC_* macros from soc_caps.h
 // (pulled in transitively by Arduino.h).
@@ -227,7 +227,7 @@
 //                                next to the stacks they call)
 //   CORE_APP   (1): bridge_rx   (frame pump + fast inline handlers incl. 1-Wire,
 //                                whose IRQ-masking slots must avoid the radio core)
-//                   user loop() (when begin(..., exclusive=false))
+//                   user loop() (when the sketch omits EspBridge.run())
 // Opt-out: -DBRIDGE_SINGLE_CORE=N pins all bridge tasks to core N (1 = leave the
 // radio core untouched; 0 = leave core 1 to the sketch, but bus timing then
 // shares a core with radio interrupts).
@@ -243,6 +243,30 @@
 #endif
 
 #endif  // arch select (ARDUINO_ARCH_NRF52 / Espressif)
+
+// ---- Wi-Fi (TCP) link -------------------------------------------------------
+// Third transport for the frame stream (see link.h). Needs the Wi-Fi driver, so
+// it is Espressif-only. Set -DBRIDGE_ENABLE_WIFI_LINK=0 to compile it out.
+#ifndef BRIDGE_ENABLE_WIFI_LINK
+#define BRIDGE_ENABLE_WIFI_LINK 1
+#endif
+#if BRIDGE_ENABLE_WIFI_LINK && defined(ARDUINO_ARCH_ESP32)
+#define BRIDGE_WIFI_LINK 1
+#else
+#define BRIDGE_WIFI_LINK 0
+#endif
+// Arming the link below this much free heap is refused: Wi-Fi bring-up costs
+// ~52 KB, and starting it thinner just crashes later, usually inside BLE. (The
+// link's own ~4.5 KB of frame buffers are malloc'd by link_tcp_begin(), so a
+// board that never calls EspBridge.wifi.begin() pays nothing.)
+#ifndef LINK_TCP_MIN_HEAP
+#define LINK_TCP_MIN_HEAP 60000
+#endif
+// Dial-home backoff: attempt N waits N seconds, capped here, plus up to 1 s of
+// jitter so 1000 boards don't all reconnect on the same tick after a restart.
+#ifndef LINK_TCP_RETRY_MAX_MS
+#define LINK_TCP_RETRY_MAX_MS 10000
+#endif
 
 // ---- task sizing & frame/buffer layout (architecture-independent) -----------
 // PRIO/STACK are #ifndef-guarded so the nRF branch (above) can set values that

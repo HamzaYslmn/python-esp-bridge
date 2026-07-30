@@ -58,7 +58,7 @@ static BLEUUID wire_to_uuid(const uint8_t* w) {
   return BLEUUID((uint8_t*)w, 16, true /*msbFirst*/);
 }
 
-// ---- scan ---------------------------------------------------------------------
+// ---- scan -------------------------------------------------------------------
 static const uint8_t BLE_ADV_MAX_PAYLOAD = 62;  // max adv+scanrsp bytes we forward
 class AdvCb : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice dev) override {
@@ -75,7 +75,7 @@ class AdvCb : public BLEAdvertisedDeviceCallbacks {
 };
 static AdvCb adv_cb;
 
-// ---- GATT server callbacks ------------------------------------------------------
+// ---- GATT server callbacks --------------------------------------------------
 class SrvCb : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     uint8_t v = 1;
@@ -103,7 +103,7 @@ class ChrCb : public BLECharacteristicCallbacks {
   }
 };
 
-// ---- GATT client callbacks ------------------------------------------------------
+// ---- GATT client callbacks --------------------------------------------------
 class CliCb : public BLEClientCallbacks {
   void onConnect(BLEClient*) override {}
   void onDisconnect(BLEClient*) override {

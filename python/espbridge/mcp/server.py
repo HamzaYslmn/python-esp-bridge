@@ -122,7 +122,7 @@ class BridgeManager(_CoreBridgeManager):
                 p.close()
 
 
-def _register_connection(mcp: "FastMCP", mgr: BridgeManager) -> None:
+def _register_connection(mcp: FastMCP, mgr: BridgeManager) -> None:
     @mcp.tool
     @guarded
     def bridge_list_ports() -> list[dict]:
@@ -132,20 +132,17 @@ def _register_connection(mcp: "FastMCP", mgr: BridgeManager) -> None:
 
     @mcp.tool
     @guarded
-    def bridge_connect(port: str | None = None, name: str | None = None,
-                       mac: str | None = None, ble: bool = False,
-                       ble_target: str | None = None,
-                       password: str | None = None) -> dict:
+    def bridge_connect(name: str | None = None, port: str | None = None,
+                       ble: bool = False, password: str | None = None) -> dict:
         """Connect to a board, replacing any current link, and return its info.
 
-        port: serial port (e.g. "COM7" / "/dev/ttyUSB0"); omit to auto-detect.
-        name/mac: select a specific board by its stored name or MAC.
-        ble: connect over Bluetooth instead of USB; ble_target optionally names
-        the device (name or MAC) to pick when several advertise. password is the
-        Bluetooth link password (firmware default "espbridge").
+        name: the board's stored name, or its MAC — the way to pick one of
+        several, over any link. port: serial port (e.g. "COM7" /
+        "/dev/ttyUSB0"); omit to auto-detect. ble: Bluetooth only, instead of
+        USB. password is the wireless link password (firmware default
+        "espbridge").
         """
-        ble_arg = ble_target if ble_target else (True if ble else None)
-        esp = mgr.connect(port=port, name=name, mac=mac, ble=ble_arg,
+        esp = mgr.connect(name=name, port=port, ble=True if ble else None,
                           password=password)
         return {"connected": True, "info": info_dict(esp)}
 
@@ -170,8 +167,7 @@ def _register_connection(mcp: "FastMCP", mgr: BridgeManager) -> None:
         """Scan for bridges advertising over Bluetooth (needs the [ble] extra)."""
         from ..transports.ble import find_ble_devices
 
-        return [{"name": d.device_name or None, "mac": d.mac,
-                 "advertised": d.name, "rssi": d.rssi}
+        return [{"name": d.name or None, "mac": d.mac, "rssi": d.rssi}
                 for d in find_ble_devices(timeout)]
 
     @mcp.tool
@@ -186,9 +182,9 @@ def _register_connection(mcp: "FastMCP", mgr: BridgeManager) -> None:
         return {"feedback_enabled": FEEDBACK.enabled}
 
 
-def build_server(mgr: BridgeManager | None = None, **connect_kwargs) -> "FastMCP":
+def build_server(mgr: BridgeManager | None = None, **connect_kwargs) -> FastMCP:
     """Build a FastMCP server bound to a BridgeManager. Pass connection defaults
-    (port=, ble=, name=, mac=, password=, upgrade_baud=) or a prebuilt manager."""
+    (name=, port=, ble=, password=, upgrade_baud=) or a prebuilt manager."""
     if mgr is None:
         mgr = BridgeManager(**connect_kwargs)
     mcp = FastMCP(name="espbridge", instructions=INSTRUCTIONS)
@@ -204,12 +200,12 @@ def main(argv: list[str] | None = None) -> int:
         prog="espbridge-mcp",
         description="MCP server exposing a python-esp-bridge ESP32 as tools")
     ap.add_argument("--version", action="version", version=f"espbridge {__version__}")
+    ap.add_argument("-n", "--name", metavar="NAME_OR_MAC",
+                    help="select one board by its stored name, or its MAC")
     ap.add_argument("-p", "--port", help="serial port (default: auto-detect)")
-    ap.add_argument("-n", "--name", help="select device by stored name")
-    ap.add_argument("-m", "--mac", help="select device by MAC address")
-    ap.add_argument("-b", "--ble", nargs="?", const=True, metavar="NAME_OR_MAC",
+    ap.add_argument("-b", "--ble", action="store_true",
                     help="connect over Bluetooth instead of USB")
-    ap.add_argument("--password", help="Bluetooth link password (default 'espbridge')")
+    ap.add_argument("--password", help="wireless link password (default 'espbridge')")
     ap.add_argument("--no-baud-upgrade", action="store_true",
                     help="stay at 115200 instead of upgrading the link speed")
     ap.add_argument("--no-connect", action="store_true",
@@ -226,10 +222,10 @@ def main(argv: list[str] | None = None) -> int:
 
     FEEDBACK.enabled = not args.no_feedback
 
-    # BridgeManager drops the None entries; ble is None unless -b was given.
+    # BridgeManager drops the None entries; ble stays None unless -b was given.
     mgr = BridgeManager(
-        port=args.port, name=args.name, mac=args.mac,
-        ble=args.ble or None, password=args.password,
+        name=args.name, port=args.port,
+        ble=True if args.ble else None, password=args.password,
         upgrade_baud=not args.no_baud_upgrade,
     )
     if not args.no_connect:

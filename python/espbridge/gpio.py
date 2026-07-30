@@ -26,7 +26,7 @@ class EdgeEvent:
     millis: int  # firmware uptime ms
 
     @classmethod
-    def parse(cls, payload: bytes) -> "EdgeEvent | None":
+    def parse(cls, payload: bytes) -> EdgeEvent | None:
         """Decode a GPIO_EDGE_EVT payload (pin u8 | level u8 | millis u32);
         None if it's too short to be a valid event."""
         if len(payload) < 6:

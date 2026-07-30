@@ -52,7 +52,7 @@ def rate(esp, workers):
 
 
 with Bridge(port=sys.argv[1] if len(sys.argv) > 1 else None) as esp:
-    print(f"board: {esp.info.name or '?'}  mac={esp.info.mac}  fw={esp.info.fw_version}")
+    print(f"board: {esp.info.ident}  fw={esp.info.fw_version}")
     esp.spi.init(sck=18, miso=19, mosi=23, freq=FREQ, mode=0)
     adc = esp.mcp3208(cs=CS, vref=3.3)
 

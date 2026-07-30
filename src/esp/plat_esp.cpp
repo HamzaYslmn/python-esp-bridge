@@ -41,7 +41,7 @@ void plat_serial_begin() {
 #endif
 }
 
-// ---- IDF log capture ---------------------------------------------------------
+// ---- IDF log capture --------------------------------------------------------
 // Wi-Fi/BT stacks log via esp_log to UART0 — the COBS frame port — so raw bytes
 // would corrupt frames. This hook redirects IDF log output into SYS_LOG events.
 // (ROM boot and crash/panic text still hit UART0 raw; uninterceptable here.)

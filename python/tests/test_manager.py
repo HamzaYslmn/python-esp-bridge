@@ -1,5 +1,5 @@
 """Shared connection layer: BridgeManager + espbridge.connect()."""
-from espbridge import BridgeManager, connect, disconnect_all, shared_manager
+from espbridge import BridgeManager, connect, disconnect_all
 from espbridge import manager as _mgr
 
 
@@ -22,11 +22,15 @@ def test_manager_context_manager_closes(fw):
 
 def test_shared_manager_keyed_by_settings():
     try:
-        m1 = shared_manager(port="COM-test-A")
-        m2 = shared_manager(port="COM-test-A")
-        m3 = shared_manager(port="COM-test-B")
+        m1 = _mgr._shared_manager(port="COM-test-A")
+        m2 = _mgr._shared_manager(port="COM-test-A")
+        m3 = _mgr._shared_manager(port="COM-test-B")
         assert m1 is m2                  # same settings -> same manager
         assert m3 is not m1
+        # A MAC list is unhashable, which the old tuple key choked on.
+        m4 = _mgr._shared_manager(mac=["aabbccddee01", "aabbccddee02"])
+        assert _mgr._shared_manager(mac=["aabbccddee01", "aabbccddee02"]) is m4
+        assert _mgr._shared_manager(mac=["aabbccddee01"]) is not m4
     finally:
         disconnect_all()
 
@@ -36,9 +40,6 @@ class FakeBridge:
         self.kw = kw
         self.alive = True
         self.pings = 0
-
-    def is_closing(self):
-        return not self.alive
 
     def is_alive(self):
         return self.alive

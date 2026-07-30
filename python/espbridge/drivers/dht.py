@@ -53,7 +53,7 @@ class DHT:
 
     def read(self, retries: int = 2) -> tuple[float, float]:
         """-> (temperature C, humidity %). Sensors need >=2 s between reads."""
-        for attempt in range(retries + 1):
+        for attempt in range(max(retries, 0) + 1):  # always attempt once
             wait = 2.0 - (time.monotonic() - self._last)
             if wait > 0:
                 time.sleep(wait)

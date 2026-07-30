@@ -22,10 +22,10 @@ Flash the firmware once (Arduino library "python esp bridge"), then:
     # ...or write/register your own — esp.<name>(...) — see espbridge.drivers
     #    and docs/DRIVERS.md ("bring your own driver").
 """
-from .bridge import Bridge, BridgeSet, Info, connect_all
+from .bridge import Bridge, BridgeSet, Info
 from .constants import Cap, ChipModel, Status
 from .drivers import driver_names, register_driver
-from .manager import BridgeManager, connect, disconnect_all, shared_manager
+from .manager import BridgeManager, connect, disconnect_all
 from .errors import (
     AuthError,
     BridgeError,
@@ -35,7 +35,7 @@ from .errors import (
     RemoteError,
     UnsupportedError,
 )
-from .transports import find_ports
+from .transports import find_ports, find_wifi_devices
 from .gpio import EdgeEvent
 from .watch import WatchEvent
 
@@ -56,20 +56,20 @@ def __getattr__(name):
         return AsyncBridge
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__version__ = "0.16.0"
+__version__ = "1.0.0"
 
+# Grouped by role, not alphabetised: this list is the shape of the public API.
 __all__ = [
     "Bridge",
     "AsyncBridge",
     "BridgeSet",
     "BridgeManager",
     "connect",
-    "shared_manager",
     "disconnect_all",
-    "connect_all",
     "register_driver",
     "driver_names",
     "find_ble_devices",
+    "find_wifi_devices",
     "Info",
     "Cap",
     "ChipModel",
