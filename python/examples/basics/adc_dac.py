@@ -21,5 +21,4 @@ with Bridge() as esp:
     print("\n440 Hz cosine on the DAC for 3 s ...")
     esp.dac.cosine(DAC_PIN, 440)
     time.sleep(3)
-    esp.dac.cosine_stop(DAC_PIN)
-    esp.dac.disable(DAC_PIN)
+    esp.dac.disable(DAC_PIN)      # stops the generator and releases the pin

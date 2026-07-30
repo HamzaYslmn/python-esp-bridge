@@ -21,7 +21,7 @@ class Adc:
     def __init__(self, bridge):
         self._b = bridge
 
-    def config(self, pin: int, atten=11) -> None:
+    def config(self, pin: int, atten: float = 11) -> None:
         """Set the input attenuation for a pin (0/2.5/6/11 dB; default 11 ≈ 3.3 V)."""
         self._b.request(C.ADC_CONFIG, bytes([pin, ATTEN.get(atten, int(atten))]))
 
@@ -39,8 +39,7 @@ class Dac:
 
         esp.dac.write(25, 128)            # ~1.65 V
         esp.dac.cosine(25, 1000)          # 1 kHz cosine wave
-        esp.dac.cosine_stop(25)
-        esp.dac.disable(25)
+        esp.dac.disable(25)               # stops the wave and releases the pin
     """
 
     def __init__(self, bridge):
@@ -60,12 +59,11 @@ class Dac:
         self._b.request(C.DAC_COSINE, struct.pack(">BIBbB", pin, freq_hz, scale & 3,
                                                   offset, 1 if phase_180 else 0))
 
-    def cosine_stop(self, pin: int) -> None:
-        """Stop the cosine generator on a pin (the pin stays a DAC output)."""
-        self._b.request(C.DAC_COS_STOP, bytes([pin]))
-
     def disable(self, pin: int) -> None:
-        """Turn the DAC off on a pin and release it."""
+        """Stop any cosine generator on the pin, turn the DAC off and release it.
+
+        A plain :meth:`write` also stops the generator, so there is nothing else
+        to call to take the pin back."""
         self._b.request(C.DAC_DISABLE, bytes([pin]))
 
 

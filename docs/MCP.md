@@ -96,8 +96,9 @@ auto-reconnects on the first tool call if the link drops.
 
 ## Tools
 
-100+ tools, grouped by peripheral. The agent reads the per-tool descriptions; the
-groups are:
+One tool per method of the Python API — `esp.i2c.read(addr, n)` is the `i2c_read`
+tool, with that method's own arguments and docstring, so the two never drift.
+The agent reads the per-tool descriptions; the groups are:
 
 | prefix | what |
 |--------|------|
@@ -111,6 +112,8 @@ groups are:
 | `nvs_*` | persistent key/value store (str/int/bytes) |
 | `fs_*` | LittleFS / SD files (list, read, write, stat, …) |
 | `onewire_*` / `espnow_*` / `can_*` | 1-Wire, ESP-NOW, CAN bus |
+| `rmt_*` / `i2s_*` | pulse trains (NeoPixel/IR/DHT timing) and PCM audio in/out |
+| `watch_*` | on-device rules: the board samples a pin and acts on it by itself |
 | `mcpwm_*` / `eth_*` / `camera_*` / `ota_*` | motor PWM, Ethernet, camera JPEG, firmware update |
 
 Conventions the tools follow:
@@ -127,14 +130,16 @@ Conventions the tools follow:
 `camera_capture` returns the JPEG as an MCP image so vision-capable models can
 see it directly.
 
-> Streaming / session-oriented APIs (raw TCP/UDP sockets, BLE GATT, I2S audio,
-> RMT capture) are intentionally **not** exposed as tools — they don't map onto
-> request/response tool calls. Use the Python `Bridge` API for those.
+> What is intentionally **not** a tool: anything that hands back a live object
+> (raw TCP/UDP sockets, BLE GATT sessions) or takes a host callback (edge
+> interrupts, RX handlers, RMT capture) — neither maps onto request/response
+> tool calls. Use the Python `Bridge` API for those.
 
 ## Live feedback
 
-Every tool reports what it did on the board — e.g. `GPIO2 mode set to output`,
-or `pwm_attach(pin=5, freq=1000, resolution_bits=10)`. Each message goes to two
+Every tool reports what it did on the board — e.g.
+`gpio_mode(pin=2, mode='output')`, or `gpio_write(pin=2, value=1) -> 1`. Each
+message goes to two
 places:
 
 - the **server log** (stderr) — visible to whoever runs `espbridge-mcp`;

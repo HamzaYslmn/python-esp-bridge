@@ -33,6 +33,7 @@ is deterministic (~ the rule's period) even over BLE or a busy USB link:
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import constants as C
@@ -130,10 +131,10 @@ class Watch:
             between: tuple[int, int] | None = None,
             outside: tuple[int, int] | None = None,
             change: int | None = None,
-            hysteresis: int = 0, period_ms: int = 100, atten=11,
+            hysteresis: int = 0, period_ms: int = 100, atten: float = 11,
             on_enter: bool = True, on_exit: bool = True, initial: bool = False,
             do: tuple | None = None, undo: tuple | None = None,
-            callback=None, id: int | None = None) -> int:
+            callback: Callable | None = None, id: int | None = None) -> int:
         """Register a rule on the board; returns its id (use it to :meth:`remove`).
 
         source:    what to sample — not just analog:

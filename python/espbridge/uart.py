@@ -123,4 +123,9 @@ class Uart:
             self._ports[port] = p
         return p
 
+    def port(self, port: int) -> UartPort | None:
+        """The open port with this number, or None — for code that didn't keep
+        what :meth:`init` returned."""
+        return self._ports.get(port)
+
     begin = init  # Arduino-style alias; teardown is the returned port's close()

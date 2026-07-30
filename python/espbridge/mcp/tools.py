@@ -1,39 +1,173 @@
-"""Peripheral tool groups for the espbridge MCP server.
+"""Peripheral tools for the espbridge MCP server — generated from the Bridge API.
 
-Each ``register_*`` function defines tools that drive one area of the Bridge
-API. Tools are thin wrappers: they fetch the live Bridge from the manager,
-call the corresponding ``esp.<subapi>.<method>(...)``, and return JSON-friendly
-values (bytes in/out as hex strings — see common.to_bytes/hex_str).
+Every public sub-API method becomes a tool named ``<subapi>_<method>`` carrying
+that method's own signature and docstring, so the MCP surface *is* the Python
+API: ``esp.i2c.read(addr, n)`` is the ``i2c_read`` tool, and a peripheral that
+gains a method gains a tool with nothing to write here. Bytes travel as hex
+strings in both directions.
+
+Only the exceptions are spelled out: ``SKIP`` lists methods that can't be a tool
+(they take a host callback, or hand back a live Python object), and the
+composites at the bottom are the few tools that aren't a single method call.
 """
 from __future__ import annotations
 
-from ..errors import BridgeError, BridgeTimeoutError, UnsupportedError
+import importlib
+import inspect
+import sys
+from dataclasses import fields, is_dataclass
+
+from ..bridge import Bridge
+from ..errors import BridgeTimeoutError, UnsupportedError
 from .common import guarded, hex_str, info_dict, to_bytes
+
+# Methods that cannot be a tool: they take a host callback, or return a live
+# object (socket, file handle, port) that doesn't cross the wire. Anything here
+# still worth exposing has a composite below.
+SKIP = {
+    "gpio": {"watch", "unwatch"},      # callback + host-side event stream
+    "uart": {"init", "port"},          # hand back a UartPort -> uart_* below
+    "wifi": {"on_state"},
+    "nvs": {"set", "get"},             # polymorphic value -> typed variants below
+    "espnow": {"on_receive", "on_send_result", "read"},
+    "can": {"on_message"},
+    "watch": {"on"},
+    "camera": {"capture"},             # returns an image -> composite below
+    "rmt": {"recv"},                   # blocks for a capture window
+    "fs": {"mount"},                   # returns a Volume -> fs_* below
+    "ota": {"flash"},                  # progress callback -> composite below
+    "eth": {"begin"},                  # **kw preset overrides -> composite below
+}
+# Whole sub-APIs that are host-object APIs rather than request/response: every
+# useful call hands back a socket or a live GATT session.
+SKIP_SUBAPI = {"net", "ble"}
+
+# Bridge's own methods, exposed as system_<name>.
+SYSTEM = ("ping", "free_heap", "reset", "set_name", "deep_sleep", "light_sleep",
+          "wake_cause", "cpu_freq", "power_mode", "link_power", "radio_off")
+
+# Volume methods (esp.fs.mount(kind) -> Volume), exposed as fs_<name> with the
+# volume kind as an extra argument. The rest of fs is composites below.
+VOLUME = ("list", "stat", "remove", "rename", "mkdir", "df")
+
+_JSON_TYPES = (int, float, str, bool, dict, list, type(None))
+_JSON = int | float | str | bool | dict | list | None
+
+
+def _jsonable(value):
+    """Make a return value JSON-friendly, bytes as hex (what to_bytes reads back)."""
+    if isinstance(value, (bytes, bytearray)):
+        return hex_str(bytes(value))
+    if is_dataclass(value) and not isinstance(value, type):
+        return {f.name: _jsonable(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def _json_return(annotation):
+    """What the tool declares it returns, after _jsonable has had its way: bytes
+    arrive as hex, and anything the schema generator can't pin down (dataclasses,
+    unions of them) falls back to the permissive JSON union."""
+    if annotation is bytes:
+        return str
+    if annotation in _JSON_TYPES or getattr(annotation, "__origin__", None) in (
+            list, dict, tuple):
+        return annotation
+    return _JSON
+
+
+def _tool(mcp, name: str, fn, target, extra=()):
+    """Register ``fn`` as an MCP tool named ``name``, calling it on ``target()``.
+
+    Signature and docstring come straight from the method; ``bytes`` parameters
+    are declared as hex strings and decoded on the way in, and the result goes
+    through :func:`_jsonable` on the way out. ``extra`` prepends parameters that
+    ``target`` consumes rather than the method (the fs volume kind).
+    """
+    sig = inspect.signature(fn, eval_str=True,
+                            globals=vars(sys.modules[fn.__module__]))
+    # Drop self, *args/**kwargs (no JSON schema fits them) and callbacks (a host
+    # function can't cross the wire) — what's left is the tool's parameters.
+    given = [p for p in list(sig.parameters.values())[1:]
+             if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+             and "Callable" not in str(p.annotation)]
+    hexed = {p.name for p in given if "bytes" in str(p.annotation)}
+    # All keyword-only: FastMCP calls tools by name, and it lets `extra` sit at
+    # the end regardless of which method parameters are positional.
+    params = [
+        p.replace(kind=p.KEYWORD_ONLY, annotation=str,
+                  default=hex_str(p.default) if isinstance(p.default, bytes)
+                  else p.default)
+        if p.name in hexed else p.replace(kind=p.KEYWORD_ONLY)
+        for p in given
+    ]
+    ret = _json_return(sig.return_annotation)
+
+    def impl(**kw):
+        for k in hexed & kw.keys():
+            kw[k] = to_bytes(kw[k])
+        obj = target(*(kw.pop(p.name) for p in extra)) if extra else target()
+        return _jsonable(fn(obj, **kw))
+
+    annotations = {p.name: p.annotation for p in (*params, *extra)
+                   if p.annotation is not inspect.Parameter.empty}
+    if ret is not inspect.Parameter.empty:
+        annotations["return"] = ret
+    signature = sig.replace(parameters=[*params, *extra], return_annotation=ret)
+
+    tool = guarded(impl)  # clean ToolErrors + the per-action feedback line
+    for f in (impl, tool):  # FastMCP inspects either side of functools.wraps
+        f.__name__ = name
+        f.__doc__ = inspect.getdoc(fn)
+        f.__signature__ = signature
+        f.__annotations__ = annotations
+    mcp.tool(tool)
+
+
+def _methods(cls, skip=frozenset()):
+    """Public methods of a sub-API class, with skipped ones and aliases removed.
+
+    Both filters go by function, not name, so ``begin = init`` yields one tool —
+    and skipping ``init`` also skips ``begin``.
+    """
+    seen = {fn for name, fn in vars(cls).items() if name in skip}
+    out = []
+    for name, fn in vars(cls).items():
+        if name.startswith("_") or not callable(fn) or fn in seen:
+            continue
+        seen.add(fn)
+        out.append((name, fn))
+    return out
 
 
 def register_all(mcp, mgr) -> None:
-    register_system(mcp, mgr)
-    register_gpio(mcp, mgr)
-    register_analog(mcp, mgr)
-    register_pwm(mcp, mgr)
-    register_i2c(mcp, mgr)
-    register_spi(mcp, mgr)
-    register_uart(mcp, mgr)
-    register_wifi(mcp, mgr)
-    register_nvs(mcp, mgr)
-    register_fs(mcp, mgr)
-    register_onewire(mcp, mgr)
-    register_espnow(mcp, mgr)
-    register_can(mcp, mgr)
-    register_mcpwm(mcp, mgr)
-    register_eth(mcp, mgr)
-    register_camera(mcp, mgr)
-    register_ota(mcp, mgr)
+    """Register every peripheral tool on ``mcp``, bound to ``mgr``'s bridge."""
+    for sub, (module, cls_name) in Bridge._SUBAPIS.items():
+        if sub in SKIP_SUBAPI:
+            continue
+        cls = getattr(importlib.import_module(f"..{module}", __package__), cls_name)
+        for name, fn in _methods(cls, SKIP.get(sub, frozenset())):
+            _tool(mcp, f"{sub}_{name}", fn, lambda s=sub: getattr(mgr.bridge(), s))
+
+    for name in SYSTEM:
+        _tool(mcp, f"system_{name}", getattr(Bridge, name), mgr.bridge)
+
+    from ..fs import Volume
+
+    kind = inspect.Parameter("kind", inspect.Parameter.KEYWORD_ONLY,
+                             default="littlefs", annotation=str)
+    for name in VOLUME:
+        _tool(mcp, f"fs_{name}", getattr(Volume, name), mgr.volume, extra=(kind,))
+
+    _register_composites(mcp, mgr)
 
 
-# ---- system ------------------------------------------------------------------
+# ---- composites: the tools that are not one method call ----------------------
 
-def register_system(mcp, mgr) -> None:
+def _register_composites(mcp, mgr) -> None:
     @mcp.tool
     @guarded
     def system_info() -> dict:
@@ -53,352 +187,38 @@ def register_system(mcp, mgr) -> None:
         hardware from your own wiring/datasheets. I2C buses appear here once
         you've called i2c_init."""
         esp = mgr.bridge()
-        info = esp.info
         try:
-            pins = [{"pin": s.pin, "mode": s.mode, "level": s.level, "pwm": s.pwm,
-                     "pwm_freq": s.pwm_freq, "pwm_duty": s.pwm_duty}
-                    for s in esp.gpio.dump()]
-            pins_note = None
+            pins, note = _jsonable(esp.gpio.dump()), None
         except UnsupportedError as e:
-            pins, pins_note = [], str(e)  # older firmware without GPIO_DUMP
-        i2c = []
-        for bus, cfg in sorted(mgr.i2c_buses.items()):
-            entry = {"bus": bus, **cfg}
-            try:
-                entry["devices"] = [{"addr": a, "hex": f"0x{a:02x}"}
-                                    for a in esp.i2c.scan(bus)]
-            except BridgeError as e:
-                entry["error"] = str(e)
-            i2c.append(entry)
+            pins, note = [], str(e)  # older firmware without GPIO_DUMP
+        i2c = [{"bus": bus, **cfg,
+                "devices": [{"addr": a, "hex": f"0x{a:02x}"}
+                            for a in esp.i2c.scan(bus)]}
+               for bus, cfg in sorted(esp.i2c.buses.items())]
         return {
-            "chip": info.chip.name,
-            "mac": info.mac,
-            "firmware": ".".join(map(str, info.fw_version)),
+            **info_dict(esp),
             "free_heap": esp.free_heap()["free"],
             "pins": pins,
-            "pins_note": pins_note,
+            "pins_note": note,
             "i2c": i2c,
             "i2c_note": None if i2c else "no I2C bus initialized yet — call "
             "i2c_init(sda=, scl=) to scan a bus for device addresses",
         }
 
-    @mcp.tool
-    @guarded
-    def system_ping() -> dict:
-        """Round-trip the link; returns latency in milliseconds."""
-        return {"latency_ms": round(mgr.bridge().ping() * 1000, 3)}
+    # -- uart: init hands back a live port, which esp.uart already keeps ------
+
+    def _port(port: int):
+        p = mgr.bridge().uart.port(port)
+        if p is None:
+            raise ValueError(f"UART{port} is not open — call uart_init first")
+        return p
 
     @mcp.tool
     @guarded
-    def system_free_heap() -> dict:
-        """Heap metrics (free / min_free / largest_block) and dropped-frame counters."""
-        return mgr.bridge().free_heap()
-
-    @mcp.tool
-    @guarded
-    def system_reset() -> str:
-        """Soft-reset the ESP32 and wait for it to reconnect."""
-        mgr.bridge().reset()
-        return "reset complete"
-
-    @mcp.tool
-    @guarded
-    def system_set_name(name: str) -> str:
-        """Name the board (persisted), so bridge_connect(name=...) finds it on
-        any link. Max 16 characters — it has to fit the BLE advertisement."""
-        mgr.bridge().set_name(name)
-        return f"name set to {name!r}"
-
-    @mcp.tool
-    @guarded
-    def system_deep_sleep(seconds: float = 0, wake_pin: int | None = None,
-                          wake_level: int = 1) -> str:
-        """Deep sleep (the board reboots on wake and the link drops). Wake on a
-        timer (seconds), a GPIO level (wake_pin/wake_level), or both."""
-        mgr.bridge().deep_sleep(seconds, wake_pin=wake_pin, wake_level=wake_level)
-        return "entered deep sleep (board will reboot on wake; reconnect after)"
-
-    @mcp.tool
-    @guarded
-    def system_light_sleep(seconds: float = 0, wake_pin: int | None = None,
-                           wake_level: int = 1) -> dict:
-        """Light sleep (RAM and the link survive); returns the wake cause code."""
-        cause = mgr.bridge().light_sleep(seconds, wake_pin=wake_pin,
-                                         wake_level=wake_level)
-        return {"wake_cause": cause}
-
-    @mcp.tool
-    @guarded
-    def system_wake_cause() -> dict:
-        """esp_sleep_wakeup_cause_t of the last boot (0 reset, 4 timer, 7 gpio, ...)."""
-        return {"wake_cause": mgr.bridge().wake_cause()}
-
-    @mcp.tool
-    @guarded
-    def system_cpu_freq(mhz: int) -> dict:
-        """Set the CPU clock (80/160/240 MHz; 80 = battery floor with radios on)."""
-        return {"cpu_mhz": mgr.bridge().cpu_freq(mhz)}
-
-    @mcp.tool
-    @guarded
-    def system_power_mode(mode: str) -> dict:
-        """Apply a power profile: 'battery' (80 MHz CPU + relaxed BLE link) or
-        'performance' (240 MHz + fast BLE link). ESP-NOW RX duty is separate —
-        see espnow_power_save."""
-        return mgr.bridge().power_mode(mode)
-
-
-# ---- gpio --------------------------------------------------------------------
-
-def register_gpio(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def gpio_mode(pin: int, mode: str) -> str:
-        """Set a pin's mode: input | output | input_pullup | input_pulldown |
-        output_open_drain."""
-        mgr.bridge().gpio.mode(pin, mode)
-        return f"GPIO{pin} mode set to {mode}"
-
-    @mcp.tool
-    @guarded
-    def gpio_write(pin: int, value: int, verify: bool = False) -> dict:
-        """Drive an output pin (value 0/1). Returns the level read back from the
-        chip and `ok` — false means the pin did NOT reach the requested level
-        (wrong mode, not an output, shorted, or driven elsewhere)."""
-        want = 1 if value else 0
-        level = mgr.bridge().gpio.write(pin, value, verify=verify)
-        return {"pin": pin, "value": want, "level": level, "ok": level == want}
-
-    @mcp.tool
-    @guarded
-    def gpio_read(pin: int) -> dict:
-        """Read a pin's current level (0/1)."""
-        return {"pin": pin, "level": mgr.bridge().gpio.read(pin)}
-
-    @mcp.tool
-    @guarded
-    def gpio_status(pin: int) -> dict:
-        """Full state of a pin from the chip: live level, configured mode
-        (input/output/... or null), and whether a PWM channel drives it
-        (pwm=true with pwm_freq/pwm_duty). Use this to see what's really on a
-        pin, not just its digital value."""
-        st = mgr.bridge().gpio.status(pin)
-        return {"pin": st.pin, "level": st.level, "mode": st.mode,
-                "is_output": st.is_output, "pwm": st.pwm,
-                "pwm_freq": st.pwm_freq, "pwm_duty": st.pwm_duty}
-
-    @mcp.tool
-    @guarded
-    def gpio_read_all() -> dict:
-        """Read every pin at once; returns a bitmask (bit N = GPIO N)."""
-        return {"bitmask": mgr.bridge().gpio.read_all()}
-
-    @mcp.tool
-    @guarded
-    def gpio_write_many(values: dict[int, int]) -> str:
-        """Set several output pins in one round-trip, e.g. {"2": 1, "4": 0}."""
-        mgr.bridge().gpio.write_many({int(k): v for k, v in values.items()})
-        return f"wrote {len(values)} pins"
-
-
-# ---- adc / dac / touch -------------------------------------------------------
-
-def register_analog(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def adc_config(pin: int, atten: float = 11) -> str:
-        """Set ADC attenuation for a pin (0, 2.5, 6 or 11 dB; 11 dB ~ full 3.3 V)."""
-        mgr.bridge().adc.config(pin, atten)
-        return f"ADC on GPIO{pin} set to {atten} dB"
-
-    @mcp.tool
-    @guarded
-    def adc_read(pin: int) -> dict:
-        """Raw 12-bit ADC reading (0..4095) on a pin."""
-        return {"pin": pin, "raw": mgr.bridge().adc.read(pin)}
-
-    @mcp.tool
-    @guarded
-    def adc_read_mv(pin: int) -> dict:
-        """Calibrated ADC reading in millivolts on a pin."""
-        return {"pin": pin, "mv": mgr.bridge().adc.read_mv(pin)}
-
-    @mcp.tool
-    @guarded
-    def dac_write(pin: int, value: int) -> str:
-        """Output a DAC value 0..255 (0..3.3 V). Classic ESP32 GPIO 25/26, S2 17/18."""
-        mgr.bridge().dac.write(pin, value)
-        return f"DAC GPIO{pin} = {value}"
-
-    @mcp.tool
-    @guarded
-    def dac_cosine(pin: int, freq_hz: int, scale: int = 0, offset: int = 0,
-                   phase_180: bool = False) -> str:
-        """Start the hardware cosine generator (~130 Hz..100 kHz). scale 0..3 =
-        full/half/quarter/eighth amplitude."""
-        mgr.bridge().dac.cosine(pin, freq_hz, scale=scale, offset=offset,
-                                phase_180=phase_180)
-        return f"cosine generator on GPIO{pin} at {freq_hz} Hz"
-
-    @mcp.tool
-    @guarded
-    def dac_disable(pin: int) -> str:
-        """Stop the cosine generator and disable the DAC output on a pin."""
-        esp = mgr.bridge()
-        esp.dac.cosine_stop(pin)
-        esp.dac.disable(pin)
-        return f"DAC GPIO{pin} disabled"
-
-    @mcp.tool
-    @guarded
-    def touch_read(pin: int) -> dict:
-        """Capacitive touch reading on a touch-capable pin."""
-        return {"pin": pin, "value": mgr.bridge().touch.read(pin)}
-
-
-# ---- pwm ---------------------------------------------------------------------
-
-def register_pwm(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def pwm_attach(pin: int, freq: int = 1000, resolution_bits: int = 10) -> str:
-        """Attach LEDC PWM to a pin at the given frequency and duty resolution."""
-        mgr.bridge().pwm.attach(pin, freq, resolution_bits)
-        return f"PWM attached on GPIO{pin}: {freq} Hz, {resolution_bits}-bit"
-
-    @mcp.tool
-    @guarded
-    def pwm_write(pin: int, duty: int) -> str:
-        """Set raw PWM duty (0 .. 2**resolution_bits - 1) on an attached pin."""
-        mgr.bridge().pwm.write(pin, duty)
-        return f"PWM GPIO{pin} duty = {duty}"
-
-    @mcp.tool
-    @guarded
-    def pwm_duty_pct(pin: int, percent: float) -> str:
-        """Set PWM duty as a percentage 0..100 (auto-attaches the pin if needed)."""
-        mgr.bridge().pwm.duty_pct(pin, percent)
-        return f"PWM GPIO{pin} duty = {percent}%"
-
-    @mcp.tool
-    @guarded
-    def pwm_detach(pin: int) -> str:
-        """Detach PWM from a pin."""
-        mgr.bridge().pwm.detach(pin)
-        return f"PWM detached from GPIO{pin}"
-
-    @mcp.tool
-    @guarded
-    def pwm_tone(pin: int, freq: int) -> str:
-        """Play a square-wave tone (0 = off) — buzzer friendly."""
-        mgr.bridge().pwm.tone(pin, freq)
-        return f"tone {freq} Hz on GPIO{pin}"
-
-    @mcp.tool
-    @guarded
-    def pwm_servo(pin: int, angle: float, min_us: int = 500, max_us: int = 2500) -> str:
-        """Drive a hobby servo: 50 Hz, angle 0..180 mapped to min_us..max_us."""
-        mgr.bridge().pwm.servo(pin, angle, min_us=min_us, max_us=max_us)
-        return f"servo GPIO{pin} -> {angle} deg"
-
-
-# ---- i2c ---------------------------------------------------------------------
-
-def register_i2c(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def i2c_init(sda: int = 21, scl: int = 22, freq: int = 400_000, bus: int = 0) -> str:
-        """Initialize an I2C master bus (0 or 1) on the given SDA/SCL pins."""
-        mgr.bridge().i2c.init(sda=sda, scl=scl, freq=freq, bus=bus)
-        mgr.note_i2c(bus, sda, scl, freq)  # remember bus config so board_status can scan it
-        return f"I2C bus {bus} ready (SDA={sda}, SCL={scl}, {freq} Hz)"
-
-    @mcp.tool
-    @guarded
-    def i2c_scan(bus: int = 0) -> dict:
-        """Scan a bus; returns the 7-bit addresses that ACK (decimal and hex)."""
-        addrs = mgr.bridge().i2c.scan(bus)
-        return {"addresses": addrs, "hex": [f"0x{a:02x}" for a in addrs]}
-
-    @mcp.tool
-    @guarded
-    def i2c_write(addr: int, data: str, bus: int = 0) -> str:
-        """Write hex bytes to a device, e.g. data="00ff"."""
-        payload = to_bytes(data)
-        mgr.bridge().i2c.write(addr, payload, bus)
-        return f"wrote {len(payload)} bytes to 0x{addr:02x}"
-
-    @mcp.tool
-    @guarded
-    def i2c_read(addr: int, n: int, bus: int = 0) -> dict:
-        """Read n bytes (1..255) from a device; returns hex."""
-        return {"hex": hex_str(mgr.bridge().i2c.read(addr, n, bus))}
-
-    @mcp.tool
-    @guarded
-    def i2c_write_read(addr: int, wdata: str, rlen: int, bus: int = 0) -> dict:
-        """Write hex bytes then read rlen bytes with a repeated start (register read)."""
-        r = mgr.bridge().i2c.write_read(addr, to_bytes(wdata), rlen, bus)
-        return {"hex": hex_str(r)}
-
-    @mcp.tool
-    @guarded
-    def i2c_read_reg(addr: int, reg: int, n: int = 1, bus: int = 0) -> dict:
-        """Read n bytes from register reg of a device; returns hex."""
-        return {"hex": hex_str(mgr.bridge().i2c.read_reg(addr, reg, n, bus))}
-
-    @mcp.tool
-    @guarded
-    def i2c_write_reg(addr: int, reg: int, data: str, bus: int = 0) -> str:
-        """Write hex bytes to register reg of a device."""
-        mgr.bridge().i2c.write_reg(addr, reg, to_bytes(data), bus)
-        return f"wrote register 0x{reg:02x} on 0x{addr:02x}"
-
-    @mcp.tool
-    @guarded
-    def i2c_deinit(bus: int = 0) -> str:
-        """Release an I2C bus."""
-        mgr.bridge().i2c.deinit(bus)
-        mgr.forget_i2c(bus)
-        return f"I2C bus {bus} released"
-
-
-# ---- spi ---------------------------------------------------------------------
-
-def register_spi(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def spi_init(sck: int = 18, miso: int = 19, mosi: int = 23, freq: int = 1_000_000,
-                 mode: int = 0, msb_first: bool = True, host: int = 0) -> str:
-        """Initialize an SPI master bus."""
-        mgr.bridge().spi.init(sck=sck, miso=miso, mosi=mosi, freq=freq, mode=mode,
-                              msb_first=msb_first, host=host)
-        return f"SPI host {host} ready (SCK={sck}, MISO={miso}, MOSI={mosi}, {freq} Hz)"
-
-    @mcp.tool
-    @guarded
-    def spi_transfer(tx: str, cs: int | None = None, host: int = 0) -> dict:
-        """Full-duplex transfer of hex bytes; returns the bytes clocked in (hex).
-        With cs given, that GPIO is held low for the transfer."""
-        r = mgr.bridge().spi.transfer(to_bytes(tx), cs=cs, host=host)
-        return {"hex": hex_str(r)}
-
-    @mcp.tool
-    @guarded
-    def spi_deinit(host: int = 0) -> str:
-        """Release an SPI bus."""
-        mgr.bridge().spi.deinit(host)
-        return f"SPI host {host} released"
-
-
-# ---- uart --------------------------------------------------------------------
-
-def register_uart(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def uart_init(port: int = 1, tx: int = 17, rx: int = 16, baud: int = 115_200) -> str:
-        """Open a secondary UART (1 or 2). RX is buffered on the host for uart_read."""
-        mgr.open_uart(port=port, tx=tx, rx=rx, baud=baud)
+    def uart_init(port: int = 1, tx: int = 17, rx: int = 16,
+                  baud: int = 115_200) -> str:
+        """Open a secondary UART (1 or 2). RX is buffered for uart_read."""
+        mgr.bridge().uart.init(port=port, tx=tx, rx=rx, baud=baud)
         return f"UART{port} open (TX={tx}, RX={rx}, {baud} baud)"
 
     @mcp.tool
@@ -406,11 +226,8 @@ def register_uart(mcp, mgr) -> None:
     def uart_write(port: int, data: str, text: bool = False) -> str:
         """Write to a UART. By default data is hex; set text=true to send data as
         a UTF-8 string instead."""
-        p = mgr.uart_port(port)
-        if p is None:
-            raise ValueError(f"UART{port} is not open — call uart_init first")
         payload = data.encode() if text else to_bytes(data)
-        p.write(payload)
+        _port(port).write(payload)
         return f"wrote {len(payload)} bytes to UART{port}"
 
     @mcp.tool
@@ -418,74 +235,18 @@ def register_uart(mcp, mgr) -> None:
     def uart_read(port: int, n: int | None = None, timeout: float = 1.0) -> dict:
         """Read buffered bytes from a UART (up to n; all if omitted). Returns both
         hex and a best-effort UTF-8 decode."""
-        p = mgr.uart_port(port)
-        if p is None:
-            raise ValueError(f"UART{port} is not open — call uart_init first")
-        data = p.read(n, timeout=timeout)
+        data = _port(port).read(n, timeout=timeout)
         return {"hex": hex_str(data), "text": data.decode("utf-8", "replace")}
 
     @mcp.tool
     @guarded
     def uart_close(port: int) -> str:
         """Close a secondary UART."""
-        mgr.close_uart(port)
+        _port(port).close()
         return f"UART{port} closed"
 
+    # -- nvs: one polymorphic set()/get() in Python, typed tools over MCP -----
 
-# ---- wifi --------------------------------------------------------------------
-
-def register_wifi(mcp, mgr) -> None:
-    def _status_dict(st) -> dict:
-        return {"status": st.status, "connected": st.connected, "ip": st.ip,
-                "gateway": st.gateway, "netmask": st.netmask, "rssi": st.rssi,
-                "channel": st.channel, "mac": st.mac}
-
-    @mcp.tool
-    @guarded
-    def wifi_scan(timeout: float = 15.0) -> list[dict]:
-        """Scan for Wi-Fi networks; returns them sorted by signal strength."""
-        return [{"ssid": n.ssid, "rssi": n.rssi, "bssid": n.bssid,
-                 "channel": n.channel, "auth": n.auth}
-                for n in mgr.bridge().wifi.scan(timeout)]
-
-    @mcp.tool
-    @guarded
-    def wifi_connect(ssid: str, password: str = "", timeout: float = 20.0) -> dict:
-        """Join a Wi-Fi network (station mode); returns the connection status."""
-        return _status_dict(mgr.bridge().wifi.connect(ssid, password, timeout=timeout))
-
-    @mcp.tool
-    @guarded
-    def wifi_disconnect() -> str:
-        """Disconnect from the current Wi-Fi network."""
-        mgr.bridge().wifi.disconnect()
-        return "wifi disconnected"
-
-    @mcp.tool
-    @guarded
-    def wifi_status() -> dict:
-        """Current Wi-Fi station status (IP, gateway, RSSI, ...)."""
-        return _status_dict(mgr.bridge().wifi.status())
-
-    @mcp.tool
-    @guarded
-    def wifi_ap_start(ssid: str, password: str = "", channel: int = 1,
-                      max_conn: int = 4) -> dict:
-        """Start a Wi-Fi access point; returns its IP (clients get 192.168.4.x)."""
-        return {"ip": mgr.bridge().wifi.ap_start(ssid, password, channel=channel,
-                                                 max_conn=max_conn)}
-
-    @mcp.tool
-    @guarded
-    def wifi_ap_stop() -> str:
-        """Stop the access point."""
-        mgr.bridge().wifi.ap_stop()
-        return "AP stopped"
-
-
-# ---- nvs ---------------------------------------------------------------------
-
-def register_nvs(mcp, mgr) -> None:
     @mcp.tool
     @guarded
     def nvs_set_str(key: str, value: str) -> str:
@@ -509,46 +270,13 @@ def register_nvs(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
-    def nvs_get_str(key: str) -> dict:
-        """Read a key as a string (value null if the key is absent)."""
-        return {"value": mgr.bridge().nvs.get_str(key)}
-
-    @mcp.tool
-    @guarded
-    def nvs_get_int(key: str) -> dict:
-        """Read a key as a signed integer (value null if the key is absent)."""
-        return {"value": mgr.bridge().nvs.get_int(key)}
-
-    @mcp.tool
-    @guarded
     def nvs_get_bytes(key: str) -> dict:
         """Read a key as raw bytes, returned as hex (null if the key is absent)."""
         v = mgr.bridge().nvs.get(key)
         return {"hex": None if v is None else hex_str(v)}
 
-    @mcp.tool
-    @guarded
-    def nvs_keys() -> list[str]:
-        """List all keys in the user namespace."""
-        return mgr.bridge().nvs.keys()
+    # -- filesystem: mount caches the volume; text and bytes are separate -----
 
-    @mcp.tool
-    @guarded
-    def nvs_delete(key: str) -> dict:
-        """Delete a key; returns existed=false if it was not present."""
-        return {"existed": mgr.bridge().nvs.delete(key)}
-
-    @mcp.tool
-    @guarded
-    def nvs_clear() -> str:
-        """Erase every key in the user namespace."""
-        mgr.bridge().nvs.clear()
-        return "NVS cleared"
-
-
-# ---- filesystem --------------------------------------------------------------
-
-def register_fs(mcp, mgr) -> None:
     @mcp.tool
     @guarded
     def fs_mount(kind: str = "littlefs", cs: int = 5, sck: int = -1, miso: int = -1,
@@ -561,27 +289,18 @@ def register_fs(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
-    def fs_list(path: str = "/", kind: str = "littlefs") -> list[dict]:
-        """List a directory; returns [{name, size, isdir}, ...]."""
-        return [{"name": name, "size": size, "isdir": isdir}
-                for name, size, isdir in mgr.volume(kind).list(path)]
-
-    @mcp.tool
-    @guarded
     def fs_tree(path: str = "/", kind: str = "littlefs", max_depth: int = 6,
                 max_entries: int = 1000) -> dict:
         """Recursively walk a filesystem subtree so you can see everything inside
         it at once: returns [{path, size, isdir}, ...] depth-first. Bounded by
         max_depth/max_entries (truncated=true if the cap was hit)."""
-        vol = mgr.volume(kind)
-        out: list[dict] = []
+        vol, out = mgr.volume(kind), []
 
         def walk(p: str, depth: int) -> None:
             if depth > max_depth or len(out) >= max_entries:
                 return
-            base = p.rstrip("/")
             for name, size, isdir in vol.list(p):
-                full = f"{base}/{name}"
+                full = f"{p.rstrip('/')}/{name}"
                 out.append({"path": full, "size": size, "isdir": isdir})
                 if isdir:
                     walk(full, depth + 1)
@@ -606,224 +325,24 @@ def register_fs(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
-    def fs_write_text(path: str, content: str, kind: str = "littlefs") -> str:
-        """Write UTF-8 text to a file (absolute path, overwrites)."""
-        mgr.volume(kind).write_file(path, content.encode())
-        return f"wrote {len(content.encode())} bytes to {path}"
-
-    @mcp.tool
-    @guarded
-    def fs_write_bytes(path: str, content: str, kind: str = "littlefs") -> str:
-        """Write hex bytes to a file (absolute path, overwrites)."""
-        data = to_bytes(content)
-        mgr.volume(kind).write_file(path, data)
+    def fs_write_text(path: str, content: str, kind: str = "littlefs",
+                      append: bool = False) -> str:
+        """Write UTF-8 text to a file (absolute path; overwrites unless append)."""
+        vol, data = mgr.volume(kind), content.encode()
+        (vol.append_file if append else vol.write_file)(path, data)
         return f"wrote {len(data)} bytes to {path}"
 
     @mcp.tool
     @guarded
-    def fs_stat(path: str, kind: str = "littlefs") -> dict:
-        """Stat a path; returns {size, isdir, mtime}."""
-        size, isdir, mtime = mgr.volume(kind).stat(path)
-        return {"size": size, "isdir": isdir, "mtime": mtime}
+    def fs_write_bytes(path: str, content: str, kind: str = "littlefs",
+                       append: bool = False) -> str:
+        """Write hex bytes to a file (absolute path; overwrites unless append)."""
+        vol, data = mgr.volume(kind), to_bytes(content)
+        (vol.append_file if append else vol.write_file)(path, data)
+        return f"wrote {len(data)} bytes to {path}"
 
-    @mcp.tool
-    @guarded
-    def fs_remove(path: str, kind: str = "littlefs") -> str:
-        """Delete a file."""
-        mgr.volume(kind).remove(path)
-        return f"removed {path}"
+    # -- the rest: variadic overrides, a progress callback, an image ----------
 
-    @mcp.tool
-    @guarded
-    def fs_mkdir(path: str, kind: str = "littlefs") -> str:
-        """Create a directory."""
-        mgr.volume(kind).mkdir(path)
-        return f"created {path}"
-
-    @mcp.tool
-    @guarded
-    def fs_rename(src: str, dst: str, kind: str = "littlefs") -> str:
-        """Rename/move a file (both paths absolute)."""
-        mgr.volume(kind).rename(src, dst)
-        return f"renamed {src} -> {dst}"
-
-    @mcp.tool
-    @guarded
-    def fs_df(kind: str = "littlefs") -> dict:
-        """Free-space report for a mounted volume; returns {total_kb, used_kb}."""
-        total, used = mgr.volume(kind).df()
-        return {"total_kb": total, "used_kb": used}
-
-
-# ---- 1-wire ------------------------------------------------------------------
-
-def register_onewire(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def onewire_search(pin: int, alarm: bool = False) -> list[str]:
-        """Enumerate 1-Wire device ROM codes (hex) on a pin."""
-        return mgr.bridge().onewire.search(pin, alarm=alarm)
-
-    @mcp.tool
-    @guarded
-    def onewire_reset(pin: int) -> dict:
-        """Pulse a 1-Wire reset; returns present=true if any device answered."""
-        return {"present": mgr.bridge().onewire.reset(pin)}
-
-    @mcp.tool
-    @guarded
-    def onewire_write(pin: int, data: str, power: bool = False) -> str:
-        """Write hex bytes on a 1-Wire bus. power=true holds the line driven
-        high afterwards (parasite-powered conversions)."""
-        payload = to_bytes(data)
-        mgr.bridge().onewire.write(pin, payload, power=power)
-        return f"wrote {len(payload)} bytes on 1-Wire GPIO{pin}"
-
-    @mcp.tool
-    @guarded
-    def onewire_read(pin: int, n: int) -> dict:
-        """Read n bytes from a 1-Wire bus; returns hex."""
-        return {"hex": hex_str(mgr.bridge().onewire.read(pin, n))}
-
-
-# ---- esp-now -----------------------------------------------------------------
-
-def register_espnow(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def espnow_begin(channel: int = 0, long_range: bool = False) -> dict:
-        """Start ESP-NOW; returns this board's MAC (give it to peers). channel 0
-        inherits the current Wi-Fi channel."""
-        return {"mac": mgr.bridge().espnow.begin(channel, long_range=long_range)}
-
-    @mcp.tool
-    @guarded
-    def espnow_add_peer(mac: str, channel: int = 0) -> str:
-        """Register an ESP-NOW peer by MAC address."""
-        mgr.bridge().espnow.add_peer(mac, channel=channel)
-        return f"peer {mac} added"
-
-    @mcp.tool
-    @guarded
-    def espnow_send(mac: str, data: str) -> dict:
-        """Send hex bytes (max 250) to a registered peer; returns delivered (radio ACK)."""
-        return {"delivered": mgr.bridge().espnow.send(mac, to_bytes(data))}
-
-    @mcp.tool
-    @guarded
-    def espnow_broadcast(data: str) -> str:
-        """Broadcast hex bytes to every listening board in range (never ACKed)."""
-        mgr.bridge().espnow.broadcast(to_bytes(data))
-        return "broadcast sent"
-
-    @mcp.tool
-    @guarded
-    def espnow_read(timeout: float = 1.0) -> dict | None:
-        """Pop the oldest received ESP-NOW packet (null on timeout). Only works
-        when no on-board callback is consuming packets."""
-        try:
-            mac, data, rssi = mgr.bridge().espnow.read(timeout=timeout)
-        except BridgeTimeoutError:
-            return None
-        return {"mac": mac, "hex": hex_str(data), "rssi": rssi}
-
-    @mcp.tool
-    @guarded
-    def espnow_power_save(window_ms: int, interval_ms: int | None = None) -> str:
-        """Connectionless power save: RF listens window_ms at the start of every
-        interval_ms. Default after begin is 65535 (always listening, most
-        reliable); shrink for battery boards. window 0 = RX off, TX still works."""
-        mgr.bridge().espnow.power_save(window_ms, interval_ms)
-        return f"wake window {window_ms} ms" + (f", interval {interval_ms} ms" if interval_ms else "")
-
-    @mcp.tool
-    @guarded
-    def espnow_end() -> str:
-        """Stop ESP-NOW (peers are forgotten)."""
-        mgr.bridge().espnow.end()
-        return "ESP-NOW stopped"
-
-
-# ---- can / twai --------------------------------------------------------------
-
-def register_can(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def can_begin(tx: int, rx: int, bitrate: int = 500_000, mode: str = "normal") -> str:
-        """Start the CAN (TWAI) controller. mode: normal | listen | no_ack.
-        bitrate: one of 25000..1000000 standard rates."""
-        mgr.bridge().can.begin(tx, rx, bitrate, mode=mode)
-        return f"CAN up at {bitrate} bps ({mode})"
-
-    @mcp.tool
-    @guarded
-    def can_send(id: int, data: str = "", extended: bool = False,
-                 rtr: bool = False) -> str:
-        """Send a CAN frame: id plus up to 8 data bytes as hex."""
-        mgr.bridge().can.send(id, to_bytes(data), extended=extended, rtr=rtr)
-        return f"sent CAN id 0x{id:x}"
-
-    @mcp.tool
-    @guarded
-    def can_recv(timeout: float = 1.0) -> dict | None:
-        """Receive the next CAN frame (null on timeout)."""
-        msg = mgr.bridge().can.recv(timeout=timeout)
-        if msg is None:
-            return None
-        return {"id": msg.id, "hex": hex_str(msg.data), "extended": msg.extended,
-                "rtr": msg.rtr}
-
-    @mcp.tool
-    @guarded
-    def can_status() -> dict:
-        """CAN controller state and error counters."""
-        return mgr.bridge().can.status()
-
-    @mcp.tool
-    @guarded
-    def can_recover() -> str:
-        """Start bus-off recovery."""
-        mgr.bridge().can.recover()
-        return "recovery started"
-
-    @mcp.tool
-    @guarded
-    def can_end() -> str:
-        """Stop the CAN controller."""
-        mgr.bridge().can.end()
-        return "CAN stopped"
-
-
-# ---- mcpwm -------------------------------------------------------------------
-
-def register_mcpwm(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def mcpwm_begin(pin_a: int, pin_b: int | None = None, freq: int = 20_000,
-                    deadtime_ns: int = 500) -> str:
-        """Start a complementary PWM pair with hardware deadtime (H-bridge / motor
-        drivers). pin_b null = single output."""
-        mgr.bridge().mcpwm.begin(pin_a, pin_b, freq=freq, deadtime_ns=deadtime_ns)
-        return f"MCPWM on {pin_a}/{pin_b} at {freq} Hz"
-
-    @mcp.tool
-    @guarded
-    def mcpwm_duty(percent: float) -> str:
-        """Set MCPWM duty 0..100% on pin_a (pin_b runs the complement)."""
-        mgr.bridge().mcpwm.duty(percent)
-        return f"MCPWM duty = {percent}%"
-
-    @mcp.tool
-    @guarded
-    def mcpwm_stop() -> str:
-        """Stop MCPWM output."""
-        mgr.bridge().mcpwm.stop()
-        return "MCPWM stopped"
-
-
-# ---- ethernet ----------------------------------------------------------------
-
-def register_eth(mcp, mgr) -> None:
     @mcp.tool
     @guarded
     def eth_begin(preset_or_phy: str, addr: int | None = None, cs: int | None = None,
@@ -838,36 +357,11 @@ def register_eth(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
-    def eth_wait_for_ip(timeout: float = 15.0) -> dict:
-        """Block until Ethernet gets a DHCP address; returns the IP."""
-        return {"ip": mgr.bridge().eth.wait_for_ip(timeout)}
-
-    @mcp.tool
-    @guarded
-    def eth_status() -> dict:
-        """Ethernet link/IP status."""
-        return mgr.bridge().eth.status()
-
-    @mcp.tool
-    @guarded
-    def eth_end() -> str:
-        """Stop Ethernet."""
-        mgr.bridge().eth.end()
-        return "Ethernet stopped"
-
-
-# ---- camera ------------------------------------------------------------------
-
-def register_camera(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def camera_begin(preset: str = "ai-thinker", framesize: int = 7, quality: int = 12,
-                     xclk_mhz: int = 20, fb_count: int = 1) -> str:
-        """Init the camera. preset = board name (ai-thinker, esp-eye, ...).
-        framesize: framesize_t enum (7 = VGA). quality: JPEG 0 (best)..63."""
-        mgr.bridge().camera.begin(preset, framesize=framesize, quality=quality,
-                                  xclk_mhz=xclk_mhz, fb_count=fb_count)
-        return f"camera initialized ({preset})"
+    def ota_flash(file_path: str, reboot: bool = True) -> dict:
+        """Flash a compiled firmware image (.bin file on the host) to the board's
+        inactive app slot over the link. Returns bytes written."""
+        written = mgr.bridge().ota.flash(file_path, reboot=reboot)
+        return {"bytes_written": written, "rebooted": reboot}
 
     @mcp.tool
     @guarded
@@ -886,34 +380,11 @@ def register_camera(mcp, mgr) -> None:
 
     @mcp.tool
     @guarded
-    def camera_set(prop: str, value: int) -> str:
-        """Tune the sensor: framesize, quality, brightness, contrast, saturation,
-        vflip, hmirror, ... (see the camera module for the full list)."""
-        mgr.bridge().camera.set(prop, value)
-        return f"camera {prop} = {value}"
-
-    @mcp.tool
-    @guarded
-    def camera_end() -> str:
-        """Power down the camera."""
-        mgr.bridge().camera.end()
-        return "camera stopped"
-
-
-# ---- ota ---------------------------------------------------------------------
-
-def register_ota(mcp, mgr) -> None:
-    @mcp.tool
-    @guarded
-    def ota_flash(file_path: str, reboot: bool = True) -> dict:
-        """Flash a compiled firmware image (.bin file on the host) to the board's
-        inactive app slot over the link. Returns bytes written."""
-        written = mgr.bridge().ota.flash(file_path, reboot=reboot)
-        return {"bytes_written": written, "rebooted": reboot}
-
-    @mcp.tool
-    @guarded
-    def ota_abort() -> str:
-        """Abort an in-progress OTA update."""
-        mgr.bridge().ota.abort()
-        return "OTA aborted"
+    def espnow_read(timeout: float = 1.0) -> dict | None:
+        """Pop the oldest received ESP-NOW packet (null on timeout). Only works
+        when no on-board callback is consuming packets."""
+        try:
+            mac, data, rssi = mgr.bridge().espnow.read(timeout=timeout)
+        except BridgeTimeoutError:
+            return None
+        return {"mac": mac, "hex": hex_str(data), "rssi": rssi}

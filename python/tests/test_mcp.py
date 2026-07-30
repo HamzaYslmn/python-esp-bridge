@@ -50,15 +50,16 @@ def test_tools_drive_the_bridge(fw):
             assert info.data["mac"] == "24:a1:60:12:34:56"
 
             await client.call_tool("gpio_mode", {"pin": 2, "mode": "output"})
+            # Generated tools return what the Python method returns: the level
+            # gpio.write() read back, and i2c.read()'s bytes as hex.
             r = await client.call_tool("gpio_write", {"pin": 2, "value": 1})
-            assert r.data["level"] == 1
+            assert r.data == 1
 
             await client.call_tool("i2c_init", {})
             scan = await client.call_tool("i2c_scan", {})
-            assert 0x3C in scan.data["addresses"]
-            rd = await client.call_tool(
-                "i2c_read", {"addr": 0x3C, "n": 3})
-            assert rd.data["hex"] == "010203"
+            assert 0x3C in scan.data
+            rd = await client.call_tool("i2c_read", {"addr": 0x3C, "n": 3})
+            assert rd.data == "010203"
 
     try:
         asyncio.run(run())
@@ -100,9 +101,9 @@ def test_feedback_on_by_default(fw):
     finally:
         mgr.disconnect()
 
-    # Both the gpio_mode confirmation and the gpio_write read-back must produce feedback messages.
-    assert any("GPIO2" in (m or "") and "output" in (m or "") for m in msgs)
-    assert any("gpio_write" in (m or "") and "level" in (m or "") for m in msgs)
+    # Both calls must produce a feedback message naming the tool and its arguments.
+    assert any("gpio_mode" in (m or "") and "output" in (m or "") for m in msgs)
+    assert any("gpio_write" in (m or "") and "pin=2" in (m or "") for m in msgs)
 
 
 def test_feedback_can_be_disabled(fw):
@@ -140,7 +141,7 @@ def test_gpio_status_and_write_ok(fw):
         async with Client(server) as c:
             await c.call_tool("gpio_mode", {"pin": 2, "mode": "output"})
             w = await c.call_tool("gpio_write", {"pin": 2, "value": 1})
-            assert w.data["ok"] is True and w.data["level"] == 1
+            assert w.data == 1                # the level read back from the chip
             s = await c.call_tool("gpio_status", {"pin": 2})
             assert s.data["mode"] == "output"
             assert s.data["level"] == 1

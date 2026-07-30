@@ -18,6 +18,7 @@ class I2c:
     def __init__(self, bridge):
         self._b = bridge
         self._max_write: int | None = None
+        self.buses: dict[int, dict] = {}  # bus -> {sda, scl, freq}, as configured
 
     @property
     def max_write(self) -> int:
@@ -38,6 +39,7 @@ class I2c:
         r = self._b.request(C.I2C_INIT, struct.pack(">BBBI", bus, sda, scl, freq))
         if len(r) >= 2:  # firmware >= 0.3.0 replies with the Wire TX buffer size as a u16
             self._max_write = struct.unpack(">H", r[:2])[0] - 2
+        self.buses[bus] = {"sda": sda, "scl": scl, "freq": freq}
 
     def scan(self, bus: int = 0) -> list[int]:
         """Addresses (7-bit) that ACK on the bus."""
@@ -83,6 +85,7 @@ class I2c:
     def deinit(self, bus: int = 0) -> None:
         """Release the bus and its pins on the firmware."""
         self._b.request(C.I2C_DEINIT, bytes([bus]))
+        self.buses.pop(bus, None)
 
     # House style: begin()/end() work on every peripheral (Arduino-friendly).
     begin = init

@@ -36,10 +36,11 @@ INSTRUCTIONS = """\
 Control an ESP32 running the python-esp-bridge firmware over USB or Bluetooth.
 
 Tools are grouped by peripheral: system_*, gpio_*, adc_*/dac_*/touch_*, pwm_*,
-i2c_*, spi_*, uart_*, wifi_*, nvs_*, fs_*, onewire_*, espnow_*, can_*, mcpwm_*,
-eth_*, camera_*, ota_*. Connection is managed by bridge_connect / bridge_status
-/ bridge_disconnect; if you call a peripheral tool before connecting, the server
-auto-connects with the settings it was started with.
+i2c_*, spi_*, uart_*, wifi_*, nvs_*, fs_*, onewire_*, espnow_*, can_*, rmt_*,
+i2s_*, watch_*, mcpwm_*, eth_*, camera_*, ota_*. Connection is managed by
+bridge_connect / bridge_status / bridge_disconnect; if you call a peripheral
+tool before connecting, the server auto-connects with the settings it was
+started with.
 
 Conventions:
 - Pins are integers (the chip's GPIO numbers). gpio_mode must be set to
@@ -56,8 +57,8 @@ Conventions:
 
 class BridgeManager(_CoreBridgeManager):
     """The core shared-bridge manager (one thread-safe, auto-reconnecting link)
-    plus the stateful handles the MCP tools layer on top: mounted filesystem
-    volumes, opened UART ports, and noted I2C buses (for board_status).
+    plus the one handle the tools layer adds: the mounted filesystem volumes.
+    I2C buses and UART ports are remembered by ``esp.i2c``/``esp.uart``.
 
     Thread-safe: FastMCP runs each (synchronous) tool in a worker thread, and
     Bridge.request() is itself thread-safe, so concurrent tool calls share one
@@ -67,17 +68,14 @@ class BridgeManager(_CoreBridgeManager):
     def __init__(self, **connect_kwargs):
         super().__init__(**connect_kwargs)
         self._volumes: dict = {}       # fs kind -> Volume
-        self._uart_ports: dict = {}    # port number -> UartPort
-        self._i2c_buses: dict = {}     # bus number -> {sda, scl, freq} (for board_status)
 
     def _close_locked(self) -> None:
-        # Tear down the link, then drop the per-connection handles built on it.
+        # Tear down the link, then drop the volumes mounted on it.
         super()._close_locked()
         self._volumes.clear()
-        self._uart_ports.clear()
-        self._i2c_buses.clear()
 
-    def volume(self, kind: str, *, remount: bool = False, **mount_kwargs):
+    def volume(self, kind: str = "littlefs", *, remount: bool = False,
+               **mount_kwargs):
         """Mount (and cache) a filesystem volume of the given kind.
 
         Lazy callers that just need *a* mount pass no kwargs and get the cached
@@ -91,35 +89,6 @@ class BridgeManager(_CoreBridgeManager):
                 vol = self.bridge().fs.mount(kind, **mount_kwargs)
                 self._volumes[kind] = vol
             return vol
-
-    @property
-    def i2c_buses(self) -> dict:
-        with self._lock:
-            return dict(self._i2c_buses)
-
-    def note_i2c(self, bus: int, sda: int, scl: int, freq: int) -> None:
-        with self._lock:
-            self._i2c_buses[bus] = {"sda": sda, "scl": scl, "freq": freq}
-
-    def forget_i2c(self, bus: int) -> None:
-        with self._lock:
-            self._i2c_buses.pop(bus, None)
-
-    def uart_port(self, port: int):
-        with self._lock:
-            return self._uart_ports.get(port)
-
-    def open_uart(self, *, port: int, tx: int, rx: int, baud: int):
-        with self._lock:
-            p = self.bridge().uart.init(port=port, tx=tx, rx=rx, baud=baud)
-            self._uart_ports[port] = p
-            return p
-
-    def close_uart(self, port: int) -> None:
-        with self._lock:
-            p = self._uart_ports.pop(port, None)
-            if p is not None:
-                p.close()
 
 
 def _register_connection(mcp: FastMCP, mgr: BridgeManager) -> None:

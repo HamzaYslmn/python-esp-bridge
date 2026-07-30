@@ -41,18 +41,14 @@ class PinStatus:
     level: int               # actual pad level (0 or 1) read back from hardware
     mode: str | None         # mode last set via the bridge; None if never configured
     is_output: bool
+    pwm: bool                # a PWM (LEDC) channel is driving this pin
     pwm_freq: int            # LEDC carrier frequency in Hz; 0 means no PWM on this pin
     pwm_duty: int            # LEDC raw duty count; 0 if no PWM
-
-    @property
-    def pwm(self) -> bool:
-        """True when a PWM (LEDC) channel is driving this pin."""
-        return self.pwm_freq > 0
 
 
 def _pin_status(pin: int, level: int, mode: int, freq: int, duty: int) -> PinStatus:
     name = _MODE_NAMES.get(mode)
-    return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq, duty)
+    return PinStatus(pin, level, name, name in _OUTPUT_MODES, freq > 0, freq, duty)
 
 
 class Gpio:
